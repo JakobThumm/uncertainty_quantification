@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import flax
 
-from matfree.backend import tree_util
+# from matfree.backend import tree_util
 
 
 #####################################
