@@ -51,3 +51,35 @@ python score_model.py --ID_dataset CelebA --OOD_dataset FOOD101 CelebA-Mustache 
 
 python score_model.py --ID_dataset ImageNet --OOD_datasets SVHN-256 FOOD101-256 ImageNet-classout --model VAN_large --subsample_trainset 100000 --lanczos_hm_iter 0 --lanczos_lm_iter 10 --test_batch_size 8 --train_batch_size 32 --serialize_ggn_on_batches --sketch srft --sketch_size 10000000
 ```
+
+# Known Issues
+
+## CuDNN Version Mismatch Error
+
+### Problem
+When importing JAX, you may encounter an error like:
+```
+E external/xla/xla/stream_executor/cuda/cuda_dnn.cc:466] Loaded runtime CuDNN library: 9.5.1 but source was compiled with: 9.8.0. CuDNN library needs to have matching major version and equal or higher minor version.
+```
+
+This indicates that JAX was compiled against a newer version of CuDNN than what's installed on your system.
+
+### Solution: Upgrade CuDNN locally (without sudo)
+
+1. Download the CuDNN tar.xz archive from [NVIDIA's developer site](https://developer.nvidia.com/cudnn) (requires free account)
+2. Extract and set up locally:
+   ```bash
+   tar -xf cudnn-linux-x86_64-9.8.0.*_cuda12-archive.tar.xz
+   mv cudnn-linux-x86_64-9.8.0.*_cuda12-archive ~/cuda
+   echo 'export LD_LIBRARY_PATH=~/cuda/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
+   source ~/.bashrc
+   ```
+
+### Verification
+Test that the issue is resolved:
+```python
+import jax.numpy as jnp
+import numpy as np
+result = jnp.array(np.array([0.0]))
+print("JAX working correctly:", result)
+```
