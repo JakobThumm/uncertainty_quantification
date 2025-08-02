@@ -88,9 +88,17 @@ class ResNet(nn.Module):
                                      subsample=subsample)(x, train=train)
 
         # Mapping to classification output
-        x = x.mean(axis=(1, 2))
+        x = x.mean(axis=(1, 2)) # TODO, why mean
         x = nn.Dense(self.output_dim)(x)
+
+        # # — Regression (heat-map) head —
+        # # (1) keep the full spatial map instead of pooling
+        # # (2) use a 1×1 conv to produce `output_dim` regression channels
+        # x = nn.Conv(self.output_dim, kernel_size=(1, 1),
+        #             kernel_init=resnet_kernel_init,
+        #             use_bias=True)(x)
         return x
+
     
 
 

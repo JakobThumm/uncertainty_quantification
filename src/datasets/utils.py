@@ -137,5 +137,7 @@ def get_output_dim(dataset_name):
         return 100
     elif dataset_name == "ImageNet":
         return 990 #1000
+    elif dataset_name == "H36M":
+        return 13*2
     else:
         return 10

@@ -25,3 +25,6 @@ class LeNet(nn.Module):
         x = nn.Dense(features=self.output_dim)(x)
 
         return x
+    
+
+

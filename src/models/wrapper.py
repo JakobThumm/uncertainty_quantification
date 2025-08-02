@@ -4,8 +4,8 @@ import dataclasses
 from typing import Callable 
 import jax
 import flax
-from src.models import MLP, LeNet, GoogleNet, ConvNeXt, ResNet, ResNetBlock, PreActResNetBlock, VAN, SwinTransformer
-
+from src.models import MLP, LeNet, LeNet_h, GoogleNet, ConvNeXt, ResNet, ResNetBlock, PreActResNetBlock, VAN, SwinTransformer
+from src.models import ViT
 
 @dataclasses.dataclass
 class Model:
@@ -155,12 +155,21 @@ def model_from_string(
             act_fn = act_fn
         )
         wrapped_model = wrap_model(model)
+
     elif model_name == "LeNet":
         model = LeNet(
             output_dim = output_dim, 
             act_fn = act_fn
         )
         wrapped_model = wrap_model(model)
+
+    elif model_name == "LeNet_h":
+        model = LeNet_h(
+            output_dim = output_dim, 
+            act_fn = act_fn
+        )
+        wrapped_model = wrap_model(model)
+
     elif model_name == "GoogleNet":
         model = GoogleNet(
             output_dim = output_dim,
@@ -298,6 +307,20 @@ def model_from_string(
             use_abs_pos_emb=False,
             attach_head=True,
             num_classes=output_dim,
+        )
+        wrapped_model = wrap_model_with_attentionmask(model)
+
+    elif model_name == "ViT_mnist":
+        model = ViT(
+            img_size=28,       # or whatever your dataset uses
+            patch_size=7,
+            in_channels=1,
+            num_classes=output_dim,
+            dim=64,
+            depth=4,
+            num_heads=1,
+            mlp_dim=128,
+            dropout_rate=0.1,
         )
         wrapped_model = wrap_model_with_attentionmask(model)
     else:

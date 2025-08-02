@@ -16,6 +16,9 @@ def log_gaussian_log_loss(preds, y, rho=1.0):
     y: (batch_size, output_dim) (targets)
     """
     O = y.shape[-1]
+    # print("log_gaussian_log_loss")
+    # print("preds:", preds.shape)
+    # print("target:", y.shape)
     return 0.5 * O * jnp.log(2 * jnp.pi) - 0.5 * O * jnp.log(rho) + 0.5 * rho * mse_loss(preds, y)
 
 @partial(jax.jit, static_argnames=['rho'])

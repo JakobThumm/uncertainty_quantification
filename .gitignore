@@ -9,3 +9,5 @@ src/ood_scores/__pycache__
 src/sketches/__pycache__
 src/training/__pycache__
 bash
+src/__pycache__
+uq_benchmark

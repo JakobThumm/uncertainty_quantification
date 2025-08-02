@@ -1,0 +1,17 @@
+{
+    "IMG_SIZE": [256, 192],
+    "NUM_KEYPOINTS": 13,
+    "BATCH_SIZE": 64,
+    "EPOCHS": 30,
+    "LR": 0.0001,
+    "NUM_FRAMES": 40,
+    "EMBED_DIM": 512,
+    "DEPTH": 8, 
+    "MLP_RATIO": 2.0,
+    "PATCH": 32,
+    "HEAD": 8,
+    "PATIENCE": 4,
+    "HEATMAP_SIZE": null,
+    "VIT_MODEL": "vit_base_patch16_224"
+  }
+  

@@ -15,13 +15,13 @@ from src.training.trainer_fancy import gradient_descent_fancy
 
 parser = argparse.ArgumentParser()
 # dataset hyperparams
-parser.add_argument("--dataset", type=str, choices=["Sinusoidal", "UCI", "MNIST", "FMNIST", "SVHN", "CIFAR-10", "CIFAR-100", "CelebA", "ImageNet"], default="MNIST")
+parser.add_argument("--dataset", type=str, choices=["H36M", "Sinusoidal", "UCI", "MNIST", "FMNIST", "SVHN", "CIFAR-10", "CIFAR-100", "CelebA", "ImageNet"], default="MNIST")
 parser.add_argument("--data_path", type=str, default="../datasets/", help="Root path of dataset")
 parser.add_argument("--n_samples", default=None, type=int, help="Number of datapoint to use. None means all")
 parser.add_argument("--uci_type", type=str, choices=["concrete", "boston", "energy", "kin8nm", "wine", "yacht"], default=None)
 
 # model hyperparams
-parser.add_argument("--model", type=str, choices=["MLP", "LeNet", "GoogleNet", "ConvNeXt", "ConvNeXt_L", "ConvNeXt_XL", "ResNet", "ResNet_NoNorm", "ResNet50", "ResNet50PreAct", "VAN_tiny", "VAN_small", "VAN_base", "VAN_large", "SWIN_tiny", "SWIN_large"], default="MLP", help="Model architecture.")
+parser.add_argument("--model", type=str, choices=["MLP", "LeNet", "LeNet_h", "GoogleNet", "ConvNeXt", "ConvNeXt_L", "ConvNeXt_XL", "ResNet", "ResNet_NoNorm", "ResNet50", "ResNet50PreAct", "VAN_tiny", "VAN_small", "VAN_base", "VAN_large", "SWIN_tiny", "SWIN_large", "ViT_mnist"], default="MLP", help="Model architecture.")
 parser.add_argument("--activation_fun", type=str, choices=["tanh", "relu"], default="tanh", help="Model activation function.")
 parser.add_argument("--mlp_hidden_dim", default=20, type=int, help="Hidden dims of the MLP.")
 parser.add_argument("--mlp_num_layers", default=1, type=int, help="Number of layers in the MLP.")
@@ -29,7 +29,7 @@ parser.add_argument("--mlp_num_layers", default=1, type=int, help="Number of lay
 # training hyperparams
 parser.add_argument("--seed", default=420, type=int)
 parser.add_argument("--n_epochs", type=int, default=10)
-parser.add_argument("--batch_size", type=int, default=128)
+parser.add_argument("--batch_size", type=int, default=32) # 128 original
 parser.add_argument("--optimizer", type=str, choices=["sgd", "adam", "adamw", "rmsprop"], default="adam")
 parser.add_argument("--learning_rate", type=float, default=1e-3)
 parser.add_argument("--decrease_learning_rate", action="store_true", required=False, default=False)
@@ -71,7 +71,7 @@ if __name__ == "__main__":
     if args.default_hyperparams:
         if args.model in ["MLP", "LeNet"]:
             args_dict["n_epochs"] = 50
-            args_dict["batch_size"] = 128
+            args_dict["batch_size"] = 128 # 128
             args_dict["optimizer"] = "adam"
             args_dict["learning_rate"] = 1e-3
             args_dict["momentum"] = None
@@ -96,7 +96,7 @@ if __name__ == "__main__":
             args_dict["weight_decay"] = 1e-4
         elif args.model == "ResNet" or args.model == "ResNet_NoNorm":
             args_dict["n_epochs"] = 200
-            args_dict["batch_size"] = 128
+            args_dict["batch_size"] = 32 # 128
             args_dict["optimizer"] = "sgd"
             args_dict["learning_rate"] = 0.1
             args_dict["decrease_learning_rate"] = True
@@ -134,13 +134,14 @@ if __name__ == "__main__":
     )
     print(f"Train set size {len(train_loader.dataset)}, Validation set size {len(valid_loader.dataset)}")
 
-
     #############
     ### model ###
     output_dim = get_output_dim(args.dataset)
+    print("output_dim:", output_dim)
+    # assert False
     model = model_from_string(
         args.model, 
-        output_dim, 
+        output_dim, #TODO: change to num of keypoints
         activation_fun = args_dict["activation_fun"],
         mlp_num_layers = args_dict["mlp_num_layers"],
         mlp_hidden_dim = args_dict["mlp_hidden_dim"],

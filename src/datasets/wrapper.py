@@ -11,7 +11,7 @@ from src.datasets.svhn import SVHN, get_svhn, get_svhn_augmented, get_svhn_scale
 from src.datasets.food101 import FOOD101, get_food101_scaled
 from src.datasets.celeba import CelebA, get_celeba, get_celeba_augmented, get_celeba_ood
 from src.datasets.imagenet import get_imagenet_id, get_imagenet_ood
-
+from src.datasets.h36m import * # TODO
 from src.datasets.utils import get_subset_loader
 
 def removeprefix(input_string, prefix):
@@ -107,6 +107,15 @@ def augmented_dataloader_from_string(
         )
     elif dataset_name == "ImageNet":
         train_loader, valid_loader, _ = get_imagenet_id(
+            batch_size = batch_size, 
+            shuffle = shuffle,
+            seed = seed,
+            download = False, 
+            #data_path = data_path
+        )
+    elif dataset_name == "H36M":
+        # TODO: change to h36m
+        train_loader, valid_loader, _ = get_h36m(
             batch_size = batch_size, 
             shuffle = shuffle,
             seed = seed,

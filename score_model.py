@@ -37,7 +37,9 @@ parser.add_argument("--model_seed", default=420, type=int)
 ##############
 # ood scores #
 ##############
-parser.add_argument("--score", type=str, choices=["scod", "swag", "ensemble", "projected_ensemble", "local_ensemble", "sketched_local_ensemble", "low_rank_lla", "smart_lla", "diagonal_lla", "max_logit"], default=None)
+parser.add_argument("--score", type=str, choices=["scod", "swag", "ensemble", "projected_ensemble",
+                                                   "local_ensemble", "sketched_local_ensemble", "low_rank_lla", 
+                                                   "smart_lla", "diagonal_lla", "max_logit"], default=None)
 # lanczos
 parser.add_argument("--lanczos_hm_iter", default=10, type=int, help="Lancsos high-memory iterations to run")
 parser.add_argument("--lanczos_lm_iter", default=100, type=int, help="Lancsos low-mwmory iterations to run")
@@ -71,7 +73,7 @@ parser.add_argument("--n_epochs_projected_ensemble", default=1, type=int, help="
 parser.add_argument("--use_proj_loss", action="store_true", required=False, default=False)
 
 # print more stuff
-parser.add_argument("--verbose", action="store_true", required=False, default=False)
+parser.add_argument("--verbose", action="store_true", required=False, default=False) 
 
 
 
@@ -93,7 +95,7 @@ if __name__ == "__main__":
         batch_size = args.train_batch_size,
         shuffle = False,
         seed = args.model_seed,
-        download = False,
+        download = True, # False
         data_path = args.data_path
     )
     _, _, ID_loader = dataloader_from_string(
@@ -102,7 +104,7 @@ if __name__ == "__main__":
         batch_size = args.test_batch_size,
         shuffle = False,
         seed = args.model_seed,
-        download = False,
+        download = True, # False
         data_path = args.data_path
     )
     print(f"Got IN-distribution dataset {args.ID_dataset} with {len(train_loader.dataset)} train data and {len(ID_loader.dataset)} test data")
@@ -238,6 +240,7 @@ if __name__ == "__main__":
     elif args.score == "scod":
         args_dict['use_eigenvals'] = True
         score_fun, eigenval, approx_quadratic_form = scod_score_fun(model, params_dict, train_loader, args_dict, use_eigenvals=True)
+        # score_fun and approx_quadratic_form are functions!
         quadratic_form = None
     elif args.score == "swag":
         score_fun, _, _ = swag_score_fun(
@@ -252,8 +255,10 @@ if __name__ == "__main__":
         eigenval = []
         approx_quadratic_form, quadratic_form = None, None
     else:
-        if args_dict['lanczos_hm_iter']==0:
+        if args_dict['lanczos_hm_iter']==0: # typo here??
             # low memory lanczos methods
+            # corrsponding to sketched_local_ensemble
+            print("low memory lanczos methods")
             score_fun, eigenval, approx_quadratic_form, quadratic_form = low_memory_lanczos_score_fun(
                 model, 
                 params_dict, 
@@ -263,7 +268,10 @@ if __name__ == "__main__":
             )
         else:
             # high memory lanczos methods
+            print("high memory lanczos methods")
+            
             if args_dict['lanczos_lm_iter']==0:
+                # corrspond to "local_ensemble", "low_rank_lla", but seems both lanczos_lm_iter=0
                 # standard high memory lanczos
                 score_fun, eigenval, approx_quadratic_form, quadratic_form = high_memory_lanczos_score_fun(
                     model, 
@@ -294,6 +302,7 @@ if __name__ == "__main__":
     }
     for distribution, loader in [("ID", ID_loader), *zip(args_dict["OOD_datasets"], OOD_loaders)]:
         start = time.time()
+        # print("distribution:", distribution)
         done = 0
         scores_dict[distribution] = []
         if approx_quadratic_form is not None:
@@ -305,6 +314,7 @@ if __name__ == "__main__":
             #    break
             X = jnp.array(batch[0].numpy())
             Y = jnp.array(batch[1].numpy())
+            # print("input:", X.shape)
             start_batch = time.time()
             # here you apply score_fun to a batch of datapoints
             batch_scores = score_fun(X)
@@ -318,7 +328,7 @@ if __name__ == "__main__":
                         small_X = X[i*4 : (i+1)*4]
                         real = quadratic_form(small_X)
                         scores_dict[f"{distribution}_QF"].append(real)
-            #print(f"{distribution} - scores {batch_scores}, computed in {time.time()-start:.3f}s")
+            print(f"{distribution} - scores {batch_scores[0:5]}, computed in {time.time()-start:.3f}s")
             done += X.shape[0]
             if args.verbose:
                 print(f"{done}/{len(loader.dataset)} in {time.time()-start_batch:.3f}s")

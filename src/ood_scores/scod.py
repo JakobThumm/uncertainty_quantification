@@ -7,6 +7,8 @@ from src.models import compute_num_params
 from src.datasets.utils import get_subset_loader, get_output_dim
 from src.autodiff.hessian import get_sqrt_hessian_loss_explicit
 from src.autodiff.jacobian import get_jacobian_vector_product, get_jacobianT_vector_product, get_jacobian_explicit
+from src.autodiff.jacobian import get_hidden_jacobian_layer
+
 from src.estimators.frobenius import get_frobenius_norm
 from src.sketches import SRFTSymSketch
 
@@ -23,6 +25,9 @@ def scod_score_fun(
     #data_array = jnp.asarray([train_loader.dataset[i][0] for i in range(int(0.9*args_dict["subsample_trainset"]))])
     #prior_scale = 1. / (2 * len(data_array) * args_dict['prior_std']**2) 
     #n_params = compute_num_params(params_dict["params"])
+    print("model:", model)
+    # Hard coded first
+    args_dict["hidden_dim"] = 120
     trainset_size = int(0.9*args_dict["subsample_trainset"])
     train_loader = get_subset_loader(
             train_loader,
@@ -37,18 +42,47 @@ def scod_score_fun(
     sketch = SRFTSymSketch(n_params, trainset_size, args_dict['n_eigenvec_hm'], gpu=gpu)
     print(f"Initializing took {time.time()-start} seconds")
     output_dim = args_dict["output_dim"] #get_output_dim(args_dict["ID_dataset"])
+
+    #TODO: Check here to change jacobian's compute way
+    # here are abstract function to compute jacobian
     jacob_fun = get_jacobian_explicit(params_dict, model, output_dim=output_dim)
     hessian_loss_fun = get_sqrt_hessian_loss_explicit(params_dict, model, likelihood_type=args_dict["likelihood"], output_dim=output_dim)
-
+    # Get jacobian of middle layer: choose which hidden's layer output and which parameters
+    jac_mid_fun = get_hidden_jacobian_layer(params_dict, model, layer_dim=120)
+    jac_dense0 = get_hidden_jacobian_layer(
+                    params_dict,
+                    model,
+                    layer_dim=120,
+                    target_layer="Dense_0"
+                )
+    
+    hidden_mode = False
     start = time.time()
     #for datapoint in data_array:
     for batch in train_loader:
         datapoint = jnp.array(batch[0][0].numpy())
         jac = jacob_fun(datapoint)
-        hess = hessian_loss_fun(datapoint)
-        hess_jac = hess @ jac
-        #print(hess.shape, jac.shape, hess_jac.shape)
-        hess_jac = torch.from_numpy(np.asarray(hess_jac))
+        # TODO: Add middle layer's jacobian and hess
+        # for middle layer, we can omit hess, it is similar to 
+        # Lt_z = dist_layer.apply_sqrt_F(z).mean(dim=0), details by checking how it computes
+        # for regression or multi-class loss
+
+        jac_mid_full = jac_mid_fun(datapoint)
+        jac_mid_dense0 = jac_dense0(datapoint)
+        
+        print("jac_mid_full", jac_mid_full.shape) 
+        print("jac_mid_dense0", jac_mid_dense0.shape)
+
+        # print("jac:", jac.shape)
+        if hidden_mode:
+            hess_jac = torch.from_numpy(np.asarray(jac_mid_full))
+        else:
+            hess = hessian_loss_fun(datapoint)
+            # print("hess:", hess.dtype, hess.shape)
+            hess_jac = hess @ jac
+            #print(hess.shape, jac.shape, hess_jac.shape)
+            hess_jac = torch.from_numpy(np.asarray(hess_jac))
+
         sketch.low_rank_update(0, hess_jac.T, 1.0)
     print(f"Updates took {time.time()-start} seconds")
 
@@ -76,26 +110,53 @@ def scod_score_fun(
             print(vector.shape, eigenvec.shape)
             return vector @ eigenvec
     
+
+    @jax.jit
+    def inv_sqrt_G(v):
+        return inv_sqrt_approx_ggn_vector_product(v)
+
+    
+    # @jax.vmap
+    # @jax.jit
+    # def score_fun(datapoint):
+    #     # gpt: Intuitively, it measures how much the data point “stretches” the posterior relative to the prior.
+
+    #     jacobianT_vector_product = get_jacobianT_vector_product(params_dict, model, datapoint, single_datapoint=True)
+    #     inv_sqrt_fakeGGN_jacobian_vector_product = lambda vector: inv_sqrt_approx_ggn_vector_product(jacobianT_vector_product(vector))
+        
+    #     variance_I = get_frobenius_norm(
+    #         jacobianT_vector_product,
+    #         dim_in = args_dict["output_dim"],
+    #     )
+    #     variance_P = get_frobenius_norm(
+    #         inv_sqrt_fakeGGN_jacobian_vector_product,
+    #         dim_in = args_dict["output_dim"],
+    #     )
+    #     variance = variance_I - variance_P
+    #     return variance * args_dict['prior_std']**2
+
     @jax.vmap
     @jax.jit
     def score_fun(datapoint):
-        jacobianT_vector_product = get_jacobianT_vector_product(params_dict, model, datapoint, single_datapoint=True)
-        inv_sqrt_fakeGGN_jacobian_vector_product = lambda vector: inv_sqrt_approx_ggn_vector_product(jacobianT_vector_product(vector))
-        
-        variance_I = get_frobenius_norm(
-            jacobianT_vector_product,
-            dim_in = args_dict["output_dim"],
-        )
-        variance_P = get_frobenius_norm(
-            inv_sqrt_fakeGGN_jacobian_vector_product,
-            dim_in = args_dict["output_dim"],
-        )
-        variance = variance_I - variance_P
-        return variance * args_dict['prior_std']**2
-    
+        # 2a) build JT‐VP for *this* datapoint
+        JT = get_jacobianT_vector_product(params_dict, model, datapoint, single_datapoint=True)
+
+        # 2b) compose with (G+σ⁻²I)^(-½)
+        JT_post = lambda v: inv_sqrt_G(JT(v))
+
+        # 2c) variance under prior/posterior
+        print("check hidden_dim:", args_dict["hidden_dim"])
+        dim_in = args_dict["hidden_dim"] if hidden_mode else args_dict["output_dim"]
+        var_I = get_frobenius_norm(JT,      dim_in=dim_in)
+        var_P = get_frobenius_norm(JT_post, dim_in=dim_in)
+
+        return (var_I - var_P) * args_dict["prior_std"]**2
+
+
     @jax.vmap
     @jax.jit
     def approx_ggn_quadratic_form(datapoint):
+        # gpt: J G J^T
         jacobian_vector_product = get_jacobian_vector_product(params_dict, model, datapoint, single_datapoint=True)
         jacobianT_vector_product = get_jacobianT_vector_product(params_dict, model, datapoint, single_datapoint=True)
         fake_quadratic_form = jax.jit(lambda vector: jacobian_vector_product(approx_ggn_vector_product(jacobianT_vector_product(vector))))
