@@ -2,6 +2,10 @@
 /virtualenv
 /unc
 /logs
+/figures
+/results
+*.png
+__pycache__
 src/autodiff/__pycache__
 src/datasets/__pycache__
 src/estimators/__pycache__
