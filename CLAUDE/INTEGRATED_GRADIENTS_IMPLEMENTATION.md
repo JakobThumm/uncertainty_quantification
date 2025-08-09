@@ -134,10 +134,12 @@ def create_noise_baseline(image_shape, key):
 ```
 src/explainability/
 ├── __init__.py
+├── README.md                         # Readme file for the explainability
 ├── integrated_gradients.py           # Main IG implementation
 ├── baseline_images.py                # Baseline image creation utilities
 ├── gradient_utils.py                 # JAX gradient computation helpers
 └── interpolation.py                  # Path interpolation utilities
+
 ```
 
 ### Core Implementation Files
