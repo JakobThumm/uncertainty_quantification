@@ -11,3 +11,5 @@ src/training/__pycache__
 bash
 src/__pycache__
 uq_benchmark
+exp
+exp_dummy
