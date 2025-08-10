@@ -94,7 +94,7 @@ class ResNet(nn.Module):
                     kernel_init=resnet_kernel_init,
                     use_bias=True)(x)
         return x
-    
+
 
 
 class ResNetBlock_NoNormalization(nn.Module):

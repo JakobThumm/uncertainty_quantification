@@ -224,6 +224,14 @@ def model_from_string(
             block_class = ResNetBlock
         )
         wrapped_model = wrap_model_with_batchstats(model)
+    elif model_name == "Regress_Flow":
+        # model = RegressFlowFlax(
+        #     num_joints=PRESET["DATA_PRESET"]["NUM_JOINTS"],
+        #     image_size=tuple(PRESET["DATA_PRESET"]["IMAGE_SIZE"]),
+        #     fc_filters=NUM_FC_FILTERS,         # here it's [-1] → identity
+        #     accept_nchw=True,                  # you said your input is NCHW
+        # )
+        wrapped_model = wrap_model_with_batchstats(model)
     elif model_name == "ResNet50PreAct":
         model = ResNet(
             output_dim = output_dim,
