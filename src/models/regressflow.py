@@ -3,6 +3,9 @@ from typing import Sequence, Tuple, Optional
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
+SIGMA_MIN = 1e-2      # lower bound for per-coord scale
+SIGMA_REF = 0.2       # for confidence mapping when using softplus
+RHO_EPS   = 1e-3      # keep correlation away from ±1
 
 he_init = nn.initializers.variance_scaling(2.0, mode="fan_out", distribution="truncated_normal")
 
@@ -121,30 +124,38 @@ class RegressFlowFlax(nn.Module):
 
         out_ch = h.shape[-1]
 
+        # --- coordinate head ---
         coord = LinearNorm(out_ch, self.num_joints * 2, use_bias=True, divide_by_input_norm=True)(h)
         coord = coord.reshape((coord.shape[0], self.num_joints, 2))
 
-        log_variance = LinearNorm(out_ch, self.num_joints * 2, use_bias=True, divide_by_input_norm=False)(h)
-        log_variance = log_variance.reshape((log_variance.shape[0], self.num_joints, 2))
+        # --- SAFE scale head ---
+        # raw_sigma can be any real; map -> (SIGMA_MIN, +inf) with softplus
+        raw_sigma = LinearNorm(out_ch, self.num_joints * 2, use_bias=True, divide_by_input_norm=False)(h)
+        raw_sigma = raw_sigma.reshape((raw_sigma.shape[0], self.num_joints, 2))
+        sigma = jax.nn.softplus(raw_sigma) + SIGMA_MIN            # (B,K,2), strictly > SIGMA_MIN
 
-        raw_cov_xy = LinearNorm(out_ch, self.num_joints, use_bias=True, divide_by_input_norm=False)(h)
+        # If you PREFER a bounded range for sigma, use this instead:
+        # SIGMA_MAX = 1.0
+        # sigma = jax.nn.sigmoid(raw_sigma) * (SIGMA_MAX - SIGMA_MIN) + SIGMA_MIN
 
-        log_var_x = log_variance[:, :, 0]
-        log_var_y = log_variance[:, :, 1]
-        var_x = jnp.exp(log_var_x)
-        var_y = jnp.exp(log_var_y)
-        cov_xy = jnp.tanh(raw_cov_xy) * jnp.sqrt(var_x * var_y)
+        # --- SAFE correlation (for optional covariance logging) ---
+        # Predict unconstrained rho, squash with tanh, keep margin from ±1
+        raw_rho = LinearNorm(out_ch, self.num_joints, use_bias=True, divide_by_input_norm=False)(h)  # (B,K)
+        rho = jnp.tanh(raw_rho) * (1.0 - RHO_EPS)                                                    # (B,K)
+        cov_xy = rho * sigma[:, :, 0] * sigma[:, :, 1]                                               # (B,K)
 
-        sigma = jnp.exp(0.5 * log_variance)
-        scores = 1.0 - jax.nn.sigmoid(log_variance)
-        scores = jnp.mean(scores, axis=2, keepdims=True)
+        # --- confidence ("scores") as a decreasing function of sigma ---
+        # Soft, bounded confidence in (0,1); larger sigma -> lower confidence
+        conf = 1.0 / (1.0 + sigma / SIGMA_REF)                 # (B,K,2)
+        scores = jnp.mean(conf, axis=2, keepdims=True)         # (B,K,1)
+        scores = scores.astype(jnp.float32)
 
         return {
-            "pred_jts": coord,                # [B, 17, 2]
-            "sigma": sigma,                   # [B, 17, 2]
-            "log_variance": log_variance,     # [B, 17, 2]
-            "covariance": cov_xy,             # [B, 17]
-            "maxvals": scores.astype(jnp.float32),
+            "pred_jts": coord,          # (B,K,2)
+            "sigma": sigma,             # (B,K,2)  SAFE scales
+            "covariance": cov_xy,       # (B,K)    optional, PD via rho*tau_x*tau_y
+            "maxvals": scores,          # (B,K,1)  confidence proxy
             "nf_loss": None,
-            "pure_sigma": log_variance,
+            "pure_sigma": raw_sigma,    # keep raw head for debugging if you like
         }
+
