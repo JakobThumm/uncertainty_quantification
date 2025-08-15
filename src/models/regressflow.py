@@ -100,8 +100,10 @@ class ResNet50Backbone(nn.Module):
         return x  # [B, H/32, W/32, 2048]
 
 class RegressFlowFlax(nn.Module):
-    num_joints: int
-    image_size: Tuple[int, int]             # (H, W), not used directly here
+    preset_cfg: dict
+    # NUM_FC_FILTERS: int
+    # num_joints: int
+    # image_size: Tuple[int, int]             # (H, W), not used directly here
     fc_filters: Sequence[int]               # e.g., [-1] (identity)
     accept_nchw: bool = True               # keep your PyTorch input layout
 
@@ -121,17 +123,21 @@ class RegressFlowFlax(nn.Module):
                 h = nn.Dense(width, kernel_init=nn.initializers.xavier_uniform())(h)
                 h = nn.BatchNorm(momentum=0.1, epsilon=1e-5)(h, use_running_average=not train)
                 h = nn.relu(h)
+            else: 
+                # Identity: no change
+                pass
+
 
         out_ch = h.shape[-1]
 
         # --- coordinate head ---
-        coord = LinearNorm(out_ch, self.num_joints * 2, use_bias=True, divide_by_input_norm=True)(h)
-        coord = coord.reshape((coord.shape[0], self.num_joints, 2))
+        coord = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'] * 2, use_bias=True, divide_by_input_norm=True)(h)
+        coord = coord.reshape((coord.shape[0], self.preset_cfg['NUM_JOINTS'], 2))
 
         # --- SAFE scale head ---
         # raw_sigma can be any real; map -> (SIGMA_MIN, +inf) with softplus
-        raw_sigma = LinearNorm(out_ch, self.num_joints * 2, use_bias=True, divide_by_input_norm=False)(h)
-        raw_sigma = raw_sigma.reshape((raw_sigma.shape[0], self.num_joints, 2))
+        raw_sigma = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'] * 2, use_bias=True, divide_by_input_norm=False)(h)
+        raw_sigma = raw_sigma.reshape((raw_sigma.shape[0], self.preset_cfg['NUM_JOINTS'], 2))
         sigma = jax.nn.softplus(raw_sigma) + SIGMA_MIN            # (B,K,2), strictly > SIGMA_MIN
 
         # If you PREFER a bounded range for sigma, use this instead:
@@ -140,7 +146,7 @@ class RegressFlowFlax(nn.Module):
 
         # --- SAFE correlation (for optional covariance logging) ---
         # Predict unconstrained rho, squash with tanh, keep margin from ±1
-        raw_rho = LinearNorm(out_ch, self.num_joints, use_bias=True, divide_by_input_norm=False)(h)  # (B,K)
+        raw_rho = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'], use_bias=True, divide_by_input_norm=False)(h)  # (B,K)
         rho = jnp.tanh(raw_rho) * (1.0 - RHO_EPS)                                                    # (B,K)
         cov_xy = rho * sigma[:, :, 0] * sigma[:, :, 1]                                               # (B,K)
 

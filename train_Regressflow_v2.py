@@ -204,6 +204,7 @@ def create_flow(rng, num_coupling_layers: int = 4, hidden_sizes: Sequence[int] =
     for i in range(num_coupling_layers):
         masks.append(jnp.array([1., 0.], dtype=jnp.float32) if i % 2 == 0
                      else jnp.array([0., 1.], dtype=jnp.float32))
+    print("flow mask:", masks)
     flow = RealNVP(masks=masks, hidden_sizes=hidden_sizes)
     flow_params = flow.init(rng_flow, jnp.zeros((1, 2), jnp.float32))["params"]
     return flow, flow_params
