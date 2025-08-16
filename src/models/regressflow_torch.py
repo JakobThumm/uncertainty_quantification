@@ -166,6 +166,7 @@ class RegressFlow(nn.Module):
         scores = 1 - torch.sigmoid(log_variance)
         scores = torch.mean(scores, dim=2, keepdim=True)
         return {
+            'feat': feat, # debug
             'pred_jts': pred_jts,
             'sigma': sigma,
             'log_variance': log_variance, # we need

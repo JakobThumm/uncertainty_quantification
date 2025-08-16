@@ -35,7 +35,7 @@ class Bottleneck(nn.Module):
     planes: int
     stride: int = 1
     use_downsample: bool = False
-    bn_momentum: float = 0.1
+    bn_momentum: float = 0.9  # 1- torch
     bn_epsilon: float = 1e-5
     expansion: int = 4
 
@@ -69,7 +69,7 @@ class BottleneckStage(nn.Module):
     planes: int
     blocks: int
     stride: int
-    bn_momentum: float = 0.1
+    bn_momentum: float = 0.9  # 1-torch
     bn_epsilon: float = 1e-5
 
     @nn.compact
@@ -91,7 +91,12 @@ class ResNet50Backbone(nn.Module):
         x = nn.Conv(64, (7, 7), strides=(2, 2), padding=((3,3),(3,3)), use_bias=False, kernel_init=he_init)(x)
         x = nn.BatchNorm(momentum=self.bn_momentum, epsilon=self.bn_epsilon)(x, use_running_average=not train)
         x = nn.relu(x)
-        x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding="SAME")
+        # old
+        # x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding="SAME")
+
+        # new — exact Torch match
+        x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding=((1, 1), (1, 1)))
+
         inplanes = 64
         for planes, blocks, stride in [(64,3,1), (128,4,2), (256,6,2), (512,3,2)]:
             x, inplanes = BottleneckStage(inplanes, planes, blocks, stride,
@@ -130,38 +135,38 @@ class RegressFlowFlax(nn.Module):
 
         out_ch = h.shape[-1]
 
-        # --- coordinate head ---
-        coord = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'] * 2, use_bias=True, divide_by_input_norm=True)(h)
+        # --- coordinate head (identical semantics) ---
+        coord = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'] * 2,
+                        use_bias=True, divide_by_input_norm=True)(h)
         coord = coord.reshape((coord.shape[0], self.preset_cfg['NUM_JOINTS'], 2))
 
-        # --- SAFE scale head ---
-        # raw_sigma can be any real; map -> (SIGMA_MIN, +inf) with softplus
-        raw_sigma = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'] * 2, use_bias=True, divide_by_input_norm=False)(h)
-        raw_sigma = raw_sigma.reshape((raw_sigma.shape[0], self.preset_cfg['NUM_JOINTS'], 2))
-        sigma = jax.nn.softplus(raw_sigma) + SIGMA_MIN            # (B,K,2), strictly > SIGMA_MIN
+        # --- log-variance head (Torch-compatible) ---
+        # Torch: fc_sigma outputs log-variance directly
+        log_variance = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'] * 2,
+                                use_bias=True, divide_by_input_norm=False)(h)
+        log_variance = log_variance.reshape((log_variance.shape[0], self.preset_cfg['NUM_JOINTS'], 2))
+        var_x = jnp.exp(log_variance[:, :, 0])
+        var_y = jnp.exp(log_variance[:, :, 1])
+        sigma = jnp.exp(0.5 * log_variance)  # (B,K,2)
 
-        # If you PREFER a bounded range for sigma, use this instead:
-        # SIGMA_MAX = 1.0
-        # sigma = jax.nn.sigmoid(raw_sigma) * (SIGMA_MAX - SIGMA_MIN) + SIGMA_MIN
+        # --- raw covariance head (Torch-compatible) ---
+        # Torch: fc_sigma2 outputs raw_cov_xy, then cov_xy = tanh(raw) * sqrt(var_x * var_y)
+        raw_cov = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'],
+                            use_bias=True, divide_by_input_norm=False)(h)  # (B,K)
+        cov_xy = jnp.tanh(raw_cov) * jnp.sqrt(var_x * var_y)
 
-        # --- SAFE correlation (for optional covariance logging) ---
-        # Predict unconstrained rho, squash with tanh, keep margin from ±1
-        raw_rho = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'], use_bias=True, divide_by_input_norm=False)(h)  # (B,K)
-        rho = jnp.tanh(raw_rho) * (1.0 - RHO_EPS)                                                    # (B,K)
-        cov_xy = rho * sigma[:, :, 0] * sigma[:, :, 1]                                               # (B,K)
-
-        # --- confidence ("scores") as a decreasing function of sigma ---
-        # Soft, bounded confidence in (0,1); larger sigma -> lower confidence
-        conf = 1.0 / (1.0 + sigma / SIGMA_REF)                 # (B,K,2)
-        scores = jnp.mean(conf, axis=2, keepdims=True)         # (B,K,1)
-        scores = scores.astype(jnp.float32)
+        # --- confidence (Torch-compatible) ---
+        scores = 1.0 - jax.nn.sigmoid(log_variance)     # (B,K,2)
+        scores = jnp.mean(scores, axis=2, keepdims=True).astype(jnp.float32)
 
         return {
-            "pred_jts": coord,          # (B,K,2)
-            "sigma": sigma,             # (B,K,2)  SAFE scales
-            "covariance": cov_xy,       # (B,K)    optional, PD via rho*tau_x*tau_y
-            "maxvals": scores,          # (B,K,1)  confidence proxy
+            "feat": feat, # debug
+            "pred_jts": coord,
+            "sigma": sigma,
+            "log_variance": log_variance,
+            "covariance": cov_xy,
+            "maxvals": scores,
             "nf_loss": None,
-            "pure_sigma": raw_sigma,    # keep raw head for debugging if you like
+            "pure_sigma": log_variance,
         }
 
