@@ -43,7 +43,7 @@ CONNECTIONS_13 = [
 
 SPLIT = {
     'train': ['S1'],#, 'S6', 'S7', 'S8', 'S9'],
-    'validation': ['S11'],
+    'validation': ['S9'],
     'test': ['S9']
 }
 transform = transforms.Compose([
@@ -240,7 +240,7 @@ class Human36mDataset(Dataset):
 #                 frames = batch['frame'].to(DEVICE)
 # TODO: get h36m
 IMG_SIZE = [256, 192]
-NUM_FRAMES = 5
+NUM_FRAMES = 10
 transform = transforms.Compose([
     transforms.Resize(IMG_SIZE),
     transforms.ToTensor(),
