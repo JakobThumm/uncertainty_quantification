@@ -18,21 +18,22 @@ def load_scores(pickle_path: str) -> dict:
 
 # Example usage
 # 
-filepath = "/home/skyle/Desktop/uq_benchmark/models/FMNIST/LeNet_h/seed_420/" \
-"started_2025-07-01-14-40-38_scores_subsample100_lanczos_seed0_size_HM0of0_LM90of100_sketch_srft_seed0_size1000.pickle"
+# filepath = "/home/skyle/Desktop/uq_benchmark/models/FMNIST/LeNet_h/seed_420/" \
+# "started_2025-07-01-14-40-38_scores_subsample100_lanczos_seed0_size_HM0of0_LM90of100_sketch_srft_seed0_size1000.pickle"
 
-# smart_lla
-filepath = "/home/skyle/Desktop/uq_benchmark/models/FMNIST/LeNet/seed_420/" \
-"started_2025-06-29-21-24-19_scores_subsample1000_eig_lanczos_seed0_size_HM0of0_LM90of100_sketch_srft_seed0_size1000.pickle"
+# # smart_lla
+# filepath = "/home/skyle/Desktop/uq_benchmark/models/FMNIST/LeNet/seed_420/" \
+# "started_2025-06-29-21-24-19_scores_subsample1000_eig_lanczos_seed0_size_HM0of0_LM90of100_sketch_srft_seed0_size1000.pickle"
 
-# sketched_local_ensemble- LeNet
-filepath = "/home/skyle/Desktop/uq_benchmark/models/FMNIST/LeNet/seed_420/" \
-"started_2025-06-29-21-24-19_scores_subsample1000_lanczos_seed0_size_HM0of0_LM90of100_sketch_srft_seed0_size1000.pickle"
+# # sketched_local_ensemble- LeNet
+# filepath = "/home/skyle/Desktop/uq_benchmark/models/FMNIST/LeNet/seed_420/" \
+# "started_2025-06-29-21-24-19_scores_subsample1000_lanczos_seed0_size_HM0of0_LM90of100_sketch_srft_seed0_size1000.pickle"
 
-# low_rank_lla - LeNet
-filepath = "/home/skyle/Desktop/uq_benchmark/models/FMNIST/LeNet/seed_420/" \
-"started_2025-06-29-21-24-19_scores_subsample1000_eig_lanczos_seed0_size_HM9of10_LM0of0.pickle"
+# # low_rank_lla - LeNet
+# filepath = "/home/skyle/Desktop/uq_benchmark/models/FMNIST/LeNet/seed_420/" \
+# "started_2025-06-29-21-24-19_scores_subsample1000_eig_lanczos_seed0_size_HM9of10_LM0of0.pickle"
 
+filepath = "TODO.pickle" # TODO: enter in the recorded pickle from score_model.py
 scores = load_scores(filepath)
 
 # 1) Inspect what you got

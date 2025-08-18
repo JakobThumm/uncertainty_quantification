@@ -258,10 +258,11 @@ if __name__ == "__main__":
         eigenval = []
         approx_quadratic_form, quadratic_form = None, None
     else:
-        if args_dict['lanczos_hm_iter']==0: # typo here??
+        print("else mode")
+        if args_dict['lanczos_hm_iter']==0: # typo here?? or hm = 0 means lm mode ??
             # low memory lanczos methods
             # corrsponding to sketched_local_ensemble
-            print("low memory lanczos methods")
+            print("low memory lanczos methods") # smart_lla
             score_fun, eigenval, approx_quadratic_form, quadratic_form = low_memory_lanczos_score_fun(
                 model, 
                 params_dict, 
@@ -276,6 +277,7 @@ if __name__ == "__main__":
             if args_dict['lanczos_lm_iter']==0:
                 # corrspond to "local_ensemble", "low_rank_lla", but seems both lanczos_lm_iter=0
                 # standard high memory lanczos
+                print("high_memory_lanczos_score_fun")
                 score_fun, eigenval, approx_quadratic_form, quadratic_form = high_memory_lanczos_score_fun(
                     model, 
                     params_dict, 
@@ -285,6 +287,7 @@ if __name__ == "__main__":
                 )
             else:
                 # high memory lanczos is used as preconditioner to smart low memory lanczos
+                print("smart")
                 score_fun, eigenval, approx_quadratic_form, quadratic_form = smart_lanczos_score_fun(
                     model, 
                     params_dict, 
