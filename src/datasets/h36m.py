@@ -42,7 +42,7 @@ CONNECTIONS_13 = [
 ]
 
 SPLIT = {
-    'train': ['S1', 'S9'],#, 'S6', 'S7', 'S8', 'S9'],
+    'train': ['S1'],#, 'S6', 'S7', 'S8', 'S9'],
     'validation': ['S11'],
     'test': ['S9']
 }

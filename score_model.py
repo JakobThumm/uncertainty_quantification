@@ -1,5 +1,8 @@
 import pickle
 import os
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true" # false for small
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
 import argparse
 import datetime
 import jax.numpy as jnp
@@ -22,7 +25,7 @@ from src.ood_scores.max_logit import max_logit_score_fun
 parser = argparse.ArgumentParser()
 # dataset hyperparams
 parser.add_argument("--data_path", type=str, default="../datasets/", help="root of dataset")
-parser.add_argument("--ID_dataset", type=str, choices=["Sinusoidal", "UCI", "MNIST", "FMNIST", "SVHN", "CIFAR-10", "CIFAR-100", "CelebA", "ImageNet"], default="MNIST", required=True)
+parser.add_argument("--ID_dataset", type=str, choices=["Sinusoidal", "H36M", "UCI", "MNIST", "FMNIST", "SVHN", "CIFAR-10", "CIFAR-100", "CelebA", "ImageNet"], default="MNIST", required=True)
 parser.add_argument('--OOD_datasets', nargs='+', help='List of OOD datasets to score')
 parser.add_argument("--n_samples", default=None, type=int, help="Number of datapoint used for training. None means all")
 parser.add_argument("--subsample_trainset", default=None, type=int, help="Subsampling of the train datasets used to compute scores")
@@ -155,7 +158,7 @@ if __name__ == "__main__":
         n_samples = args.n_samples,
         save_path = args.model_save_path
     )
-    args_dict["likelihood"] = model_arg_dict["likelihood"]
+    args_dict["likelihood"] = model_arg_dict["likelihood"] # where it use?
     print(f"Loaded {args.model} with {compute_num_params(params_dict['params'])} parameters of norm {compute_norm_params(params_dict['params']):.2f}")
 
     ###################

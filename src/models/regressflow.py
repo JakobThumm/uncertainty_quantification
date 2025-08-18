@@ -138,35 +138,7 @@ class RegressFlowFlax(nn.Module):
         # --- coordinate head (identical semantics) ---
         coord = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'] * 2,
                         use_bias=True, divide_by_input_norm=True)(h)
-        coord = coord.reshape((coord.shape[0], self.preset_cfg['NUM_JOINTS'], 2))
+        # coord = coord.reshape((coord.shape[0], self.preset_cfg['NUM_JOINTS'], 2))
 
-        # --- log-variance head (Torch-compatible) ---
-        # Torch: fc_sigma outputs log-variance directly
-        log_variance = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'] * 2,
-                                use_bias=True, divide_by_input_norm=False)(h)
-        log_variance = log_variance.reshape((log_variance.shape[0], self.preset_cfg['NUM_JOINTS'], 2))
-        var_x = jnp.exp(log_variance[:, :, 0])
-        var_y = jnp.exp(log_variance[:, :, 1])
-        sigma = jnp.exp(0.5 * log_variance)  # (B,K,2)
-
-        # --- raw covariance head (Torch-compatible) ---
-        # Torch: fc_sigma2 outputs raw_cov_xy, then cov_xy = tanh(raw) * sqrt(var_x * var_y)
-        raw_cov = LinearNorm(out_ch, self.preset_cfg['NUM_JOINTS'],
-                            use_bias=True, divide_by_input_norm=False)(h)  # (B,K)
-        cov_xy = jnp.tanh(raw_cov) * jnp.sqrt(var_x * var_y)
-
-        # --- confidence (Torch-compatible) ---
-        scores = 1.0 - jax.nn.sigmoid(log_variance)     # (B,K,2)
-        scores = jnp.mean(scores, axis=2, keepdims=True).astype(jnp.float32)
-
-        return {
-            "feat": feat, # debug
-            "pred_jts": coord,
-            "sigma": sigma,
-            "log_variance": log_variance,
-            "covariance": cov_xy,
-            "maxvals": scores,
-            "nf_loss": None,
-            "pure_sigma": log_variance,
-        }
+        return coord
 

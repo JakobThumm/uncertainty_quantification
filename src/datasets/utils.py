@@ -138,6 +138,6 @@ def get_output_dim(dataset_name):
     elif dataset_name == "ImageNet":
         return 990 #1000
     elif dataset_name == "H36M":
-        return 13*2
+        return 17*2  # from the weight setting
     else:
         return 10

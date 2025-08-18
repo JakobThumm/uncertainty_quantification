@@ -65,10 +65,10 @@ def create_model(rng, num_joints=17, image_size=(256,192), fc_filters=(1024,),
     return model, params, batch_stats
 
 
-# def _to_jnp(arr):
-#     if hasattr(arr, "numpy"):  # torch tensor
-#         arr = arr.numpy()
-#     return jnp.asarray(arr).astype(jnp.float32)
+def _to_jnp(arr):
+    if hasattr(arr, "numpy"):  # torch tensor
+        arr = arr.numpy()
+    return jnp.asarray(arr).astype(jnp.float32)
 
 import numpy as np
 from flax.core import freeze, unfreeze
@@ -233,17 +233,17 @@ def transfer_regressflow_torch_to_flax(
     _assign(params, ["LinearNorm_0", "bias"],
             _to_cpu_np(sd["fc_coord.linear.bias"]), "fc_coord.bias")
 
-    # log-variance head -> LinearNorm_1
-    _assign(params, ["LinearNorm_1", "kernel"],
-            _to_cpu_np(sd["fc_sigma.linear.weight"]), "fc_sigma.weight")
-    _assign(params, ["LinearNorm_1", "bias"],
-            _to_cpu_np(sd["fc_sigma.linear.bias"]), "fc_sigma.bias")
+    # # log-variance head -> LinearNorm_1
+    # _assign(params, ["LinearNorm_1", "kernel"],
+    #         _to_cpu_np(sd["fc_sigma.linear.weight"]), "fc_sigma.weight")
+    # _assign(params, ["LinearNorm_1", "bias"],
+    #         _to_cpu_np(sd["fc_sigma.linear.bias"]), "fc_sigma.bias")
 
-    # raw covariance head -> LinearNorm_2
-    _assign(params, ["LinearNorm_2", "kernel"],
-            _to_cpu_np(sd["fc_sigma2.linear.weight"]), "fc_sigma2.weight")
-    _assign(params, ["LinearNorm_2", "bias"],
-            _to_cpu_np(sd["fc_sigma2.linear.bias"]), "fc_sigma2.bias")
+    # # raw covariance head -> LinearNorm_2
+    # _assign(params, ["LinearNorm_2", "kernel"],
+    #         _to_cpu_np(sd["fc_sigma2.linear.weight"]), "fc_sigma2.weight")
+    # _assign(params, ["LinearNorm_2", "bias"],
+    #         _to_cpu_np(sd["fc_sigma2.linear.bias"]), "fc_sigma2.bias")
 
     return freeze(params), freeze(batch_stats)
 
@@ -280,7 +280,7 @@ if __name__ == "__main__":
 
 
     # ---- load pytorch model -------
-    checkpoint_path = "/home/skyle/Desktop/uq_benchmark/models/RegressFlow/finetuned_h36m_model.pth"
+    checkpoint_path = "/home/skyle/Desktop/uq_benchmark/models/H36M/RegressFlow/seed_420/finetuned_h36m_model.pth"
     cfg = {
         'PRESET': CONFIG.DATA_PRESET,
         'NUM_LAYERS': CONFIG.MODEL.NUM_LAYERS,
@@ -313,21 +313,22 @@ if __name__ == "__main__":
     dummy_x = jnp.zeros((batch_size, 3, H, W), jnp.float32) if accept_nchw \
             else jnp.zeros((batch_size, H, W, 3), jnp.float32)
     variables = model_regressflow_flax.init(rng, dummy_x, train=True)
+    print(variables["params"].keys())
 
-    def print_tree(tree, prefix=""):
-        if isinstance(tree, dict):
-            for k, v in tree.items():
-                print_tree(v, f"{prefix}{k}/")
-        else:
-            print(prefix[:-1], ":", getattr(tree, "shape", None))
+    # def print_tree(tree, prefix=""):
+    #     if isinstance(tree, dict):
+    #         for k, v in tree.items():
+    #             print_tree(v, f"{prefix}{k}/")
+    #     else:
+    #         print(prefix[:-1], ":", getattr(tree, "shape", None))
 
-    print("=== FLAX PARAM KEYS ===")
-    print_tree(unfreeze(variables["params"]))
-    print("=== FLAX BATCH_STATS KEYS ===")
-    if "batch_stats" in variables:
-        print_tree(unfreeze(variables["batch_stats"]))
-    else:
-        print("(no batch_stats)")
+    # print("=== FLAX PARAM KEYS ===")
+    # print_tree(unfreeze(variables["params"]))
+    # print("=== FLAX BATCH_STATS KEYS ===")
+    # if "batch_stats" in variables:
+    #     print_tree(unfreeze(variables["batch_stats"]))
+    # else:
+    #     print("(no batch_stats)")
 
 
     params = variables["params"]
@@ -390,40 +391,49 @@ if __name__ == "__main__":
 
     x_j = jnp.asarray(x_t.detach().cpu().numpy())
     # model_regressflow_flax.eval()
-    out_f = model_regressflow_flax.apply(
+    coord_f = model_regressflow_flax.apply(
         {'params': params, 'batch_stats': batch_stats},
         x_j, train=False, mutable=False
     )
 
-    feat_f = np.array(out_f['feat'])
-    fj = np.array(out_f['pred_jts'])
-    flv = np.array(out_f['log_variance'])
-    fcv = np.array(out_f['covariance'])
-    print(f"[Sanity] feat max abs diff: {np.max(np.abs(feat_t - feat_f)):.6f}")
-    print(f"[Sanity] pred_jts max abs diff: {np.max(np.abs(tj - fj)):.6f}")
-    print(f"[Sanity] log_variance max abs diff: {np.max(np.abs(tlv - flv)):.6f}")
-    print(f"[Sanity] covariance max abs diff: {np.max(np.abs(tcv - fcv)):.6f}")
+    # feat_f = np.array(out_f['feat'])
+    # fj = np.array(out_f['pred_jts'])
+    # flv = np.array(out_f['log_variance'])
+    # fcv = np.array(out_f['covariance'])
 
-    assert False
+    # print(f"[Sanity] feat max abs diff: {np.max(np.abs(feat_t - feat_f)):.6f}")
+    print(f"[Sanity] pred_jts max abs diff: {np.max(np.abs(tj - coord_f)):.6f}")
+    # print(f"[Sanity] log_variance max abs diff: {np.max(np.abs(tlv - flv)):.6f}")
+    # print(f"[Sanity] covariance max abs diff: {np.max(np.abs(tcv - fcv)):.6f}")
+
+    # assert False
     # ---- model ----
     # model, model_params, batch_stats = create_model(
     #     rng_model, num_joints, image_size, fc_filters=(1024,), accept_nchw=accept_nchw, batch_size=batch_size
     # )
 
     # CONFIG.MODEL.NUM_FC_FILTERS
-    for i,batch in enumerate(train_loader):
-        x_tensor = batch[0].to(device)
-        y_tensor = batch[1].to(device)
-        print("x_tensor:", x_tensor.shape)
-        x_b = _to_jnp(batch[0])          # (B,C,H,W) or (B,H,W,C) depending on your model
-        y_b = _to_jnp(batch[1])          # (B,K,2)
-        print("x_b:", x_b.shape)
-        y_pred_torch = model_regressflow_torch(x_tensor)
+    with torch.no_grad():
+        for i, batch in enumerate(train_loader):
+            x_tensor = batch[0].to(device)             # torch input
+            x_b = _to_jnp(batch[0])                    # same batch to JAX (NCHW)
+            
+            y_pred_torch = model_regressflow_torch(x_tensor)['pred_jts'].cpu().numpy()
 
-        batch_stats = variables.get("batch_stats", {})  # keep BN running stats
-        vars_for_apply = {"params": params, "batch_stats": batch_stats}
-        y_pred_jax = model_regressflow_flax.apply(
-                        vars_for_apply, x_b, train=False, mutable=False
-                    )
+            out_f = model_regressflow_flax.apply(
+                {'params': params, 'batch_stats': batch_stats},  # <-- use transferred stats
+                x_b, train=False, mutable=False
+            )
+            y_pred_jax = np.array(out_f)
+            print("y_pred_jax:", y_pred_jax.shape)
+            print(f"pred_jts max abs diff: {np.max(np.abs(y_pred_torch - y_pred_jax)):.6f}")
+            break
 
-        break
+    import pickle, json, os
+    from flax.core import FrozenDict
+    from flax.serialization import to_state_dict, from_state_dict
+    save_folder = "/home/skyle/Desktop/uq_benchmark/models/H36M/RegressFlow/seed_420/"
+    params_dict = {'params': params, 'batch_stats':batch_stats}
+    save_name = "regress_pred_"
+    model_dict = {"model": "regressflow", **params_dict}
+    pickle.dump(model_dict, open(f"{save_folder}/{save_name}_params.pickle", "wb"))

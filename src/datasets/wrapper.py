@@ -115,7 +115,7 @@ def augmented_dataloader_from_string(
         )
     elif dataset_name == "H36M":
         # TODO: change to h36m
-        train_loader, valid_loader, _ = get_h36m(
+        train_loader, val_loader, _ = get_h36m(
             batch_size = batch_size, 
             shuffle = shuffle,
             seed = seed,
@@ -162,6 +162,15 @@ def dataloader_from_string(
             seed = seed,
             download = download, 
             data_path = data_path
+        )
+    elif dataset_name == "H36M":
+        # TODO: change to h36m
+        train_loader, valid_loader, test_loader = get_h36m(
+            batch_size = batch_size, 
+            shuffle = shuffle,
+            seed = seed,
+            download = False, 
+            #data_path = data_path
         )
     elif dataset_name == "MNIST":
         classes = list(range(10))
