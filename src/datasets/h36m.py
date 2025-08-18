@@ -253,7 +253,7 @@ def get_h36m(
         shuffle = False,
         seed = 0,
         download: bool = True,
-        data_path="/home/skyle/datasets/H36M_FREI",
+        data_path="../datasets/H36M_FREI", # "/home/skyle/datasets/H36M_FREI"
         num_frames = NUM_FRAMES, 
         image_size = IMG_SIZE, 
     ):

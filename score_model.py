@@ -287,7 +287,6 @@ if __name__ == "__main__":
                 )
             else:
                 # high memory lanczos is used as preconditioner to smart low memory lanczos
-                print("smart")
                 score_fun, eigenval, approx_quadratic_form, quadratic_form = smart_lanczos_score_fun(
                     model, 
                     params_dict, 
