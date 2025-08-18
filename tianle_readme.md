@@ -21,7 +21,7 @@ Solution: Use regressflow for epistemic unc estimate, use regressflow_wiz_alea f
 
 
 ## score model command (TODO: test on server!)
-TO run on the whole model first, test whether enough memory budget
+run on the whole model first, test whether enough memory budget
 
 # Sketched Lanczos(Run this!)
 (same recepie as shown in the article for resnet, train and test batch can change)
