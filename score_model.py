@@ -1,4 +1,4 @@
-import pickle
+import cloudpickle
 import os
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true" # false for small
@@ -98,7 +98,7 @@ if __name__ == "__main__":
         batch_size = args.train_batch_size,
         shuffle = False,
         seed = args.model_seed,
-        download = True, # False
+        download = True,
         data_path = args.data_path
     )
     _, _, ID_loader = dataloader_from_string(
@@ -139,7 +139,7 @@ if __name__ == "__main__":
             batch_size = args.test_batch_size,
             shuffle = False,
             seed = 0,
-            download = False,
+            download = True,
             data_path = args.data_path,
         )[2] for OOD_dataset in args_dict["OOD_datasets"]
         ]
@@ -303,7 +303,8 @@ if __name__ == "__main__":
     compute_true_quadratic_form = False # skip computation of true quadratic form
     scores_dict = {
         "eigenvals": jnp.array(eigenval),
-        "args_dict": args_dict
+        "args_dict": args_dict,
+        "score_fun": score_fun
     }
     for distribution, loader in [("ID", ID_loader), *zip(args_dict["OOD_datasets"], OOD_loaders)]:
         start = time.time()
@@ -378,4 +379,4 @@ if __name__ == "__main__":
         if args.sketch is not None:
             experiment_name += f"_sketch_{args.sketch}_seed{args.sketch_seed}_size{args.sketch_size}"
     print(f"Saving with name -> {experiment_name}\n\n")
-    pickle.dump(scores_dict, open(f"{args.model_save_path}/{args.ID_dataset}/{args.model}/seed_{args.model_seed}/{args.run_name}_{experiment_name}.pickle", "wb"))
+    cloudpickle.dump(scores_dict, open(f"{args.model_save_path}/{args.ID_dataset}/{args.model}/seed_{args.model_seed}/{args.run_name}_{experiment_name}.cloudpickle", "wb"))

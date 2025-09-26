@@ -1,4 +1,5 @@
 import pickle
+import cloudpickle
 import argparse
 import matplotlib.pyplot as plt
 import numpy as np
@@ -35,6 +36,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--dataset", type=str, choices=["Sinusoidal", "UCI", "MNIST", "FMNIST", "SVHN", "CIFAR-10", "CIFAR-100", "CelebA", "ImageNet"], default="MNIST")
 parser.add_argument("--model", type=str, default=None, help="Model architecture.")
 parser.add_argument("--budget", default=3, type=int)
+parser.add_argument("--seed", default=1, type=int)
+parser.add_argument("--model_seeds", type=int, nargs='+', default=None)
+parser.add_argument("--lanczos_seeds", type=int, nargs='+', default=None)
 
 # storage
 parser.add_argument("--run_name", default="good")
@@ -185,14 +189,14 @@ if __name__ == "__main__":
                 
         return experiment_name
 
-    params_file_path = f"{save_folder}/seed_1/{run_name}_params.pickle"
+    params_file_path = f"{save_folder}/seed_{args.seed}/{run_name}_params.pickle"
     params_dict = pickle.load(open(params_file_path, 'rb'))
     params = params_dict['params']
     P = flatten_util.ravel_pytree(params)[0].shape[0]
     print(f"model has {P} parameters")
 
 
-    stats_file_path = f"{save_folder}/seed_1/{run_name}_stats.pickle"
+    stats_file_path = f"{save_folder}/seed_{args.seed}/{run_name}_stats.pickle"
     stats_dict = pickle.load(open(stats_file_path, 'rb'))
     if len(stats_dict['train_acc_or_mse']):
         if dataset != "CelebA":
@@ -200,17 +204,26 @@ if __name__ == "__main__":
         else:
             print(f"Accuracies for seed 1:\n\t train= {stats_dict['train_acc_or_mse'][-1]}, \n\t test= {stats_dict['valid_acc_or_mse'][-1]}")
 
+    if not args.model_seeds:
+        if run_name == "epoch0":
+            model_seeds = [1, 2, 3]
+        elif run_name == "good":
+            model_seeds = [1, 2, 3]
+        elif run_name == "e5lr3":
+            model_seeds = [2]
+    else:
+        model_seeds = args.model_seeds
 
-
-    if run_name == "epoch0":
-        model_seeds = [1, 2, 3]
-        lanczos_seeds = [1]
-    elif run_name == "good":
-        model_seeds = [1, 2, 3]
-        lanczos_seeds = [1]# 1, 2]
-    elif run_name == "e5lr3":
-        model_seeds = [2]
-        lanczos_seeds = [1]# 1, 2]
+    if not args.lanczos_seeds:
+        if run_name == "epoch0":
+            lanczos_seeds = [1]
+        elif run_name == "good":
+            lanczos_seeds = [1]# 1, 2]
+        elif run_name == "e5lr3":
+            lanczos_seeds = [1]# 1, 2
+    else:
+        lanczos_seeds = args.lanczos_seeds
+    
     if dataset=="FMNIST":
         subsample_trainsets = [60000, 10000, 1000, 100]
         subsample_trainsets = [60000]
@@ -295,16 +308,22 @@ if __name__ == "__main__":
                 "ensemble_size10"]
     elif dataset=="FMNIST": 
         if budget == 3: #seeds 1-10
-            experiment_names = [ #mem budget 3
-                "lanczos_seed1_size_HM0of0_LM118of132_sketch_srft_seed0_size1000",
-                #"lanczos_seed1_size_HM1of2_LM79of88_sketch_srft_seed0_size1000",
-                "eig_lanczos_seed1_size_HM2of3_LM0of0", 
-                #"lanczos_seed1_size_HM2of3_LM0of0", 
-                #"hess_lanczos_seed1_size_HM2of3_LM0of0",
-                "diagonal_lla_sample10000", 
-                "scod_HMsize3",
-                "swag_vec3_mom0.99_collect1000",
-                "ensemble_size3"]
+            debug = True
+            if debug:
+                experiment_names = [
+                    "lanczos_seed1_size_HM0of0_LM118of132_sketch_srft_seed1_size1000"
+                ]
+            else:
+                experiment_names = [ #mem budget 3
+                    "lanczos_seed1_size_HM0of0_LM118of132_sketch_srft_seed0_size1000",
+                    #"lanczos_seed1_size_HM1of2_LM79of88_sketch_srft_seed0_size1000",
+                    "eig_lanczos_seed1_size_HM2of3_LM0of0", 
+                    #"lanczos_seed1_size_HM2of3_LM0of0", 
+                    #"hess_lanczos_seed1_size_HM2of3_LM0of0",
+                    "diagonal_lla_sample10000", 
+                    "scod_HMsize3",
+                    "swag_vec3_mom0.99_collect1000",
+                    "ensemble_size3"]
         if budget == 10: #seeds 1-10
             experiment_names = [ #mem budget 10
                 "lanczos_seed1_size_HM0of0_LM396of440_sketch_srft_seed0_size1000",
@@ -401,27 +420,31 @@ if __name__ == "__main__":
 
             aurocs, eigss = [], []
 
-            if "scores_ensemble" in experiment_name:
-                model_seeds = [1, 4, 7]  if budget==3 else [1]
-            else:
-                if dataset == "MNIST":
-                    model_seeds = list(range(1,6)) 
-                if dataset == "FMNIST":
-                    model_seeds = list(range(1,11)) 
-                if dataset == "CIFAR-10":
-                    model_seeds = [1,2,3,4,5] 
-                if dataset == "CelebA":
-                    model_seeds = [1, 2, 3]
-                    #model_seeds = [1]
-                if dataset == "ImageNet":
-                    model_seeds = [1]
+            if not args.model_seeds:
+                if "scores_ensemble" in experiment_name:
+                    model_seeds = [1, 4, 7]  if budget==3 else [1]
+                else:
+                    if dataset == "MNIST":
+                        model_seeds = list(range(1,6)) 
+                    if dataset == "FMNIST":
+                        if debug:
+                            model_seeds = list(range(1,4))
+                        else: 
+                            model_seeds = list(range(1,11)) 
+                    if dataset == "CIFAR-10":
+                        model_seeds = [1,2,3,4,5] 
+                    if dataset == "CelebA":
+                        model_seeds = [1, 2, 3]
+                        #model_seeds = [1]
+                    if dataset == "ImageNet":
+                        model_seeds = [1]
         
             #model_seeds = [1,2,3]
             for model_seed in model_seeds:
                     
                 
-                scores_file_path = f"{save_folder}/seed_{model_seed}/{run_name}_{experiment_name}.pickle"
-                scores_dict = pickle.load(open(scores_file_path, 'rb'))
+                scores_file_path = f"{save_folder}/seed_{model_seed}/{run_name}_{experiment_name}.cloudpickle"
+                scores_dict = cloudpickle.load(open(scores_file_path, 'rb'))
 
                 aaa = []
                 for ood_dataset in ood_datasets:

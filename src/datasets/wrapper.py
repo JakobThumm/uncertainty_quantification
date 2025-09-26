@@ -102,7 +102,7 @@ def augmented_dataloader_from_string(
             batch_size = batch_size, 
             shuffle = shuffle,
             seed = seed,
-            download = False, 
+            download = download, 
             data_path = data_path
         )
     elif dataset_name == "ImageNet":
@@ -110,7 +110,7 @@ def augmented_dataloader_from_string(
             batch_size = batch_size, 
             shuffle = shuffle,
             seed = seed,
-            download = False, 
+            download = download, 
             #data_path = data_path
         )
     elif dataset_name == "H36M":

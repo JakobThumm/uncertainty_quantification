@@ -58,10 +58,12 @@ class CelebA(torch.utils.data.Dataset):
         download=False,
         data_path="../datasets", 
     ):
+        print(f"Loading CelebA dataset, train={train}, only_with={only_with}, only_without={only_without}")
         if download:
-            raise ValueError("Torch vision CelebA is broken... \
+            raise ValueError(f"Torch vision CelebA is broken... \
                              Download dataset manually from https://www.kaggle.com/datasets/jessicali9530/celeba-dataset \
-                             Then unzip it with 'unzip archive.zip -d {data_path}/celeba")
+                             Using curl -L -o celeba-dataset.zip https://www.kaggle.com/api/v1/datasets/download/jessicali9530/celeba-dataset \
+                             and then unzip it with 'unzip celeba-dataset.zip -d {data_path}/celeba'")
         self.root = os.path.join(data_path, "celeba")
         self.transform = transform
         self.image_path = os.path.join(self.root, "img_align_celeba/img_align_celeba")
