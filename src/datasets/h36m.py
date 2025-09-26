@@ -119,7 +119,7 @@ class Human36mDataset(Dataset):
     def load_data(self, base_directory, split):
         all_data = []
         for subject in SPLIT[split]:
-            poses_dir = os.path.join(base_directory, subject, 'D2_Positions')
+            poses_dir = os.path.join(base_directory, subject, 'Poses_D2_Positions')
             videos_dir = os.path.join(base_directory, subject, 'Videos')
             print(f"Loading data from {poses_dir} and {videos_dir}")
 

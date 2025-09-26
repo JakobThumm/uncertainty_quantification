@@ -31,13 +31,13 @@ We have two things:
     - [x] Write a folder structure for this project.
     - [x] Move existing file to the correct folders if neccessary.
     - [x] Check if `unc` python environment needs adaption for new models (packages in src/ViTPose/readMe.md might need to be installed.)
-    - Use the pre-trained models with converted weights into JAX.
-    - First, perform pose estimation on a few H3.6M examples.
-    - Then, perform "Experiment 2" from Marians folder -> Evaluation of the 3D human pose estimation with uncertainty quantification (steps 4 and 6 from above.)
-          1. Test with real H36M examples - Load actual images and poses from the dataset
-          2. Implement evaluation metrics - MPJPE, PCK metrics as in Marian's Experiment 2
-          3. Add uncertainty quantification - Use the sketching Lanczos method for OOD detection on pose estimation
-          4. Implement 3D triangulation - Convert 2D poses to 3D using camera parameters
+    - [x] Use the pre-trained models with converted weights into JAX.
+    - [x] First, perform pose estimation on a few H3.6M examples.
+    - [ ] Then, perform "Experiment 2" from Marians folder -> Evaluation of the 3D human pose estimation with uncertainty quantification (steps 4 and 6 from above.)
+      - [x] Test with real H36M examples - Load actual images and poses from the dataset
+      - [ ] Implement evaluation metrics - MPJPE, PCK metrics as in Marian's Experiment 2
+      - [ ] Add uncertainty quantification - Use the sketching Lanczos method for OOD detection on pose estimation
+      - [ ] Implement 3D triangulation - Convert 2D poses to 3D using camera parameters
  3. Perform sketching lanczos OOD detection for pose estimation
     - Run the OOD detection with sketching lanczos on the 2D pose estimation model. ID data would be the human 3.6m dataset. For OOD data we can use tiger pose dataset.
  4. Test the pre-trained pose prediction models
