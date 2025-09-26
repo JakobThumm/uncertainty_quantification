@@ -25,7 +25,10 @@ def parse_arguments():
     # Dataset and model arguments
     parser.add_argument('--dataset', type=str, default='MNIST',
                        choices=['MNIST', 'FMNIST', 'CIFAR-10', 'SVHN'],
-                       help='Dataset to use')
+                       help='Dataset used for model training (determines model path)')
+    parser.add_argument('--test_dataset', type=str, default=None,
+                       choices=['MNIST', 'FMNIST', 'CIFAR-10', 'SVHN'],
+                       help='Dataset to test on (None uses same as --dataset, for OOD use different dataset)')
     parser.add_argument('--model', type=str, default='MLP_depth1_hidden20',
                        help='Model architecture')
     parser.add_argument('--model_seed', type=int, default=1,
@@ -83,15 +86,19 @@ def load_model_and_data(args) -> Tuple[Any, Any, Any, Any]:
         print(f"Expected path: {args.model_path}/{args.dataset}/{args.model}/seed_{args.model_seed}/{args.run_name}_params.pickle")
         return None, None, None, None
     
-    # Load test data
+    # Load test data (potentially different dataset for OOD testing)
+    test_dataset = args.test_dataset if args.test_dataset is not None else args.dataset
     _, _, test_loader = dataloader_from_string(
-        args.dataset,
+        test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         seed=42
     )
     
-    print(f"✓ Dataset {args.dataset} loaded successfully")
+    if args.test_dataset is not None:
+        print(f"✓ Test dataset {args.test_dataset} loaded successfully (OOD testing)")
+    else:
+        print(f"✓ Dataset {args.dataset} loaded successfully")
     
     return model, params_dict, model_args, test_loader
 
@@ -245,8 +252,12 @@ def main():
     """Main function."""
     args = parse_arguments()
     
+    test_dataset_display = args.test_dataset if args.test_dataset is not None else args.dataset
+    ood_suffix = f" (OOD: {args.test_dataset})" if args.test_dataset is not None else ""
+    
     print("=" * 60)
-    print(f"Explainer Visualization: {args.explainer.upper()} on {args.dataset}")
+    print(f"Explainer Visualization: {args.explainer.upper()} on {test_dataset_display}")
+    print(f"Model trained on: {args.dataset}{ood_suffix}")
     print("=" * 60)
     
     # Create save directory

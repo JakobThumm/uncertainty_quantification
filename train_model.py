@@ -19,6 +19,7 @@ parser.add_argument("--dataset", type=str, choices=["Sinusoidal", "UCI", "MNIST"
 parser.add_argument("--data_path", type=str, default="../datasets/", help="Root path of dataset")
 parser.add_argument("--n_samples", default=None, type=int, help="Number of datapoint to use. None means all")
 parser.add_argument("--uci_type", type=str, choices=["concrete", "boston", "energy", "kin8nm", "wine", "yacht"], default=None)
+parser.add_argument("--download_dataset", action="store_true", required=False, default=False)
 
 # model hyperparams
 parser.add_argument("--model", type=str, choices=["MLP", "LeNet", "GoogleNet", "ConvNeXt", "ConvNeXt_L", "ConvNeXt_XL", "ResNet", "ResNet_NoNorm", "ResNet50", "ResNet50PreAct", "VAN_tiny", "VAN_small", "VAN_base", "VAN_large", "SWIN_tiny", "SWIN_large"], default="MLP", help="Model architecture.")
@@ -129,7 +130,7 @@ if __name__ == "__main__":
         batch_size = args.batch_size,
         shuffle = True,
         seed = args.seed,
-        download = True,
+        download = args.download_dataset,
         data_path = args.data_path
     )
     print(f"Train set size {len(train_loader.dataset)}, Validation set size {len(valid_loader.dataset)}")
