@@ -8,7 +8,6 @@ from src.models.van import VAN
 from src.models.swin import SwinTransformer
 from src.models.vit import ViT
 from src.models.regressflow import RegressFlowFlax
-from src.models.regressflow_torch import RegressFlow
 from src.models.real_nvp import RealNVP
 
 from src.models.wrapper import Model, model_from_string, pretrained_model_from_string

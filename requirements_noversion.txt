@@ -10,3 +10,12 @@ scikit-learn
 pandas
 tqdm
 seaborn
+# Additional packages for human pose estimation
+opencv-python
+einops
+h5py
+easydict
+imageio
+filterpy
+Pillow
+spacepy

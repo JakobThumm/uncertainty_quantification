@@ -12,3 +12,12 @@ matplotlib==3.8.2
 seaborn==0.13.1
 pandas==1.5.2
 tqdm
+# Additional packages for human pose estimation
+opencv-python
+einops
+h5py
+easydict
+imageio
+filterpy
+Pillow
+spacepy

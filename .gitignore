@@ -32,6 +32,7 @@ visualizations/
 
 models_tianle/
 marian_code/
+datasets/
 
 *.pth
 
