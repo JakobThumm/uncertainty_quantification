@@ -22,6 +22,7 @@ We have two things:
 
  1. Download 
     - [x] Marians models from Tianles folder (now in models_tianle/H36M/RegressFlow)
+    - [x] Move Marians code to the server
     - Download the human 3.6M dataset with fetching script
     - Download the close interactions dataset https://ci3d.imar.ro/chi3d
     - Download the COCO dataset
