@@ -23,3 +23,10 @@ figures/
 visualizations/
 .vscode/
 /*.png
+
+models_tianle/
+marian_code/
+
+*.pth
+
+*.code-workspace
