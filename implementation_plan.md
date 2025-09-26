@@ -27,6 +27,9 @@ We have two things:
     - Download the close interactions dataset https://ci3d.imar.ro/chi3d
     - Download the COCO dataset
  2. Test the pre-trained pose estimation models
+    - Write a folder structure for this project.
+    - Move existing file to the correct folders if neccessary.
+    - Check if `unc` python environment needs adaption for new models (packages in src/ViTPose/readMe.md might need to be installed.)
     - Use the pre-trained models with converted weights into JAX.
     - First, perform pose estimation on a few H3.6M examples.
     - Then, perform "Experiment 2" from Marians folder -> Evaluation of the 3D human pose estimation with uncertainty quantification (steps 4 and 6 from above.)
