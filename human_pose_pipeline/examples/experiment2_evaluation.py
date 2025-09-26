@@ -25,6 +25,13 @@ sys.path.append('../..')
 
 from src.models.wrapper import model_from_string
 from src.datasets.h36m import Human36mDataset
+from human_pose_pipeline.evaluation.pose_metrics import (
+    comprehensive_pose_evaluation,
+    print_evaluation_summary,
+    joint_wise_analysis,
+    JOINT_NAMES_13,
+    JOINT_IDX_13_MODEL
+)
 
 def create_compatible_transform():
     """Create transform that produces the expected input size for RegressFlow"""
@@ -177,41 +184,69 @@ def evaluate_pose_estimation(model, params, batch_stats, dataset, num_samples=10
 
     return results, errors
 
-def compute_basic_metrics(results):
-    """Compute basic evaluation metrics"""
-    print("Computing evaluation metrics...")
+def compute_comprehensive_metrics(results):
+    """Compute comprehensive evaluation metrics using MPJPE, PCK, etc."""
+    print("Computing comprehensive evaluation metrics...")
 
     if not results:
         print("No successful results to evaluate")
         return
 
-    # Note: This is a simplified metric computation
-    # In practice, we'd need proper joint correspondences and coordinate normalization
-
-    pred_coords = []
-    gt_coords = []
+    # Collect predictions and ground truth
+    pred_poses_list = []
+    gt_poses_list = []
+    valid_results = []
 
     for result in results:
         pred_pose = result['pred_pose']  # (17, 2) or (13, 2)
         gt_pose = result['gt_pose']
 
-        # For now, just compute statistics on the pose coordinates
-        pred_coords.extend(pred_pose.flatten())
-        if gt_pose.shape[0] == pred_pose.shape[0]:  # Same number of joints
-            gt_coords.extend(gt_pose.flatten())
+        # Only use results where ground truth and prediction have compatible shapes
+        if pred_pose.shape[0] == 17 and gt_pose.shape[0] == 13:
+            # Map 17-joint prediction to 13-joint ground truth
+            # Use the same mapping as in the dataset
+            pred_pose_13 = pred_pose[JOINT_IDX_13_MODEL[:13], :]
+            pred_poses_list.append(pred_pose_13)
+            gt_poses_list.append(gt_pose)
+            valid_results.append(result)
+        elif pred_pose.shape[0] == gt_pose.shape[0]:
+            # Same number of joints
+            pred_poses_list.append(pred_pose)
+            gt_poses_list.append(gt_pose)
+            valid_results.append(result)
 
-    pred_coords = np.array(pred_coords)
-    gt_coords = np.array(gt_coords) if gt_coords else None
+    if not pred_poses_list:
+        print("No compatible prediction-ground truth pairs found")
+        return
 
-    print(f"Pose prediction statistics:")
-    print(f"  - Predicted coordinates range: [{np.min(pred_coords):.3f}, {np.max(pred_coords):.3f}]")
-    print(f"  - Predicted coordinates mean: {np.mean(pred_coords):.3f}")
-    print(f"  - Predicted coordinates std: {np.std(pred_coords):.3f}")
+    # Stack into arrays
+    pred_poses = np.stack(pred_poses_list)  # (N, num_joints, 2)
+    gt_poses = np.stack(gt_poses_list)      # (N, num_joints, 2)
 
-    if gt_coords is not None:
-        print(f"  - Ground truth coordinates range: [{np.min(gt_coords):.3f}, {np.max(gt_coords):.3f}]")
-        print(f"  - Ground truth coordinates mean: {np.mean(gt_coords):.3f}")
-        print(f"  - Ground truth coordinates std: {np.std(gt_coords):.3f}")
+    print(f"Evaluating {len(pred_poses)} samples with {pred_poses.shape[1]} joints each")
+
+    # Compute comprehensive evaluation
+    eval_results = comprehensive_pose_evaluation(pred_poses, gt_poses)
+
+    # Print summary
+    print_evaluation_summary(eval_results, "Experiment 2 - JAX RegressFlow Evaluation")
+
+    # Compute per-joint analysis
+    print("\nPer-joint error analysis:")
+    joint_stats = joint_wise_analysis(jnp.array(pred_poses), jnp.array(gt_poses))
+
+    # Sort joints by error and show top 5 most/least accurate
+    sorted_joints = sorted(joint_stats.items(), key=lambda x: x[1]['mean_error'])
+
+    print("\nMost accurate joints:")
+    for joint_name, stats in sorted_joints[:3]:
+        print(f"  {joint_name}: {stats['mean_error']:.3f} ± {stats['std_error']:.3f}")
+
+    print("\nLeast accurate joints:")
+    for joint_name, stats in sorted_joints[-3:]:
+        print(f"  {joint_name}: {stats['mean_error']:.3f} ± {stats['std_error']:.3f}")
+
+    return eval_results
 
 def main():
     """Main evaluation function"""
@@ -232,7 +267,7 @@ def main():
         )
 
         # Compute metrics
-        compute_basic_metrics(results)
+        eval_results = compute_comprehensive_metrics(results)
 
         print("\n" + "=" * 60)
         print("Experiment 2 Evaluation Summary")
@@ -244,7 +279,6 @@ def main():
             print("✓ Model produces pose predictions")
 
             print("\nNext steps for complete Experiment 2:")
-            print("  1. Implement proper MPJPE and PCK metrics")
             print("  2. Add joint correspondence mapping")
             print("  3. Implement 3D triangulation")
             print("  4. Add uncertainty quantification")

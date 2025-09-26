@@ -19,3 +19,4 @@ imageio
 filterpy
 Pillow
 spacepy
+ultralytics

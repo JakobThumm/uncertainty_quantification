@@ -35,7 +35,10 @@ We have two things:
     - [x] First, perform pose estimation on a few H3.6M examples.
     - [ ] Then, perform "Experiment 2" from Marians folder -> Evaluation of the 3D human pose estimation with uncertainty quantification (steps 4 and 6 from above.)
       - [x] Test with real H36M examples - Load actual images and poses from the dataset
-      - [ ] Implement evaluation metrics - MPJPE, PCK metrics as in Marian's Experiment 2
+      - [x] Implement evaluation metrics - MPJPE, PCK metrics as in Marian's Experiment 2
+      - [ ] Mirror Marian's code exactly
+      - [ ] Add torch to the environment to get the bounding box estimation -> We might want to change this later.
+      - [ ] Debug model output -> Maybe coordinate system alignment?
       - [ ] Add uncertainty quantification - Use the sketching Lanczos method for OOD detection on pose estimation
       - [ ] Implement 3D triangulation - Convert 2D poses to 3D using camera parameters
  3. Perform sketching lanczos OOD detection for pose estimation
@@ -60,3 +63,5 @@ We have two things:
       - (c) if more than one human is closer than a given threshold, return this as unsafe.
       - (d) determine the closest human.
       - (e) perform steps 5. - 9. with the closest human only.
+ 9. Replace pytorch YOLO v5 with something JAX-based
+    - We can only run OOD on JAX models, so to perform OOD on the human detection, we need a JAX-based model.
