@@ -14,3 +14,12 @@ uq_benchmark
 exp
 exp_dummy
 tutorial
+
+__pycache__/
+
+unc/
+results/
+figures/
+visualizations/
+.vscode/
+/*.png
