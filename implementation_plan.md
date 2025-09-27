@@ -36,8 +36,8 @@ We have two things:
     - [ ] Then, perform "Experiment 2" from Marians folder -> Evaluation of the 3D human pose estimation with uncertainty quantification (steps 4 and 6 from above.)
       - [x] Test with real H36M examples - Load actual images and poses from the dataset
       - [x] Implement evaluation metrics - MPJPE, PCK metrics as in Marian's Experiment 2
+      - [x] Add torch to the environment to get the bounding box estimation and switch to YOLO 11 -> We might want to change this later.
       - [ ] Mirror Marian's code exactly
-      - [ ] Add torch to the environment to get the bounding box estimation -> We might want to change this later.
       - [ ] Debug model output -> Maybe coordinate system alignment?
       - [ ] Add uncertainty quantification - Use the sketching Lanczos method for OOD detection on pose estimation
       - [ ] Implement 3D triangulation - Convert 2D poses to 3D using camera parameters

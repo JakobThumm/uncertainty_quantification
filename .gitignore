@@ -37,3 +37,6 @@ datasets/
 *.pth
 
 *.code-workspace
+
+runs/
+yolo*.pt
