@@ -19,7 +19,7 @@ from scipy.stats import chi2
 # Map from 17 joints (COCO format) to 13 joints (H36M subset)
 JOINT_IDX_17 = [0, 1, 2, 3, 6, 7, 8, 12, 16, 14, 15, 17, 18, 19, 25, 26, 27]
 JOINT_IDX_13 = [10, 14, 11, 15, 12, 16, 13, 1, 4, 2, 5, 3, 6]
-JOINT_IDX_13_MODEL = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11]
+MIRROR_13_JOINT_MODEL_MAP = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11]
 
 # Joint names for interpretability
 JOINT_NAMES_13 = [

@@ -43,7 +43,7 @@ from human_pose_pipeline.utils.visualization import (
 # Same mappings as pose_estimation_2D.py
 JOINT_IDX_17 = [0, 1, 2, 3, 6, 7, 8, 12, 16, 14, 15, 17, 18, 19, 25, 26, 27]
 JOINT_IDX_13 = [10, 14, 11, 15, 12, 16, 13, 1, 4, 2, 5, 3, 6]
-JOINT_IDX_13_MODEL = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11]
+MIRROR_13_JOINT_MODEL_MAP = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11]
 
 # Skeleton connections for visualization
 CONNECTIONS_13 = [
@@ -143,9 +143,9 @@ def load_single_sample(base_directory, subject='S1', action='Directions', camera
         'image_shape': frame_rgb.shape
     }
 
-def map_17_to_13_joints(pose_17, mapping):
-    """Convert a 17-joint pose representation to a 13-joint representation"""
-    return pose_17[mapping]
+def joint_mapping(joints, mapping):
+    """Apply joint mapping to reorder joints according to the provided mapping"""
+    return joints[mapping]
 
 def compute_mpjpe(pred_pose, gt_pose):
     """Compute Mean Per Joint Position Error"""
@@ -222,9 +222,9 @@ def main():
         sample = load_single_sample(
             base_directory=base_directory,
             subject='S1',
-            action='Directions',
+            action='Posing',
             camera='55011271',
-            frame_idx=100
+            frame_idx=1
         )
 
         print(f"Sample loaded successfully!")
@@ -253,9 +253,14 @@ def main():
         else:
             print(f"Detected {len(pose_estimations)} human(s)")
             # Extract pose data - already in 13-joint format from our updated function
-            pred_pose_13 = np.array(pose_estimations[0]['keypoints'])  # Already 13 joints
-            pred_uncertainties = np.array(pose_estimations[0]['uncertainties'])  # Already 13 joints
-            pred_covariances = np.array(pose_estimations[0]['covariance'])  # Already 13 joints
+            first_pose = np.array(pose_estimations[0]['keypoints'])  # Already 13 joints
+            first_uncertainties = np.array(pose_estimations[0]['uncertainties'])  # Already 13 joints
+            first_covariances = np.array(pose_estimations[0]['covariance'])  # Already 13 joints
+
+            # Apply mirror mapping to correct left/right joint swapping (matching Marian's approach)
+            pred_pose_13 = joint_mapping(first_pose, MIRROR_13_JOINT_MODEL_MAP)
+            pred_uncertainties = joint_mapping(first_uncertainties, MIRROR_13_JOINT_MODEL_MAP)
+            pred_covariances = joint_mapping(first_covariances, MIRROR_13_JOINT_MODEL_MAP)
 
         gt_pose_13 = sample['pose_13']
 

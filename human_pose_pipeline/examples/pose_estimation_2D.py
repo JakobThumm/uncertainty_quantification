@@ -48,7 +48,7 @@ from human_pose_pipeline.utils.transform_utils import (
 from human_pose_pipeline.evaluation.pose_metrics import (
     mpjpe_jax,
     JOINT_NAMES_13,
-    JOINT_IDX_13_MODEL
+    MIRROR_13_JOINT_MODEL_MAP
 )
 from human_pose_pipeline.utils.visualization import (
     visualize_pose_sequence,
@@ -61,8 +61,7 @@ JOINT_IDX_17 = [0, 1, 2, 3, 6, 7, 8, 12, 16, 14, 15, 17, 18, 19, 25, 26, 27]
 # Define the mapping from 17 joints to 13 joints (same as Marian's)
 JOINT_IDX_13 = [10, 14, 11, 15, 12, 16, 13, 1, 4, 2, 5, 3, 6]
 
-# Corrected mapping for the model to align left and right joints with ground truth (same as Marian's)
-JOINT_IDX_13_MODEL = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11]
+# Mirror mapping is imported from pose_metrics
 
 # Define the connections for the 13-joint representation (same as Marian's)
 CONNECTIONS_13 = [
@@ -183,9 +182,9 @@ class Human36mDatasetJAX:
         return frames
 
 
-def map_17_to_13_joints(pose_17, mapping):
-    """Convert a 17-joint pose representation to a 13-joint representation using a specified mapping."""
-    return pose_17[mapping]
+def joint_mapping(joints, mapping):
+    """Apply joint mapping to reorder joints according to the provided mapping."""
+    return joints[mapping]
 
 def evaluate_pose_estimation_full(ground_truth, estimated_pose, estimated_uncertainty, estimated_covariance):
     """
@@ -326,9 +325,14 @@ def main():
                     first_uncertainty = np.array(pose_estimations[0]['uncertainties'])  # Already 13 joints
                     first_covariance = np.array(pose_estimations[0]['covariance'])  # Already 13 joints
 
-                    estimated_poses.append(first_pose)
-                    estimated_uncertainties.append(first_uncertainty)
-                    estimated_covariances.append(first_covariance)
+                    # Apply mirror mapping to correct left/right joint swapping (matching Marian's approach)
+                    mapped_pose = joint_mapping(first_pose, MIRROR_13_JOINT_MODEL_MAP)
+                    mapped_uncertainty = joint_mapping(first_uncertainty, MIRROR_13_JOINT_MODEL_MAP)
+                    mapped_covariance = joint_mapping(first_covariance, MIRROR_13_JOINT_MODEL_MAP)
+
+                    estimated_poses.append(mapped_pose)
+                    estimated_uncertainties.append(mapped_uncertainty)
+                    estimated_covariances.append(mapped_covariance)
 
                 # Evaluate pose estimation
                 ground_truth = full_sequence[frame_idx]
