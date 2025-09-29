@@ -16,6 +16,7 @@ import os
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 from spacepy.pycdf import CDF
 import jax.numpy as jnp
 import cv2
@@ -34,6 +35,9 @@ from human_pose_pipeline.pose_estimation.inference_helper import (
 from human_pose_pipeline.evaluation.pose_metrics import (
     mpjpe_jax,
     JOINT_NAMES_13
+)
+from human_pose_pipeline.utils.visualization import (
+    visualize_poses_matplotlib
 )
 
 # Same mappings as pose_estimation_2D.py
@@ -149,74 +153,6 @@ def compute_mpjpe(pred_pose, gt_pose):
     gt_jax = jnp.array(gt_pose[None, ...])      # Add batch dimension
     return float(mpjpe_jax(pred_jax, gt_jax))
 
-def visualize_poses(image, gt_pose, pred_pose, save_path=None):
-    """
-    Create a side-by-side visualization of ground truth and predicted poses
-
-    Args:
-        image: PIL Image
-        gt_pose: Ground truth pose (13, 2)
-        pred_pose: Predicted pose (13, 2)
-        save_path: Optional path to save the visualization
-    """
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-    fig.suptitle('Pose Estimation Debug Visualization', fontsize=16)
-
-    # Convert PIL to numpy
-    image_np = np.array(image)
-
-    # Original image
-    axes[0].imshow(image_np)
-    axes[0].set_title('Original Image')
-    axes[0].axis('off')
-
-    # Ground truth pose
-    axes[1].imshow(image_np)
-    axes[1].set_title('Ground Truth Pose')
-    axes[1].axis('off')
-
-    # Draw GT skeleton
-    for connection in CONNECTIONS_13:
-        start_idx, end_idx = connection
-        if start_idx < len(gt_pose) and end_idx < len(gt_pose):
-            start_point = gt_pose[start_idx]
-            end_point = gt_pose[end_idx]
-            axes[1].plot([start_point[0], end_point[0]],
-                        [start_point[1], end_point[1]], 'g-', linewidth=2)
-
-    # Draw GT keypoints
-    for i, point in enumerate(gt_pose):
-        axes[1].scatter(point[0], point[1], c='red', s=50, zorder=5)
-        axes[1].text(point[0]+5, point[1]-5, str(i), fontsize=8, color='white',
-                    bbox=dict(boxstyle="round,pad=0.2", facecolor='red', alpha=0.7))
-
-    # Predicted pose
-    axes[2].imshow(image_np)
-    axes[2].set_title('Predicted Pose')
-    axes[2].axis('off')
-
-    # Draw predicted skeleton
-    for connection in CONNECTIONS_13:
-        start_idx, end_idx = connection
-        if start_idx < len(pred_pose) and end_idx < len(pred_pose):
-            start_point = pred_pose[start_idx]
-            end_point = pred_pose[end_idx]
-            axes[2].plot([start_point[0], end_point[0]],
-                        [start_point[1], end_point[1]], 'b-', linewidth=2)
-
-    # Draw predicted keypoints
-    for i, point in enumerate(pred_pose):
-        axes[2].scatter(point[0], point[1], c='yellow', s=50, zorder=5)
-        axes[2].text(point[0]+5, point[1]-5, str(i), fontsize=8, color='white',
-                    bbox=dict(boxstyle="round,pad=0.2", facecolor='blue', alpha=0.7))
-
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"Visualization saved to: {save_path}")
-
-    plt.show()
 
 def print_evaluation_summary(mpjpe_score, pred_pose, gt_pose):
     """Print detailed evaluation summary"""
@@ -268,10 +204,11 @@ def main():
         # Initialize models
         print("Initializing models...")
 
-        # Initialize JAX pose estimation model
+        # Initialize JAX pose estimation model with uncertainty estimation
         models_dir = os.path.join(root_dir, "models_tianle", "H36M", "RegressFlow", "seed_420")
-        checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_pred")
+        checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
         model, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
+        print("Using RegressFlowWithAleatoric model for uncertainty estimation")
 
         # Initialize YOLO human detector
         human_detector, device_torch = initialize_human_detector('cuda')
@@ -310,14 +247,16 @@ def main():
 
         if not pose_estimations:
             print("No humans detected! Using dummy pose for visualization.")
-            pred_pose_17 = np.zeros((17, 2))
+            pred_pose_13 = np.zeros((13, 2))
+            pred_uncertainties = np.ones((13, 2)) * 5.0
+            pred_covariances = np.ones(13) * 0.1
         else:
             print(f"Detected {len(pose_estimations)} human(s)")
-            first_pose = pose_estimations[0]['keypoints']
-            pred_pose_17 = np.array(first_pose)
+            # Extract pose data - already in 13-joint format from our updated function
+            pred_pose_13 = np.array(pose_estimations[0]['keypoints'])  # Already 13 joints
+            pred_uncertainties = np.array(pose_estimations[0]['uncertainties'])  # Already 13 joints
+            pred_covariances = np.array(pose_estimations[0]['covariance'])  # Already 13 joints
 
-        # Map from 17 joints to 13 joints
-        pred_pose_13 = map_17_to_13_joints(pred_pose_17, JOINT_IDX_13_MODEL)
         gt_pose_13 = sample['pose_13']
 
         print(f"Pose estimation completed!")
@@ -333,7 +272,15 @@ def main():
         # Create visualization
         print("\nCreating visualization...")
         save_path = f"debug_pose_visualization_frame_{sample['frame_idx']}.png"
-        visualize_poses(sample['image'], gt_pose_13, pred_pose_13, save_path)
+        visualize_poses_matplotlib(
+            image=sample['image'],
+            gt_pose=gt_pose_13,
+            pred_pose=pred_pose_13,
+            pred_uncertainties=pred_uncertainties,
+            pred_covariances=pred_covariances,
+            save_path=save_path,
+            show_uncertainty=True
+        )
 
         print("\n" + "=" * 60)
         print("DEBUG COMPLETED SUCCESSFULLY!")

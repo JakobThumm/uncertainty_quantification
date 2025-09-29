@@ -136,42 +136,75 @@ def get_pose_estimations_jax(resized_image, original_dimensions, scale_factors, 
             else:
                 output = model.apply_test(params, input_tensor)
 
-        # Extract predictions - JAX model outputs flattened coordinates
+        # Extract predictions - JAX model outputs (following Marian's approach)
         if isinstance(output, dict):
-            # If model returns dictionary with multiple outputs
-            pred_joints_flat = output.get('pred_jts', output.get('output', output))
+            # RegressFlowWithAleatoric returns dictionary with uncertainty outputs
+            pred_joints = np.array(output['pred_jts'][0])  # Joint coordinates (17, 2)
+            log_variance = np.array(output.get('log_variance', output.get('pure_sigma', None)))
+            if log_variance is not None:
+                log_variance = log_variance[0]  # Remove batch dimension (17, 2)
+            covariance_raw = np.array(output.get('covariance', None))
+            if covariance_raw is not None:
+                covariance_raw = covariance_raw[0]  # Remove batch dimension (17,)
         else:
-            # If model returns tensor directly
-            pred_joints_flat = output
+            # Regular RegressFlow returns tensor directly - reshape from flattened
+            pred_joints_flat = np.array(output[0])  # Remove batch dimension
+            pred_joints = pred_joints_flat.reshape(17, 2)  # 17 joints × 2 coords
+            log_variance = None
+            covariance_raw = None
 
-        # Convert to numpy and reshape
-        pred_joints_flat = np.array(pred_joints_flat[0])  # Remove batch dimension
-        pred_joints_17 = pred_joints_flat.reshape(17, 2)  # 17 joints × 2 coords
+        # Convert log variance to standard deviation (following Marian's approach)
+        if log_variance is not None:
+            uncertainties = np.sqrt(np.exp(log_variance))  # (17, 2)
+        else:
+            uncertainties = None
 
         # Select only the 13 joints of interest (same as Marian's approach)
-        pred_joints = pred_joints_17[JOINT_IDX_13]
+        pred_joints = pred_joints[JOINT_IDX_13]  # (13, 2)
+        if uncertainties is not None:
+            uncertainties = uncertainties[JOINT_IDX_13]  # (13, 2)
+        if covariance_raw is not None:
+            covariance = covariance_raw[JOINT_IDX_13]  # (13,)
+        else:
+            covariance = None
 
-        # Convert from RegressFlow normalized coordinates [-0.5, 0.5] to pixel coordinates
+        # Convert normalized coordinates (-0.5 to 0.5) to pixel coordinates (following Marian)
         img_height, img_width = CONFIG.DATA_PRESET.IMAGE_SIZE
-        pred_joints_pixel = convert_coordinates_regressflow_to_pixel(
-            pred_joints, img_height, img_width
-        )
+        pred_joints[:, 0] = (pred_joints[:, 0] + 0.5) * img_width
+        pred_joints[:, 1] = (pred_joints[:, 1] + 0.5) * img_height
 
-        # Transform coordinates back to original image space
-        pred_joints_original = transform_coordinates_back_to_original(
-            pred_joints_pixel, trans, scale_x, scale_y
-        )
+        # Scale uncertainties to image dimensions (following Marian)
+        if uncertainties is not None:
+            uncertainties[:, 0] = uncertainties[:, 0] * img_width
+            uncertainties[:, 1] = uncertainties[:, 1] * img_height
+            covariance_scaled = covariance.copy() * img_width * img_height if covariance is not None else None
+        else:
+            covariance_scaled = None
 
-        # Placeholder uncertainty measures (to be implemented with proper uncertainty quantification)
-        # For now, we'll create dummy values to match the expected interface
-        uncertainties_original = np.ones_like(pred_joints_original) * 5.0  # 5 pixel std dev
-        covariance_original = np.ones(len(pred_joints_original)) * 0.1  # Small covariance
+        # Transform coordinates back to original image space (following Marian)
+        trans_inv = cv2.invertAffineTransform(trans)
+        pred_joints_resized = cv2.transform(np.expand_dims(pred_joints, axis=0), trans_inv)[0]
+
+        # Scale coordinates and uncertainties to original image dimensions
+        pred_joints_original = pred_joints_resized.copy()
+        pred_joints_original[:, 0] *= scale_x
+        pred_joints_original[:, 1] *= scale_y
+
+        if uncertainties is not None:
+            uncertainties_original = uncertainties.copy()
+            uncertainties_original[:, 0] *= scale_x
+            uncertainties_original[:, 1] *= scale_y
+            covariance_original = covariance_scaled * scale_x * scale_y if covariance_scaled is not None else None
+        else:
+            # Fallback: placeholder uncertainty measures
+            uncertainties_original = np.ones_like(pred_joints_original) * 5.0  # 5 pixel std dev
+            covariance_original = np.ones(len(pred_joints_original)) * 0.1  # Small covariance
 
         # Store results for this person
         pose = {
             'keypoints': pred_joints_original.tolist(),
             'uncertainties': uncertainties_original.tolist(),
-            'covariance': covariance_original.tolist(),
+            'covariance': covariance_original.tolist() if covariance_original is not None else [0.1] * len(pred_joints_original),
             'bbox': bbox,
             'center': center.tolist(),
             'scale': scale.tolist()
@@ -204,12 +237,13 @@ def initialize_human_detector(device_torch=None):
 
     return human_detector, device_torch
 
-def initialize_jax_models(checkpoint_path_jax):
+def initialize_jax_models(checkpoint_path_jax, use_uncertainty=False):
     """
     Initialize and load the JAX pose estimation model.
 
     Args:
         checkpoint_path_jax (str): Path to the JAX pose estimation model parameters
+        use_uncertainty (bool): Whether to use RegressFlowWithAleatoric for uncertainty estimation
 
     Returns:
         tuple: (jax_model, jax_params, jax_batch_stats)

@@ -5,6 +5,7 @@ from typing import Callable
 import jax
 import flax
 from src.models import RegressFlowFlax, MLP, LeNet, LeNet_h, GoogleNet, ConvNeXt, ResNet, ResNetBlock, PreActResNetBlock, VAN, SwinTransformer
+from src.models.regressflow_with_aleatoric import RegressFlowFlax as RegressFlowFlaxWithAleatoric
 from src.models import ViT
 
 @dataclasses.dataclass
@@ -261,6 +262,48 @@ def model_from_string(
             }
         
         model = RegressFlowFlax(
+                    preset_cfg=cfg['PRESET'],
+                    fc_filters=cfg['NUM_FC_FILTERS'],
+                    accept_nchw=True
+                )
+        wrapped_model = wrap_model_with_batchstats(model)
+    elif model_name == "RegressFlowWithAleatoric":
+        from easydict import EasyDict
+        CONFIG = EasyDict({
+            'DATA_PRESET': {
+                'TYPE': 'simple',
+                'SIGMA': 2,
+                'NUM_JOINTS': 17,
+                'IMAGE_SIZE': [256, 192],  # Height, Width
+                'HEATMAP_SIZE': [64, 48]
+            },
+            'MODEL': {
+                'TYPE': 'RegressFlow',
+                'NUM_LAYERS': 50,
+                'NUM_FC_FILTERS': [-1],
+                'HIDDEN_LIST': [-1],
+                'PRETRAINED': '',
+                'TRY_LOAD': ''
+            },
+            'TEST': {
+                'FLIP_TEST': True,
+                'HEATMAP2COORD': 'coord'
+            },
+            'LOSS': {
+                'TYPE': 'RLELoss'
+            }
+        })
+
+        cfg = {
+                'PRESET': CONFIG.DATA_PRESET,
+                'NUM_LAYERS': CONFIG.MODEL.NUM_LAYERS,
+                'NUM_FC_FILTERS': CONFIG.MODEL.NUM_FC_FILTERS,
+                'HIDDEN_LIST': CONFIG.MODEL.HIDDEN_LIST,
+                'PRETRAINED': CONFIG.MODEL.PRETRAINED,
+                'TRY_LOAD': CONFIG.MODEL.TRY_LOAD
+            }
+
+        model = RegressFlowFlaxWithAleatoric(
                     preset_cfg=cfg['PRESET'],
                     fc_filters=cfg['NUM_FC_FILTERS'],
                     accept_nchw=True

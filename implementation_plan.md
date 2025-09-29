@@ -38,7 +38,9 @@ We have two things:
       - [x] Implement evaluation metrics - MPJPE, PCK metrics as in Marian's Experiment 2
       - [x] Add torch to the environment to get the bounding box estimation and switch to YOLO 11 -> We might want to change this later.
       - [x] Mirror Marian's code exactly
-      - [ ] Add uncertainty estimation
+      - [x] Add uncertainty estimation
+      - [ ] Debug estimation and uncertainty
+      - [ ] Move utils, dataset functionality to correct folder
       - [ ] Implement 3D triangulation - Convert 2D poses to 3D using camera parameters
  3. Perform sketching lanczos OOD detection for pose estimation
     - Run the OOD detection with sketching lanczos on the 2D pose estimation model. ID data would be the human 3.6m dataset. For OOD data we can use tiger pose dataset.

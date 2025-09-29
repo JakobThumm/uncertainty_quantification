@@ -50,6 +50,10 @@ from human_pose_pipeline.evaluation.pose_metrics import (
     JOINT_NAMES_13,
     JOINT_IDX_13_MODEL
 )
+from human_pose_pipeline.utils.visualization import (
+    visualize_pose_sequence,
+    visualize_poses_matplotlib
+)
 
 # Define the 17 joints we want to keep from the original data (same as Marian's)
 JOINT_IDX_17 = [0, 1, 2, 3, 6, 7, 8, 12, 16, 14, 15, 17, 18, 19, 25, 26, 27]
@@ -178,98 +182,6 @@ class Human36mDatasetJAX:
         cap.release()
         return frames
 
-def visualize_pose_sequence_with_images(pose_sequence, images, output_file, num_frames=None,
-                                       estimated_poses=None, estimated_uncertainties=None,
-                                       estimated_covariances=None):
-    """
-    Create an animated visualization of pose sequences overlaid on image frames.
-
-    JAX version of Marian's visualization function.
-    """
-    if num_frames is None:
-        num_frames = pose_sequence.shape[0]
-
-    # Initialize a list to store individual frames for the GIF
-    frames_for_gif = []
-
-    for frame in range(num_frames):
-        # Retrieve the image frame
-        image_pil = images[frame]
-        image = np.array(image_pil).copy()
-
-        # Overlay the ground truth pose on the image
-        gt_pose = pose_sequence[frame]
-
-        # Ensure pose coordinates are within image bounds
-        image_height, image_width, _ = image.shape
-        gt_pose = np.clip(gt_pose, 0, [image_width - 1, image_height - 1])
-
-        # Draw ground truth connections
-        for connection in CONNECTIONS_13:
-            start_idx, end_idx = connection
-            start_point = tuple(gt_pose[start_idx].astype(int))
-            end_point = tuple(gt_pose[end_idx].astype(int))
-            cv2.line(image, start_point, end_point, color=(255, 0, 0), thickness=2)  # Red lines for GT
-
-        # Draw ground truth keypoints
-        for idx, (x, y) in enumerate(gt_pose):
-            cv2.circle(image, (int(x), int(y)), radius=3, color=(0, 255, 0), thickness=-1)  # Green dots for GT
-            cv2.putText(image, f"GT {idx}", (int(x)+5, int(y)+5), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.3, (0, 0, 255), 1, cv2.LINE_AA)  # Red indices for GT
-
-        # Overlay the estimated pose if provided
-        if estimated_poses is not None and frame < len(estimated_poses):
-            est_pose = estimated_poses[frame]
-            est_pose = np.array(est_pose)
-            est_uncertainty = estimated_uncertainties[frame] if estimated_uncertainties else None
-            est_covariance = estimated_covariances[frame] if estimated_covariances else None
-
-            # Draw estimated connections
-            for connection in CONNECTIONS_13:
-                start_idx, end_idx = connection
-                start_point = tuple(est_pose[start_idx].astype(int))
-                end_point = tuple(est_pose[end_idx].astype(int))
-                cv2.line(image, start_point, end_point, color=(0, 0, 255), thickness=2)  # Blue lines for Estimation
-
-            # Draw estimated keypoints
-            for idx, (x, y) in enumerate(est_pose):
-                cv2.circle(image, (int(x), int(y)), radius=3, color=(255, 0, 0), thickness=-1)  # Blue dots for Estimation
-                cv2.putText(image, f"Est {idx}", (int(x)+5, int(y)+5), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.3, (255, 0, 0), 1, cv2.LINE_AA)  # Blue indices for Estimation
-
-                # Draw uncertainty ellipses if available
-                if est_uncertainty is not None and est_covariance is not None:
-                    std_x, std_y = est_uncertainty[idx]
-                    cov_xy = est_covariance[idx]
-
-                    if std_x > 0 and std_y > 0:
-                        # Calculate the angle of the ellipse
-                        angle = 0.5 * np.arctan2(2 * cov_xy, (std_x**2 - std_y**2)) * (180 / np.pi)
-
-                        # Calculate the width and height of the ellipse based on standard deviations
-                        width = int(2 * std_x)  # 2 standard deviations
-                        height = int(2 * std_y)
-
-                        # Draw the uncertainty ellipse
-                        if width > 0 and height > 0:
-                            cv2.ellipse(image, (int(x), int(y)), (width, height), angle, 0, 360, (0, 0, 255), 1)
-
-        # Convert back to PIL Image for consistency
-        image_with_pose = Image.fromarray(image)
-
-        # Append to frames list for GIF creation
-        frames_for_gif.append(image_with_pose)
-
-    # Create an animated GIF with the overlaid poses
-    if frames_for_gif:
-        frames_for_gif[0].save(
-            output_file,
-            save_all=True,
-            append_images=frames_for_gif[1:],
-            duration=10,  # Duration between frames in milliseconds
-            loop=0
-        )
-        print(f"Visualization with overlaid poses saved as {output_file}")
 
 def map_17_to_13_joints(pose_17, mapping):
     """Convert a 17-joint pose representation to a 13-joint representation using a specified mapping."""
@@ -347,10 +259,11 @@ def main():
     # Initialize models
     print("Initializing models...")
 
-    # Initialize JAX pose estimation model
+    # Initialize JAX pose estimation model with uncertainty estimation
     models_dir = os.path.join(root_dir, "models_tianle", "H36M", "RegressFlow", "seed_420")
-    checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_pred")
+    checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
     model, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
+    print("Using RegressFlowWithAleatoric model for uncertainty estimation")
 
     # Initialize YOLO human detector
     human_detector, device_torch = initialize_human_detector('cuda')
@@ -408,18 +321,14 @@ def main():
                     estimated_uncertainties.append(np.ones((13, 2)) * 5.0)
                     estimated_covariances.append(np.ones(13) * 0.1)
                 else:
-                    first_pose = pose_estimations[0]['keypoints']
-                    first_uncertainty = pose_estimations[0]['uncertainties']
-                    first_covariance = pose_estimations[0]['covariance']
+                    # Extract pose data - already in 13-joint format from our updated function
+                    first_pose = np.array(pose_estimations[0]['keypoints'])  # Already 13 joints
+                    first_uncertainty = np.array(pose_estimations[0]['uncertainties'])  # Already 13 joints
+                    first_covariance = np.array(pose_estimations[0]['covariance'])  # Already 13 joints
 
-                    # Map from 17 joints to 13 joints
-                    mapped_pose = map_17_to_13_joints(np.array(first_pose), JOINT_IDX_13_MODEL)
-                    mapped_uncertainty = map_17_to_13_joints(np.array(first_uncertainty), JOINT_IDX_13_MODEL)
-                    mapped_covariance = np.array(first_covariance)[JOINT_IDX_13_MODEL]
-
-                    estimated_poses.append(mapped_pose)
-                    estimated_uncertainties.append(mapped_uncertainty)
-                    estimated_covariances.append(mapped_covariance)
+                    estimated_poses.append(first_pose)
+                    estimated_uncertainties.append(first_uncertainty)
+                    estimated_covariances.append(first_covariance)
 
                 # Evaluate pose estimation
                 ground_truth = full_sequence[frame_idx]
@@ -459,14 +368,15 @@ def main():
 
             # Visualize the results
             output_file = f"sample_pose_sequence_with_images_{split}_{idx}.gif"
-            visualize_pose_sequence_with_images(
+            visualize_pose_sequence(
                 pose_sequence=full_sequence,
                 images=frames,
                 output_file=output_file,
                 num_frames=len(frames),
                 estimated_poses=estimated_poses,
                 estimated_uncertainties=estimated_uncertainties,
-                estimated_covariances=estimated_covariances
+                estimated_covariances=estimated_covariances,
+                show_uncertainty=True
             )
             print(f"Visualization saved as {output_file}")
 
