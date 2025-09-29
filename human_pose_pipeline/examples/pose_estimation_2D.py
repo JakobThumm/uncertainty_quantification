@@ -36,6 +36,7 @@ sys.path.append(root_dir)
 from src.models.wrapper import model_from_string
 from src.datasets.h36m import Human36mDatasetSequence
 from human_pose_pipeline.pose_estimation.inference_helper import (
+    joint_mapping,
     initialize_jax_models,
     initialize_human_detector,
     pose_estimation_2d
@@ -81,9 +82,6 @@ SPLIT = {
     'test': ['S5']
 }
 
-def joint_mapping(joints, mapping):
-    """Apply joint mapping to reorder joints according to the provided mapping."""
-    return joints[mapping]
 
 def evaluate_pose_estimation_full(ground_truth, estimated_pose, estimated_uncertainty, estimated_covariance):
     """

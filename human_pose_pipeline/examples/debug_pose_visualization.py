@@ -28,6 +28,7 @@ root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 sys.path.append(root_dir)
 
 from human_pose_pipeline.pose_estimation.inference_helper import (
+    joint_mapping,
     initialize_jax_models,
     initialize_human_detector,
     pose_estimation_2d
@@ -143,9 +144,6 @@ def load_single_sample(base_directory, subject='S1', action='Directions', camera
         'image_shape': frame_rgb.shape
     }
 
-def joint_mapping(joints, mapping):
-    """Apply joint mapping to reorder joints according to the provided mapping"""
-    return joints[mapping]
 
 def compute_mpjpe(pred_pose, gt_pose):
     """Compute Mean Per Joint Position Error"""

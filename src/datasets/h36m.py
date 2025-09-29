@@ -23,7 +23,7 @@ JOINT_IDX_17 = [0, 1, 2, 3, 6, 7, 8, 12, 16, 14, 15, 17, 18, 19, 25, 26, 27]
 JOINT_IDX_13 = [10, 14, 11, 15, 12, 16, 13, 1, 4, 2, 5, 3, 6]#9
 
 # Define the mapping from 17 joints to 13 joints
-JOINT_IDX_13_MODEL = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13,14,15,16] # when mapping coco to 13 joint representation
+JOINT_IDX_13_MODEL = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] # when mapping coco to 13 joint representation
 
 # Corrected mapping for the model to align left and right joints with ground truth
 # JOINT_IDX_13_MODEL = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11]
@@ -334,6 +334,61 @@ class Human36mDatasetSequence:
                 frames.append(dummy_frame)
         cap.release()
         return frames
+
+
+class Human36mDatasetTwoCameras:
+    """
+    Dataset class for loading Human3.6M data for 3D pose estimation with two cameras.
+
+    Handles loading of pose sequences and corresponding video frames from two camera views
+    for stereo triangulation.
+    """
+    def __init__(self, base_directory, subject, action, camera_ids=['55011271', '60457274']):
+        self.camera_ids = camera_ids
+        self.data = self.load_data(base_directory, subject, action, camera_ids)
+        self.base_directory = base_directory
+
+    def load_data(self, base_directory, subject, action, camera_ids):
+        all_data = []
+        poses_dir = os.path.join(base_directory, subject, 'Poses_D2_Positions')
+        videos_dir = os.path.join(base_directory, subject, 'Videos')
+
+        pose_files = [f for f in os.listdir(poses_dir) if f.startswith(action) and f.endswith('.cdf')]
+
+        for pose_file in pose_files:
+            pose_path = os.path.join(poses_dir, pose_file)
+
+            # Look for corresponding video files
+            video_files = [f"{action}.{camera_id}.mp4" for camera_id in camera_ids]
+            video_paths = [os.path.join(videos_dir, vf) for vf in video_files
+                          if os.path.exists(os.path.join(videos_dir, vf))]
+
+            if len(video_paths) == 2:
+                with CDF(pose_path) as cdf:
+                    poses = cdf['Pose'][:]
+                    poses = poses.reshape(-1, 32, 2)
+                    poses_17 = poses[:, JOINT_IDX_17, :]
+                    poses_13 = poses_17[:, JOINT_IDX_13, :]
+
+                all_data.append({
+                    'pose_sequence': poses_13,
+                    'video_paths': video_paths,
+                })
+
+        return all_data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        sample = self.data[idx]
+        pose_sequence = sample['pose_sequence']
+        video_paths = sample['video_paths']
+
+        return {
+            'pose_sequence': jnp.array(pose_sequence, dtype=jnp.float32),
+            'video_paths': video_paths
+        }
 
 
 # for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS}")):

@@ -23,10 +23,10 @@ We have two things:
  1. Download 
     - [x] Marians models from Tianles folder (now in models_tianle/H36M/RegressFlow)
     - [x] Move Marians code to the server
-    - [x] Download the human 3.6M dataset with fetching script -> ongoing
-    - Download the close interactions dataset https://ci3d.imar.ro/chi3d -> Access requested.
+    - [x] Download the human 3.6M dataset with fetching script -> datasets/H36M
+    - Download the close interactions dataset https://ci3d.imar.ro/chi3d -> Access granted.
     - Download the COCO dataset
-    - Download the Tiger pose dataset
+    - [x] Download the Tiger pose dataset -> datasets/tiger-pose
  2. Test the pre-trained pose estimation models
     - [x] Write a folder structure for this project.
     - [x] Move existing file to the correct folders if neccessary.
@@ -40,7 +40,7 @@ We have two things:
       - [x] Mirror Marian's code exactly
       - [x] Add uncertainty estimation
       - [x] Debug estimation and uncertainty
-      - [ ] Move utils, dataset functionality to correct folder
+      - [x] Move utils, dataset functionality to correct folder
       - [ ] Implement 3D triangulation - Convert 2D poses to 3D using camera parameters
  3. Perform sketching lanczos OOD detection for pose estimation
     - Run the OOD detection with sketching lanczos on the 2D pose estimation model. ID data would be the human 3.6m dataset. For OOD data we can use tiger pose dataset.

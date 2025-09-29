@@ -33,6 +33,11 @@ from human_pose_pipeline.utils.transform_utils import (
 JOINT_IDX_13 = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 
 
+def joint_mapping(joints, mapping):
+    """Apply joint mapping to reorder joints according to the provided mapping."""
+    return joints[mapping]
+
+
 def resize_image(pil_image, target_size=(512, 640)):
     """
     Resize image to network input dimensions.
@@ -93,6 +98,56 @@ def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, de
         resized_image, original_dimensions, scale_factors, person_boxes,
         model, params, batch_stats, visualize
     )
+
+
+def process_frame_2d(frame, model, params, batch_stats, human_detector, device_torch, MIRROR_13_JOINT_MODEL_MAP):
+    """
+    Process a single frame to extract pose with uncertainty (JAX version).
+
+    Args:
+        frame: Input frame image
+        model: JAX pose estimation model
+        params: JAX model parameters
+        batch_stats: JAX model batch statistics
+        human_detector: YOLO human detector
+        device_torch: PyTorch device for YOLO
+
+    Returns:
+        tuple: (pose, uncertainty, covariance_scalar, joint_covariances)
+    """
+    if not isinstance(frame, Image.Image):
+        frame = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    pose_estimations = pose_estimation_2d(
+        pil_image=frame,
+        model=model,
+        params=params,
+        batch_stats=batch_stats,
+        human_detector=human_detector,
+        device_torch=device_torch,
+        threshold=0.8
+    )
+
+    if not pose_estimations:
+        return np.zeros((13, 2)), np.zeros((13, 2)), np.zeros(13), np.zeros((13, 2, 2))
+
+    first_pose = np.array(pose_estimations[0]['keypoints'])
+    first_uncertainty = np.array(pose_estimations[0]['uncertainties'])
+    first_covariance = np.array(pose_estimations[0]['covariance'])
+
+    # Apply mirror mapping to correct left/right joint swapping
+    mapped_pose = joint_mapping(first_pose, MIRROR_13_JOINT_MODEL_MAP)
+    mapped_uncertainty = joint_mapping(first_uncertainty, MIRROR_13_JOINT_MODEL_MAP)
+    mapped_covariance = joint_mapping(first_covariance, MIRROR_13_JOINT_MODEL_MAP)
+
+    # Construct per-joint 2x2 covariance matrices
+    joint_covariances = np.zeros((13, 2, 2))
+    for i in range(13):
+        joint_covariances[i] = [
+            [float(mapped_uncertainty[i, 0])**2, float(mapped_covariance[i])],
+            [float(mapped_covariance[i]), float(mapped_uncertainty[i, 1])**2]
+        ]
+
+    return mapped_pose, mapped_uncertainty, mapped_covariance, joint_covariances
 
 
 def get_pose_estimations_jax(resized_image, original_dimensions, scale_factors, person_boxes, model, params, batch_stats, visualize=True):

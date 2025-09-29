@@ -366,3 +366,46 @@ def visualize_pose_sequence(pose_sequence: np.ndarray,
         print(f"Animated GIF saved to: {output_file}")
     else:
         print("No frames to save!")
+
+
+def draw_3d_pose_with_covariance(ax, points_3d, covariances, connections, scale=1.0):
+    """
+    Draw the 3D pose with covariance ellipsoids on a matplotlib axis.
+    """
+    ax.clear()
+
+    # Draw skeleton connections
+    for connection in connections:
+        start, end = connection
+        ax.plot([points_3d[start, 0], points_3d[end, 0]],
+                [points_3d[start, 1], points_3d[end, 1]],
+                [points_3d[start, 2], points_3d[end, 2]], 'r-')
+
+    # Draw keypoints
+    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c='b', marker='o')
+
+    # Draw covariance ellipsoids (simplified version)
+    for i in range(points_3d.shape[0]):
+        cov = covariances[i]
+        eigenvalues, eigenvectors = np.linalg.eigh(cov)
+        eigenvalues = np.maximum(eigenvalues, 1e-8)  # Ensure positive eigenvalues
+
+        # Create simplified ellipsoid representation
+        radii = scale * np.sqrt(eigenvalues)
+
+        # Draw uncertainty as simple lines along principal axes
+        for j, (eigval, eigvec) in enumerate(zip(eigenvalues, eigenvectors.T)):
+            start = points_3d[i] - radii[j] * eigvec
+            end = points_3d[i] + radii[j] * eigvec
+            ax.plot([start[0], end[0]], [start[1], end[1]], [start[2], end[2]],
+                   'r-', alpha=0.5, linewidth=1)
+
+    # Set consistent axis limits
+    ax.set_xlim(-2000, 0)
+    ax.set_ylim(-2000, 0)
+    ax.set_zlim(1000, 2000)
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('3D Pose with Uncertainty')
