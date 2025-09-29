@@ -39,7 +39,7 @@ We have two things:
       - [x] Add torch to the environment to get the bounding box estimation and switch to YOLO 11 -> We might want to change this later.
       - [x] Mirror Marian's code exactly
       - [x] Add uncertainty estimation
-      - [ ] Debug estimation and uncertainty
+      - [x] Debug estimation and uncertainty
       - [ ] Move utils, dataset functionality to correct folder
       - [ ] Implement 3D triangulation - Convert 2D poses to 3D using camera parameters
  3. Perform sketching lanczos OOD detection for pose estimation

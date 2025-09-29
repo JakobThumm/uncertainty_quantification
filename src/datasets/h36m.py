@@ -15,6 +15,7 @@ from torchvision import transforms
 import cv2
 import numpy as np
 from scipy.stats import chi2
+import jax.numpy as jnp
 # Define the 17 joints we want to keep from the original data
 JOINT_IDX_17 = [0, 1, 2, 3, 6, 7, 8, 12, 16, 14, 15, 17, 18, 19, 25, 26, 27]
 
@@ -233,6 +234,106 @@ class Human36mDataset(Dataset):
 
         return image, adjusted_keypoints
 
+
+class Human36mDatasetSequence:
+    """
+    Dataset class for loading Human3.6M data for pose estimation (JAX version).
+
+    Handles loading of pose sequences and corresponding video frames from the Human3.6M dataset.
+    Supports splitting data into train/validation/test sets and sequence-based sampling.
+    """
+    def __init__(self, base_directory, split='train', sequence_length=50, transform=None):
+        self.sequence_length = sequence_length
+        self.transform = transform if transform else transforms.ToTensor()
+        self.data = self.load_data(base_directory, split)
+        self.base_directory = base_directory
+        self.split = split
+
+    def load_data(self, base_directory, split):
+        all_data = []
+        for subject in SPLIT[split]:
+            poses_dir = os.path.join(base_directory, subject, 'Poses_D2_Positions')
+            videos_dir = os.path.join(base_directory, subject, 'Videos')
+            print(f"Loading data from {poses_dir} and {videos_dir}")
+
+            for filename in os.listdir(poses_dir):
+                try:
+                    if filename.endswith('.cdf'):
+                        file_path = os.path.join(poses_dir, filename)
+                        video_filename = self.get_corresponding_video_filename(filename, videos_dir)
+                        if not video_filename:
+                            print(f"No corresponding video found for {filename}")
+                            continue
+                        video_path = os.path.join(videos_dir, video_filename)
+
+                        print(file_path)
+
+                        with CDF(file_path) as cdf:
+                            poses = cdf['Pose'][:]
+                            poses = poses.reshape(-1, 32, 2)  # (frames, 32 joints, 2 coords)
+                            poses_17 = poses[:, JOINT_IDX_17, :]
+                            poses_13 = poses_17[:, JOINT_IDX_13, :]
+
+                            # Create non-overlapping sequences
+                            num_sequences = len(poses_13) // self.sequence_length
+                            for i in range(num_sequences):
+                                start_idx = i * self.sequence_length
+                                end_idx = start_idx + self.sequence_length
+                                sequence = poses_13[start_idx:end_idx]
+                                frame_indices = range(start_idx, end_idx)
+                                all_data.append({
+                                    'pose_sequence': sequence,
+                                    'video_path': video_path,
+                                    'frame_indices': frame_indices,
+                                })
+                except Exception as e:
+                    print(f"Error loading data: {str(e)}")
+
+        print(f"Loaded {len(all_data)} sequences for {split} split")
+        return all_data
+
+    def get_corresponding_video_filename(self, pose_filename, videos_dir):
+        base = os.path.splitext(pose_filename)[0]
+        possible_video_names = [f"{base}.mp4", f"_{base}.mp4"]
+        for video_name in possible_video_names:
+            if os.path.exists(os.path.join(videos_dir, video_name)):
+                return video_name
+        return None
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        sample = self.data[idx]
+        pose_sequence = sample['pose_sequence']
+        video_path = sample['video_path']
+        frame_indices = sample['frame_indices']
+
+        # Load the necessary frames from the video
+        frames = self.load_frames(video_path, frame_indices)
+
+        return {
+            'pose_sequence': jnp.array(pose_sequence, dtype=jnp.float32),
+            'frames': frames  # List of PIL images
+        }
+
+    def load_frames(self, video_path, frame_indices):
+        cap = cv2.VideoCapture(video_path)
+        frames = []
+        for frame_idx in frame_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if ret:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame_pil = Image.fromarray(frame)
+                frames.append(frame_pil)
+            else:
+                print(f"Failed to read frame {frame_idx}")
+                # Add dummy frame to maintain sequence length
+                dummy_frame = Image.fromarray(np.zeros((480, 640, 3), dtype=np.uint8))
+                frames.append(dummy_frame)
+        cap.release()
+        return frames
 
 
 # for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS}")):
