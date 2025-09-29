@@ -29,7 +29,7 @@ sys.path.append(root_dir)
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
-    get_pose_estimations_jax
+    pose_estimation_2d
 )
 from human_pose_pipeline.evaluation.pose_metrics import (
     mpjpe_jax,
@@ -298,7 +298,7 @@ def main():
         # Run pose estimation
         print("\nRunning pose estimation...")
 
-        pose_estimations = get_pose_estimations_jax(
+        pose_estimations = pose_estimation_2d(
             pil_image=sample['image'],
             model=model,
             params=params,

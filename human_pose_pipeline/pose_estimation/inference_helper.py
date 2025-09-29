@@ -32,22 +32,42 @@ from human_pose_pipeline.utils.transform_utils import (
 # Define indices for the 13 joints of interest in the human pose (same as Marian's)
 JOINT_IDX_13 = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 
-def get_pose_estimations_jax(pil_image, model, params, batch_stats, human_detector, device_torch, threshold=0.8, visualize=True):
-    """
-    Perform pose estimation on the given image using JAX model and return keypoints in original image dimensions.
 
-    This function performs the following steps:
-    1. Detects humans in the image using YOLOv5
-    2. For each detected human, performs pose estimation using JAX model
-    3. Transforms the coordinates back to original image dimensions
-    4. Calculates uncertainty measures for each joint (if available)
+def resize_image(pil_image, target_size=(512, 640)):
+    """
+    Resize image to network input dimensions.
+
+    Args:
+        pil_image (PIL.Image.Image): The input image
+        target_size (tuple): Target size (width, height)
+
+    Returns:
+        tuple: (resized_image, original_dimensions, scale_factors)
+    """
+    # Get original image dimensions
+    original_image_width, original_image_height = pil_image.size
+
+    # Resize image to network input dimensions - same as Marian's approach
+    resized_image = pil_image.resize(target_size, Image.LANCZOS)
+    resized_width, resized_height = resized_image.size
+
+    # Calculate scale factors for coordinate transformation
+    scale_x = original_image_width / resized_width
+    scale_y = original_image_height / resized_height
+
+    return resized_image, (original_image_width, original_image_height), (scale_x, scale_y)
+
+
+def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, device_torch, threshold=0.8, visualize=True):
+    """
+    Complete 2D pose estimation pipeline: resize -> detect humans -> estimate poses.
 
     Args:
         pil_image (PIL.Image.Image): The input high-resolution image
         model: The JAX pose estimation model
         params: JAX model parameters
         batch_stats: JAX model batch statistics (if available)
-        human_detector: The pre-loaded YOLOv5 human detection model (PyTorch)
+        human_detector: The pre-loaded YOLO human detection model (PyTorch)
         device_torch: PyTorch device for human detection
         threshold (float, optional): Confidence threshold for human detection
         visualize (bool, optional): Whether to visualize the results
@@ -58,22 +78,49 @@ def get_pose_estimations_jax(pil_image, model, params, batch_stats, human_detect
             - 'uncertainties': Standard deviations (placeholder for now)
             - 'covariance': Covariance values (placeholder for now)
     """
-    # Get original image dimensions
-    original_image_width, original_image_height = pil_image.size
+    # Step 1: Resize image
+    resized_image, original_dimensions, scale_factors = resize_image(pil_image)
 
-    # Resize image to network input dimensions (512x640) - same as Marian's approach
-    resized_image = pil_image.resize((512, 640), Image.LANCZOS)
-    resized_width, resized_height = resized_image.size
-
-    # Convert PIL to numpy for processing
-    resized_image_np = np.array(resized_image)
-
-    # Detect humans in the image using PyTorch YOLOv5
+    # Step 2: Detect humans
     person_boxes = detect_humans(human_detector, resized_image, device_torch, threshold=0.4)
 
     if not person_boxes:
         print("No humans detected with the specified threshold.")
         return []
+
+    # Step 3: Perform pose estimation
+    return get_pose_estimations_jax(
+        resized_image, original_dimensions, scale_factors, person_boxes,
+        model, params, batch_stats, visualize
+    )
+
+
+def get_pose_estimations_jax(resized_image, original_dimensions, scale_factors, person_boxes, model, params, batch_stats, visualize=True):
+    """
+    Perform pose estimation on detected humans using JAX model and return keypoints in original image dimensions.
+
+    Args:
+        resized_image (PIL.Image.Image): The resized image
+        original_dimensions (tuple): Original image dimensions (width, height)
+        scale_factors (tuple): Scale factors for coordinate transformation (scale_x, scale_y)
+        person_boxes (list): List of detected human bounding boxes
+        model: The JAX pose estimation model
+        params: JAX model parameters
+        batch_stats: JAX model batch statistics (if available)
+        visualize (bool, optional): Whether to visualize the results
+
+    Returns:
+        List[Dict]: List of dictionaries containing for each detected person:
+            - 'keypoints': Joint coordinates [[x1,y1], [x2,y2], ...]
+            - 'uncertainties': Standard deviations (placeholder for now)
+            - 'covariance': Covariance values (placeholder for now)
+    """
+    # Unpack dimensions and scale factors
+    original_image_width, original_image_height = original_dimensions
+    scale_x, scale_y = scale_factors
+
+    # Convert PIL to numpy for processing
+    resized_image_np = np.array(resized_image)
 
     pose_estimations = []
 
@@ -111,8 +158,6 @@ def get_pose_estimations_jax(pil_image, model, params, batch_stats, human_detect
         )
 
         # Transform coordinates back to original image space
-        scale_x = original_image_width / resized_width
-        scale_y = original_image_height / resized_height
         pred_joints_original = transform_coordinates_back_to_original(
             pred_joints_pixel, trans, scale_x, scale_y
         )
@@ -366,9 +411,9 @@ def visualize_pose_estimation_results(pil_image, pose_estimations, save_path=Non
 
     return result_image
 
-# Convenience function to match Marian's interface
+
 def get_pose_estimations(pil_image, model, params, batch_stats, human_detector, device_torch, threshold=0.8, visualize=True):
     """
     Convenience wrapper that matches Marian's function signature
     """
-    return get_pose_estimations_jax(pil_image, model, params, batch_stats, human_detector, device_torch, threshold, visualize)
+    return pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, device_torch, threshold, visualize)

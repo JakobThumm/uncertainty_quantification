@@ -38,7 +38,7 @@ from src.datasets.h36m import Human36mDataset
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
-    get_pose_estimations_jax
+    pose_estimation_2d
 )
 from human_pose_pipeline.utils.transform_utils import (
     preprocess_image_with_bbox,
@@ -336,6 +336,7 @@ def evaluate_pose_estimation_full(ground_truth, estimated_pose, estimated_uncert
         'num_joints': len(ground_truth)
     }
 
+
 def main():
     """
     Main function for running pose estimation inference on the Human3.6M dataset.
@@ -392,7 +393,7 @@ def main():
                 frame_image_pil = frames[frame_idx]
 
                 # Get pose estimations using JAX model
-                pose_estimations = get_pose_estimations_jax(
+                pose_estimations = pose_estimation_2d(
                     pil_image=frame_image_pil,
                     model=model,
                     params=params,
