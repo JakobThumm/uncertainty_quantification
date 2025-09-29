@@ -12,6 +12,7 @@ from src.datasets.food101 import FOOD101, get_food101_scaled
 from src.datasets.celeba import CelebA, get_celeba, get_celeba_augmented, get_celeba_ood
 from src.datasets.imagenet import get_imagenet_id, get_imagenet_ood
 from src.datasets.h36m import * # TODO
+from src.datasets.tiger_pose import get_tiger_pose
 from src.datasets.utils import get_subset_loader
 
 def removeprefix(input_string, prefix):
@@ -371,10 +372,10 @@ def dataloader_from_string(
         print(f"Loading ImageNet only with {only_with}")
         train_loader, valid_loader, _ = get_imagenet_ood(
             ood_class = only_with,
-            batch_size = batch_size, 
+            batch_size = batch_size,
             shuffle = shuffle,
             seed = seed,
-            download = False, 
+            download = False,
             #data_path = data_path
         )
         test_loader = train_loader
@@ -384,6 +385,13 @@ def dataloader_from_string(
             batch_size = batch_size,
             shuffle = shuffle,
             seed = seed
+        )
+    elif dataset_name == "tiger-pose":
+        train_loader, valid_loader, test_loader = get_tiger_pose(
+            batch_size = batch_size,
+            shuffle = shuffle,
+            seed = seed,
+            data_path = data_path
         )
     else:
         raise ValueError(f"Dataset {dataset_name} is not implemented")

@@ -44,6 +44,15 @@ We have two things:
       - [x] Implement 3D triangulation - Convert 2D poses to 3D using camera parameters
  3. Perform sketching lanczos OOD detection for pose estimation
     - Run the OOD detection with sketching lanczos on the 2D pose estimation model. ID data would be the human 3.6m dataset. For OOD data we can use tiger pose dataset.
+      - [x] Write a tiger-pose dataset class
+      - [x] Write an example script that predicts the poses for the ID data (h36m) and OOD data (tiger-pose) (similar to pose_estimation_2D.py) without uncertainty and compares the ID vs. OOD performance.
+      - [x] Add tiger image transformation to the script
+      - [ ] Test score model function on regressflow model with python score_model.py --ID_dataset H36M --OOD_dataset H36M --model RegressFlow --run_name finetuned_h36m_regressflow_pred --subsample_trainset 100 --test_batch_size 4 --train_batch_size 4 --lanczos_hm_iter 0 --lanczos_lm_iter 81 --lanczos_seed 1 --sketch srft --sketch_size 10000
+      - [ ] Test with --OOD_dataset tiger-pose
+      - [ ] Add OOD classification to the evaluation script 
+      - [ ] plot a histogram over OOD scores with different colors for the two classes (ID vs OOD) -> Should already be implemented somewhere in this repo.
+      - [ ] plot a scatter plot with pose prediction accuracy over OOD score.
+      - [ ] perform an evaluation of how many datapoints are within 1, 2, 3, and 4 sigma for datapoints that were classified as ID vs OOD.
  4. Test the pre-trained pose prediction models
     - Use the pre-trained models with converted weights into JAX.
     - First, perform pose prediction on a few H3.6M examples.

@@ -100,7 +100,7 @@ def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, de
     )
 
 
-def process_frame_2d(frame, model, params, batch_stats, human_detector, device_torch, MIRROR_13_JOINT_MODEL_MAP):
+def process_frame_2d(frame, model, params, batch_stats, human_detector, device_torch, mirror_map):
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -135,9 +135,9 @@ def process_frame_2d(frame, model, params, batch_stats, human_detector, device_t
     first_covariance = np.array(pose_estimations[0]['covariance'])
 
     # Apply mirror mapping to correct left/right joint swapping
-    mapped_pose = joint_mapping(first_pose, MIRROR_13_JOINT_MODEL_MAP)
-    mapped_uncertainty = joint_mapping(first_uncertainty, MIRROR_13_JOINT_MODEL_MAP)
-    mapped_covariance = joint_mapping(first_covariance, MIRROR_13_JOINT_MODEL_MAP)
+    mapped_pose = joint_mapping(first_pose, mirror_map)
+    mapped_uncertainty = joint_mapping(first_uncertainty, mirror_map)
+    mapped_covariance = joint_mapping(first_covariance, mirror_map)
 
     # Construct per-joint 2x2 covariance matrices
     joint_covariances = np.zeros((13, 2, 2))

@@ -266,7 +266,7 @@ def main():
                 batch_stats=batch_stats,
                 human_detector=human_detector,
                 device_torch=device_torch,
-                MIRROR_13_JOINT_MODEL_MAP=MIRROR_13_JOINT_MODEL_MAP
+                mirror_map=MIRROR_13_JOINT_MODEL_MAP
             )
 
             if pose is None:
