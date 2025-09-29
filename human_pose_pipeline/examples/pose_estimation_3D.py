@@ -22,12 +22,14 @@ from PIL import Image
 import json
 from tqdm import tqdm
 import jax.numpy as jnp
+import matplotlib.animation as animation
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 # Add root directory to path to access src
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 sys.path.append(root_dir)
 
-from src.datasets.h36m import Human36mDatasetSequence, Human36mDatasetTwoCameras
+from src.datasets.h36m import Human36mDatasetTwoCameras
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
@@ -67,6 +69,187 @@ SPLIT = {
     'validation': ['S11'],
     'test': ['S6']
 }
+
+
+def create_video_frame(frames, poses_3d, covariances_3d, frame_idx, common_width, common_height):
+    """
+    Create a single video frame combining 2D camera views and 3D pose visualization.
+
+    Args:
+        frames: List of 2 camera frames (PIL Images or numpy arrays)
+        poses_3d: 3D pose keypoints (13, 3)
+        covariances_3d: 3D pose covariances (13, 3, 3)
+        frame_idx: Current frame number
+        common_width: Width for 2D frames
+        common_height: Height for 2D frames
+
+    Returns:
+        numpy array: Combined video frame
+    """
+    # Create figure with subplots for cameras and 3D view
+    fig = plt.figure(figsize=(15, 5))
+
+    # Camera 1 view
+    ax1 = fig.add_subplot(1, 3, 1)
+    if isinstance(frames[0], np.ndarray):
+        ax1.imshow(cv2.cvtColor(frames[0], cv2.COLOR_BGR2RGB))
+    else:
+        ax1.imshow(frames[0])
+    ax1.set_title(f'Camera 1 - Frame {frame_idx}')
+    ax1.axis('off')
+
+    # Camera 2 view
+    ax2 = fig.add_subplot(1, 3, 2)
+    if isinstance(frames[1], np.ndarray):
+        ax2.imshow(cv2.cvtColor(frames[1], cv2.COLOR_BGR2RGB))
+    else:
+        ax2.imshow(frames[1])
+    ax2.set_title(f'Camera 2 - Frame {frame_idx}')
+    ax2.axis('off')
+
+    # 3D pose view
+    ax3 = fig.add_subplot(1, 3, 3, projection='3d')
+    if poses_3d is not None and covariances_3d is not None:
+        draw_3d_pose_with_covariance(ax3, poses_3d, covariances_3d, CONNECTIONS_13, scale=1.0)
+        ax3.set_title(f'3D Pose - Frame {frame_idx}')
+    else:
+        ax3.set_title(f'3D Pose - No Detection')
+
+    # Set consistent 3D view limits
+    ax3.set_xlim(-1000, 1000)
+    ax3.set_ylim(-1000, 1000)
+    ax3.set_zlim(0, 2000)
+
+    plt.tight_layout()
+
+    # Convert matplotlib figure to numpy array
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    buf = np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8)
+    buf = buf.reshape(canvas.get_width_height()[::-1] + (4,))
+    buf = buf[:, :, :3]  # Remove alpha channel
+
+    plt.close(fig)
+
+    return buf
+
+
+def save_3d_pose_video(all_frames, all_3d_points, all_3d_covariances,
+                      common_width, common_height, output_path="3d_pose_estimation_video.mp4", fps=15):
+    """
+    Save a video showing the 3D pose estimation results.
+
+    Args:
+        all_frames: List of frame pairs for each time step
+        all_3d_points: Array of 3D poses (num_frames, 13, 3)
+        all_3d_covariances: Array of 3D covariances (num_frames, 13, 3, 3)
+        common_width: Width for resizing frames
+        common_height: Height for resizing frames
+        output_path: Output video file path
+        fps: Frames per second for output video
+    """
+    if len(all_frames) == 0:
+        print("No frames to create video")
+        return
+
+    print(f"Creating video with {len(all_frames)} frames...")
+
+    # Create first frame to get dimensions
+    sample_frame = create_video_frame(
+        all_frames[0], all_3d_points[0], all_3d_covariances[0], 0,
+        common_width, common_height
+    )
+
+    # Initialize video writer
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    height, width = sample_frame.shape[:2]
+    video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+    # Create frames for video
+    for i, (frame_pair, pose_3d, cov_3d) in enumerate(zip(all_frames, all_3d_points, all_3d_covariances)):
+        # Create combined frame
+        combined_frame = create_video_frame(
+            frame_pair, pose_3d, cov_3d, i, common_width, common_height
+        )
+
+        # Convert RGB to BGR for OpenCV
+        combined_frame_bgr = cv2.cvtColor(combined_frame, cv2.COLOR_RGB2BGR)
+
+        # Write frame to video
+        video_writer.write(combined_frame_bgr)
+
+    # Release video writer
+    video_writer.release()
+    print(f"Video saved as: {output_path}")
+
+
+def save_3d_trajectory_video(all_3d_points, output_path="3d_trajectory_video.mp4", fps=15):
+    """
+    Save a video showing the 3D trajectory evolution over time.
+
+    Args:
+        all_3d_points: Array of 3D poses (num_frames, 13, 3)
+        output_path: Output video file path
+        fps: Frames per second for output video
+    """
+    if len(all_3d_points) == 0:
+        print("No 3D points to create trajectory video")
+        return
+
+    print(f"Creating trajectory video with {len(all_3d_points)} frames...")
+
+    # Compute mean trajectory for visualization
+    mean_trajectory = np.mean(all_3d_points, axis=1)  # (num_frames, 3)
+
+    # Create figure
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Set up video writer
+    frames = []
+
+    for i in range(len(all_3d_points)):
+        ax.clear()
+
+        # Plot current pose
+        draw_3d_pose_with_covariance(ax, all_3d_points[i], np.zeros((13, 3, 3)), CONNECTIONS_13, scale=1.0)
+
+        # Plot trajectory up to current frame
+        if i > 0:
+            ax.plot(mean_trajectory[:i+1, 0], mean_trajectory[:i+1, 1], mean_trajectory[:i+1, 2],
+                   'r-', linewidth=2, alpha=0.7, label='Trajectory')
+
+        # Set consistent view
+        ax.set_xlim(-1000, 1000)
+        ax.set_ylim(-1000, 1000)
+        ax.set_zlim(0, 2000)
+        ax.set_xlabel('X (mm)')
+        ax.set_ylabel('Y (mm)')
+        ax.set_zlabel('Z (mm)')
+        ax.set_title(f'3D Pose and Trajectory - Frame {i}')
+
+        # Convert to frame
+        canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+        buf = np.frombuffer(canvas.buffer_rgba(), dtype=np.uint8)
+        buf = buf.reshape(canvas.get_width_height()[::-1] + (4,))
+        buf = buf[:, :, :3]  # Remove alpha channel
+        frames.append(buf)
+
+    plt.close(fig)
+
+    # Save as video
+    if frames:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        height, width = frames[0].shape[:2]
+        video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+        for frame in frames:
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            video_writer.write(frame_bgr)
+
+        video_writer.release()
+        print(f"Trajectory video saved as: {output_path}")
 
 
 # def visualize_pose_with_uncertainty(frame, pose, uncertainty, covariance_scalar, connections):
@@ -180,6 +363,7 @@ def main():
         frames_to_process = min(100, len(pose_sequence))
         all_3d_points = []
         all_3d_covariances = []
+        all_frame_pairs = []  # Store frame pairs for video creation
 
         print(f"Processing {frames_to_process} frames...")
 
@@ -197,6 +381,9 @@ def main():
 
             if not all(ret_flags):
                 break
+
+            # Store frame pair for video creation
+            all_frame_pairs.append(frames.copy())
 
             # Process frames from both cameras
             poses_cam1 = None
@@ -283,10 +470,29 @@ def main():
         plt.savefig("3d_trajectory.png", dpi=150, bbox_inches='tight')
         print("3D trajectory saved as: 3d_trajectory.png")
 
+        # Generate videos
+        print("\nGenerating videos...")
+
+        # Create 3D pose estimation video (combines 2D views + 3D pose)
+        save_3d_pose_video(
+            all_frame_pairs, all_3d_points, all_3d_covariances,
+            common_width, common_height,
+            output_path="3d_pose_estimation_video.mp4", fps=15
+        )
+
+        # Create 3D trajectory video (3D pose evolution over time)
+        save_3d_trajectory_video(
+            all_3d_points,
+            output_path="3d_trajectory_video.mp4", fps=15
+        )
+
         plt.show()
 
         print("\n" + "=" * 60)
         print("3D POSE ESTIMATION COMPLETED SUCCESSFULLY!")
+        print("Videos generated:")
+        print("  - 3d_pose_estimation_video.mp4: Combined 2D views + 3D poses")
+        print("  - 3d_trajectory_video.mp4: 3D pose evolution over time")
         print("=" * 60)
 
     except Exception as e:

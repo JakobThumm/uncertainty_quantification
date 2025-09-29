@@ -27,7 +27,6 @@ root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 sys.path.append(root_dir)
 
 from human_pose_pipeline.pose_estimation.inference_helper import (
-    joint_mapping,
     initialize_jax_models,
     initialize_human_detector,
     process_frame_2d
