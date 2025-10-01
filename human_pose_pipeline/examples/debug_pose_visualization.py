@@ -13,19 +13,12 @@ Based on the working pose_estimation_2D.py but simplified for debugging.
 """
 
 import os
-import sys
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse
 from spacepy.pycdf import CDF
 import jax.numpy as jnp
 import cv2
 from PIL import Image
-from scipy.stats import chi2
 
-# Add root directory to path to access src
-root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-sys.path.append(root_dir)
 
 from human_pose_pipeline.pose_estimation.inference_helper import (
     joint_mapping,
@@ -34,28 +27,20 @@ from human_pose_pipeline.pose_estimation.inference_helper import (
     pose_estimation_2d
 )
 from human_pose_pipeline.evaluation.pose_metrics import (
-    mpjpe_jax,
-    JOINT_NAMES_13
+    mpjpe_jax
 )
 from human_pose_pipeline.utils.visualization import (
     visualize_poses_matplotlib
 )
+from human_pose_pipeline.pose_estimation.h36m_settings import (
+    JOINT_NAMES_13,
+    JOINT_IDX_13,
+    JOINT_IDX_17,
+    MIRROR_13_JOINT_MODEL_MAP
+)
 
-# Same mappings as pose_estimation_2D.py
-JOINT_IDX_17 = [0, 1, 2, 3, 6, 7, 8, 12, 16, 14, 15, 17, 18, 19, 25, 26, 27]
-JOINT_IDX_13 = [10, 14, 11, 15, 12, 16, 13, 1, 4, 2, 5, 3, 6]
-MIRROR_13_JOINT_MODEL_MAP = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11]
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
-# Skeleton connections for visualization
-CONNECTIONS_13 = [
-    (0, 1), (0, 2),  # Nose to shoulders
-    (1, 3), (3, 5),  # Left arm
-    (2, 4), (4, 6),  # Right arm
-    (1, 2), (1, 7), (2, 8),  # Shoulders to hips
-    (7, 8),  # Connect hips
-    (7, 9), (9, 11),  # Left leg
-    (8, 10), (10, 12)  # Right leg
-]
 
 def load_single_sample(base_directory, subject='S1', action='Directions', camera='55011271', frame_idx=100):
     """
@@ -220,9 +205,9 @@ def main():
         sample = load_single_sample(
             base_directory=base_directory,
             subject='S1',
-            action='Posing',
+            action='Sitting 1',
             camera='55011271',
-            frame_idx=1
+            frame_idx=0
         )
 
         print(f"Sample loaded successfully!")

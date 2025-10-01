@@ -13,30 +13,17 @@ Based on marian_code/Experiment2/3D_Pose_Estimation.py but adapted for JAX.
 """
 
 import os
-import sys
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 import cv2
-from PIL import Image
-import json
 from tqdm import tqdm
-import jax.numpy as jnp
-import matplotlib.animation as animation
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-
-# Add root directory to path to access src
-root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-sys.path.append(root_dir)
 
 from src.datasets.h36m import Human36mDatasetTwoCameras
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
     process_frame_2d
-)
-from human_pose_pipeline.evaluation.pose_metrics import (
-    MIRROR_13_JOINT_MODEL_MAP
 )
 from human_pose_pipeline.pose_estimation.triangulation_helper import (
     load_camera_parameters,
@@ -48,20 +35,11 @@ from human_pose_pipeline.utils.visualization import (
     draw_3d_pose_with_covariance
 )
 
-# Same mappings as in Marian's code
-JOINT_IDX_17 = [0, 1, 2, 3, 6, 7, 8, 12, 16, 14, 15, 17, 18, 19, 25, 26, 27]
-JOINT_IDX_13 = [9, 14, 11, 15, 12, 16, 13, 1, 4, 2, 5, 3, 6]
+from human_pose_pipeline.pose_estimation.h36m_settings import (
+    CONNECTIONS_13
+)
 
-# Skeleton connections for 13-joint visualization
-CONNECTIONS_13 = [
-    (0, 1), (0, 2),  # Nose to shoulders
-    (1, 3), (3, 5),  # Left arm
-    (2, 4), (4, 6),  # Right arm
-    (1, 2), (1, 7), (2, 8),  # Shoulders to hips
-    (7, 8),  # Connect hips
-    (7, 9), (9, 11),  # Left leg
-    (8, 10), (10, 12)  # Right leg
-]
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
 # Dataset splits (same as Marian's)
 SPLIT = {

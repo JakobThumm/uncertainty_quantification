@@ -14,32 +14,21 @@ Based on the working pose_estimation_3D.py but simplified for debugging.
 """
 
 import os
-import sys
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 import cv2
 from PIL import Image
-import json
-
-# Add root directory to path to access src
-root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-sys.path.append(root_dir)
 
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
     process_frame_2d
 )
-from human_pose_pipeline.evaluation.pose_metrics import (
-    MIRROR_13_JOINT_MODEL_MAP
-)
 
 from human_pose_pipeline.pose_estimation.triangulation_helper import (
     load_camera_parameters,
     create_joint_covariance,
-    triangulate_points_with_covariance,
-    validate_projection_matrices
+    triangulate_points_with_covariance
 )
 
 from human_pose_pipeline.utils.visualization import (
@@ -47,24 +36,18 @@ from human_pose_pipeline.utils.visualization import (
     draw_3d_pose_with_covariance
 )
 
-# Same mappings as pose_estimation_3D.py
-JOINT_IDX_17 = [0, 1, 2, 3, 6, 7, 8, 12, 16, 14, 15, 17, 18, 19, 25, 26, 27]
-JOINT_IDX_13 = [9, 14, 11, 15, 12, 16, 13, 1, 4, 2, 5, 3, 6]
+from human_pose_pipeline.pose_estimation.h36m_settings import (
+    JOINT_IDX_17,
+    JOINT_IDX_13,
+    CONNECTIONS_13,
+    MIRROR_13_JOINT_MODEL_MAP
+)
 
-# Skeleton connections for visualization
-CONNECTIONS_13 = [
-    (0, 1), (0, 2),  # Nose to shoulders
-    (1, 3), (3, 5),  # Left arm
-    (2, 4), (4, 6),  # Right arm
-    (1, 2), (1, 7), (2, 8),  # Shoulders to hips
-    (7, 8),  # Connect hips
-    (7, 9), (9, 11),  # Left leg
-    (8, 10), (10, 12)  # Right leg
-]
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
 
 def load_single_frame_pair(base_directory, subject='S1', action='WalkingDog',
-                          camera_ids=['55011271', '60457274'], frame_idx=100):
+                           camera_ids=['55011271', '60457274'], frame_idx=100):
     """
     Load a single frame pair from two cameras with corresponding poses.
 

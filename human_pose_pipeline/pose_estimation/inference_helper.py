@@ -6,7 +6,6 @@ Based on Marian's Inference_Helper.py but adapted for JAX instead of PyTorch.
 """
 
 import os
-import sys
 import logging
 import json
 import pickle
@@ -19,18 +18,18 @@ import cv2
 import matplotlib.patches as patches
 import matplotlib.lines as mlines
 
-# Add path to access our utilities and models
-sys.path.append('../..')
 from src.models.wrapper import model_from_string
 from human_pose_pipeline.utils.transform_utils import (
     preprocess_image_with_bbox,
     CONFIG,
     convert_coordinates_regressflow_to_pixel,
-    transform_coordinates_back_to_original
+    transform_coordinates_back_to_original,
+    transform_predictions_to_original_space
 )
 
-# Define indices for the 13 joints of interest in the human pose (same as Marian's)
-JOINT_IDX_13 = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+from human_pose_pipeline.pose_estimation.h36m_settings import (
+    JOINT_IDX_13_MODEL
+)
 
 
 def joint_mapping(joints, mapping):
@@ -215,43 +214,29 @@ def get_pose_estimations_jax(resized_image, original_dimensions, scale_factors, 
             uncertainties = None
 
         # Select only the 13 joints of interest (same as Marian's approach)
-        pred_joints = pred_joints[JOINT_IDX_13]  # (13, 2)
+        pred_joints_13 = pred_joints[JOINT_IDX_13_MODEL]  # (13, 2)
         if uncertainties is not None:
-            uncertainties = uncertainties[JOINT_IDX_13]  # (13, 2)
+            uncertainties_13 = uncertainties[JOINT_IDX_13_MODEL]  # (13, 2)
+        else:
+            uncertainties_13 = None
         if covariance_raw is not None:
-            covariance = covariance_raw[JOINT_IDX_13]  # (13,)
+            covariance_13 = covariance_raw[JOINT_IDX_13_MODEL]  # (13,)
         else:
-            covariance = None
+            covariance_13 = None
 
-        # Convert normalized coordinates (-0.5 to 0.5) to pixel coordinates (following Marian)
-        img_height, img_width = CONFIG.DATA_PRESET.IMAGE_SIZE
-        pred_joints[:, 0] = (pred_joints[:, 0] + 0.5) * img_width
-        pred_joints[:, 1] = (pred_joints[:, 1] + 0.5) * img_height
+        # Transform predictions to original image space using the new unified function
+        result = transform_predictions_to_original_space(
+            pred_joints_13, trans, scale_x, scale_y,
+            uncertainties=uncertainties_13,
+            covariance=covariance_13
+        )
 
-        # Scale uncertainties to image dimensions (following Marian)
-        if uncertainties is not None:
-            uncertainties[:, 0] = uncertainties[:, 0] * img_width
-            uncertainties[:, 1] = uncertainties[:, 1] * img_height
-            covariance_scaled = covariance.copy() * img_width * img_height if covariance is not None else None
-        else:
-            covariance_scaled = None
+        pred_joints_original = result['keypoints']
+        uncertainties_original = result.get('uncertainties')
+        covariance_original = result.get('covariance')
 
-        # Transform coordinates back to original image space (following Marian)
-        trans_inv = cv2.invertAffineTransform(trans)
-        pred_joints_resized = cv2.transform(np.expand_dims(pred_joints, axis=0), trans_inv)[0]
-
-        # Scale coordinates and uncertainties to original image dimensions
-        pred_joints_original = pred_joints_resized.copy()
-        pred_joints_original[:, 0] *= scale_x
-        pred_joints_original[:, 1] *= scale_y
-
-        if uncertainties is not None:
-            uncertainties_original = uncertainties.copy()
-            uncertainties_original[:, 0] *= scale_x
-            uncertainties_original[:, 1] *= scale_y
-            covariance_original = covariance_scaled * scale_x * scale_y if covariance_scaled is not None else None
-        else:
-            # Fallback: placeholder uncertainty measures
+        # Fallback if no uncertainties were provided
+        if uncertainties_original is None:
             uncertainties_original = np.ones_like(pred_joints_original) * 5.0  # 5 pixel std dev
             covariance_original = np.ones(len(pred_joints_original)) * 0.1  # Small covariance
 
@@ -398,7 +383,7 @@ def get_human_detector(device_torch):
             print(f"Fallback also failed: {e2}")
             raise e2
 
-def detect_humans(model, image, device_torch, threshold=0.8):
+def detect_humans(model, image, device_torch, threshold=0.8, verbose=False):
     """
     Detect humans in an image using YOLO (ultralytics).
 
@@ -430,8 +415,8 @@ def detect_humans(model, image, device_torch, threshold=0.8):
                 for i, cls in enumerate(classes):
                     if int(cls) == 0 and confidences[i] >= threshold:
                         person_boxes.append(boxes[i].tolist())
-
-        print(f"Detected {len(person_boxes)} humans with confidence >= {threshold}")
+        if verbose:
+            print(f"Detected {len(person_boxes)} humans with confidence >= {threshold}")
         return person_boxes
 
     except Exception as e:

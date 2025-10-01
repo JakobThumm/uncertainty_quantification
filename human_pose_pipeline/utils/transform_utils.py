@@ -315,3 +315,68 @@ def transform_coordinates_back_to_original(pred_joints_pixel, trans, scale_x=1.0
     pred_joints_original[:, 1] *= scale_y
 
     return pred_joints_original
+
+
+def transform_predictions_to_original_space(pred_joints_normalized, trans, scale_x, scale_y,
+                                           uncertainties=None, covariance=None):
+    """
+    Transform model predictions from normalized coordinates back to original image space.
+
+    This function performs the full reverse transformation pipeline:
+    1. Convert normalized coords (-0.5 to 0.5) to pixel coords in preprocessed image
+    2. Apply inverse affine transformation to get coords in resized image
+    3. Scale coords to original image dimensions
+    4. Scale uncertainties appropriately if provided
+
+    Args:
+        pred_joints_normalized: Joint coordinates in normalized space (-0.5 to 0.5), shape (N, 2)
+        trans: Affine transformation matrix used during preprocessing
+        scale_x: Scale factor from resized to original width
+        scale_y: Scale factor from resized to original height
+        uncertainties: Optional uncertainty values, shape (N, 2)
+        covariance: Optional covariance values, shape (N,)
+
+    Returns:
+        dict: Dictionary containing:
+            - 'keypoints': Joint coordinates in original image space
+            - 'uncertainties': Scaled uncertainties (if provided)
+            - 'covariance': Scaled covariance (if provided)
+    """
+    # Step 1: Convert normalized coordinates to pixel coordinates in preprocessed image
+    img_height, img_width = CONFIG.DATA_PRESET.IMAGE_SIZE
+    pred_joints_pixel = pred_joints_normalized.copy()
+    pred_joints_pixel[:, 0] = (pred_joints_normalized[:, 0] + 0.5) * img_width
+    pred_joints_pixel[:, 1] = (pred_joints_normalized[:, 1] + 0.5) * img_height
+
+    # Step 2: Apply inverse affine transformation
+    trans_inv = cv2.invertAffineTransform(trans)
+    pred_joints_resized = cv2.transform(np.expand_dims(pred_joints_pixel, axis=0), trans_inv)[0]
+
+    # Step 3: Scale to original image dimensions
+    pred_joints_original = pred_joints_resized.copy()
+    pred_joints_original[:, 0] *= scale_x
+    pred_joints_original[:, 1] *= scale_y
+
+    result = {'keypoints': pred_joints_original}
+
+    # Step 4: Transform uncertainties if provided
+    if uncertainties is not None:
+        # Scale uncertainties to preprocessed image dimensions
+        uncertainties_pixel = uncertainties.copy()
+        uncertainties_pixel[:, 0] = uncertainties[:, 0] * img_width
+        uncertainties_pixel[:, 1] = uncertainties[:, 1] * img_height
+
+        # Scale to original image dimensions
+        uncertainties_original = uncertainties_pixel.copy()
+        uncertainties_original[:, 0] *= scale_x
+        uncertainties_original[:, 1] *= scale_y
+
+        result['uncertainties'] = uncertainties_original
+
+        # Transform covariance if provided
+        if covariance is not None:
+            covariance_scaled = covariance.copy() * img_width * img_height
+            covariance_original = covariance_scaled * scale_x * scale_y
+            result['covariance'] = covariance_original
+
+    return result
