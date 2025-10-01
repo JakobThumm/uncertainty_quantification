@@ -36,7 +36,8 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_NAMES_13,
     JOINT_IDX_13,
     JOINT_IDX_17,
-    MIRROR_13_JOINT_MODEL_MAP
+    MIRROR_13_JOINT_MODEL_MAP,
+    YOLO_CONFIDENCE_THRESHOLD
 )
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -225,7 +226,7 @@ def main():
             batch_stats=batch_stats,
             human_detector=human_detector,
             device_torch=device_torch,
-            threshold=0.8
+            threshold=YOLO_CONFIDENCE_THRESHOLD
         )
 
         if not pose_estimations:

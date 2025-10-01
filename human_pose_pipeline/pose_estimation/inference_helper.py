@@ -21,9 +21,6 @@ import matplotlib.lines as mlines
 from src.models.wrapper import model_from_string
 from human_pose_pipeline.utils.transform_utils import (
     preprocess_image_with_bbox,
-    CONFIG,
-    convert_coordinates_regressflow_to_pixel,
-    transform_coordinates_back_to_original,
     transform_predictions_to_original_space
 )
 

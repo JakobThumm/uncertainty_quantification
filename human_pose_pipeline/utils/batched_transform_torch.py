@@ -11,19 +11,23 @@ import numpy as np
 import cv2
 from typing import List, Tuple, Optional
 
+from human_pose_pipeline.pose_estimation.h36m_settings import NORMALIZATION_OFFSET
 
-def box_to_center_scale_batch(bboxes: torch.Tensor, aspect_ratio: float) -> Tuple[torch.Tensor, torch.Tensor]:
+
+def box_to_center_scale_batch(bboxes: torch.Tensor, aspect_ratio: float, scale_mult: float = 1.25) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Convert bounding boxes to center and scale format (batched)
 
     Args:
         bboxes: (B, 4) tensor of [xmin, ymin, xmax, ymax]
         aspect_ratio: Target aspect ratio (width / height)
+        scale_mult: Scale multiplier (default 1.25)
 
     Returns:
         centers: (B, 2) tensor of [center_x, center_y]
-        scales: (B,) tensor of scales
+        scales: (B, 2) tensor of [scale_x, scale_y]
     """
+    pixel_std = 1.0
     xmin, ymin, xmax, ymax = bboxes[:, 0], bboxes[:, 1], bboxes[:, 2], bboxes[:, 3]
     w = xmax - xmin
     h = ymax - ymin
@@ -37,20 +41,27 @@ def box_to_center_scale_batch(bboxes: torch.Tensor, aspect_ratio: float) -> Tupl
     w_adjusted = torch.where(w > aspect_ratio * h, w, h * aspect_ratio)
     h_adjusted = torch.where(w > aspect_ratio * h, w / aspect_ratio, h)
 
-    scale = w_adjusted / 200.0  # Standard scale factor
+    # Compute scale as [w / pixel_std, h / pixel_std]
+    scales = torch.stack([w_adjusted / pixel_std, h_adjusted / pixel_std], dim=1)
 
-    return centers, scale
+    # Apply scale multiplier only if center[0] != -1
+    scale_mult_mask = (centers[:, 0] != -1).unsqueeze(1)  # (B, 1)
+    scales = torch.where(scale_mult_mask, scales * scale_mult, scales)
+
+    return centers, scales
 
 
 def get_affine_transform_batch(centers: torch.Tensor, scales: torch.Tensor,
-                                output_size: Tuple[int, int], device: str = 'cuda') -> torch.Tensor:
+                               output_size: Tuple[int, int], rot: float = 0, device: str = 'cuda') -> torch.Tensor:
     """
     Get affine transformation matrices for batch of centers and scales
+    Replicates the behavior of transform_utils.get_affine_transform()
 
     Args:
         centers: (B, 2) tensor of [center_x, center_y]
-        scales: (B,) tensor of scales
+        scales: (B, 2) tensor of [scale_x, scale_y]
         output_size: (width, height) of output image
+        rot: Rotation angle in degrees (default 0)
         device: Device to create tensors on
 
     Returns:
@@ -59,21 +70,57 @@ def get_affine_transform_batch(centers: torch.Tensor, scales: torch.Tensor,
     batch_size = centers.shape[0]
     output_w, output_h = output_size
 
-    # Create transformation matrices
-    # Scale from original space to output space
-    scale_x = scales * 200.0 / output_w
-    scale_y = scales * 200.0 / output_h
+    # Extract scale components - use only src_w like the original
+    src_w = scales[:, 0]  # (B,)
 
-    # Translation to center the bbox
-    trans_x = -centers[:, 0] / scale_x + output_w * 0.5
-    trans_y = -centers[:, 1] / scale_y + output_h * 0.5
+    # Compute rotation
+    rot_rad = np.pi * rot / 180
+    sn, cs = np.sin(rot_rad), np.cos(rot_rad)
 
-    # Build affine matrices: [[scale_x, 0, trans_x], [0, scale_y, trans_y]]
-    transforms = torch.zeros((batch_size, 2, 3), device=device, dtype=torch.float32)
-    transforms[:, 0, 0] = 1.0 / scale_x
-    transforms[:, 1, 1] = 1.0 / scale_y
-    transforms[:, 0, 2] = trans_x
-    transforms[:, 1, 2] = trans_y
+    # Source direction vector: [0, src_w * -0.5] rotated by rot_rad
+    src_dir_x = 0 * cs - (src_w * -0.5) * sn  # = src_w * 0.5 * sn
+    src_dir_y = 0 * sn + (src_w * -0.5) * cs  # = src_w * -0.5 * cs
+
+    # Destination direction vector: [0, dst_w * -0.5]
+    dst_dir_x = torch.zeros(batch_size, device=device)
+    dst_dir_y = torch.full((batch_size,), output_w * -0.5, device=device)
+
+    # Define 3 source points
+    src = torch.zeros((batch_size, 3, 2), device=device)
+    src[:, 0, 0] = centers[:, 0]  # src[0] = center
+    src[:, 0, 1] = centers[:, 1]
+    src[:, 1, 0] = centers[:, 0] + src_dir_x  # src[1] = center + src_dir
+    src[:, 1, 1] = centers[:, 1] + src_dir_y
+    # src[2] = get_3rd_point(src[0], src[1]) = src[1] + perpendicular to (src[0] - src[1])
+    direct_x = src[:, 0, 0] - src[:, 1, 0]
+    direct_y = src[:, 0, 1] - src[:, 1, 1]
+    src[:, 2, 0] = src[:, 1, 0] - direct_y  # perpendicular: [-direct_y, direct_x]
+    src[:, 2, 1] = src[:, 1, 1] + direct_x
+
+    # Define 3 destination points
+    dst = torch.zeros((batch_size, 3, 2), device=device)
+    dst[:, 0, 0] = output_w * 0.5  # dst[0] = [dst_w/2, dst_h/2]
+    dst[:, 0, 1] = output_h * 0.5
+    dst[:, 1, 0] = output_w * 0.5 + dst_dir_x  # dst[1] = [dst_w/2, dst_h/2] + dst_dir
+    dst[:, 1, 1] = output_h * 0.5 + dst_dir_y
+    # dst[2] = get_3rd_point(dst[0], dst[1])
+    direct_x = dst[:, 0, 0] - dst[:, 1, 0]
+    direct_y = dst[:, 0, 1] - dst[:, 1, 1]
+    dst[:, 2, 0] = dst[:, 1, 0] - direct_y
+    dst[:, 2, 1] = dst[:, 1, 1] + direct_x
+
+    # Compute affine transformation for each batch element
+    # Using the formula: M = dst * src^(-1) for affine transform
+    # where src and dst are 2x3 matrices with homogeneous coordinates
+    transforms = torch.zeros((batch_size, 2, 3), device=device)
+
+    for i in range(batch_size):
+        # Use opencv-style getAffineTransform logic
+        # Convert to numpy for cv2.getAffineTransform
+        src_np = src[i].cpu().numpy().astype(np.float32)
+        dst_np = dst[i].cpu().numpy().astype(np.float32)
+        trans_np = cv2.getAffineTransform(src_np, dst_np)
+        transforms[i] = torch.from_numpy(trans_np).to(device)
 
     return transforms
 
@@ -147,7 +194,7 @@ def normalize_images_regressflow(images: torch.Tensor) -> torch.Tensor:
         normalized: (B, C, H, W) normalized images
     """
     # RegressFlow uses ImageNet mean subtraction
-    mean = torch.tensor([0.406, 0.457, 0.480], device=images.device, dtype=images.dtype).view(1, 3, 1, 1)
+    mean = torch.tensor(NORMALIZATION_OFFSET, device=images.device, dtype=images.dtype).view(1, 3, 1, 1)
     return images - mean
 
 
@@ -206,10 +253,10 @@ def batched_preprocess_frames_gpu(
     # Compute centers and scales from bboxes
     aspect_ratio = output_image_size[0] / output_image_size[1]  # width / height
     centers, scales = box_to_center_scale_batch(bboxes_tensor, aspect_ratio)
-    scales = scales * 1.0  # Scale multiplier (same as SimpleTransform)
+    scales = scales * 1.0  # Additional scale multiplier (same as SimpleTransform)
 
     # Get affine transformation matrices
-    transforms = get_affine_transform_batch(centers, scales, output_image_size, device)
+    transforms = get_affine_transform_batch(centers, scales, output_image_size, rot=0, device=device)
 
     # Apply affine transformations to images
     images_preprocessed = batched_affine_transform_images(frames_tensor, transforms, output_image_size)
