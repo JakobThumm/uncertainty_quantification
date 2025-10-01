@@ -7,15 +7,10 @@ and visualizes the pose prediction step by step to debug transformation issues.
 """
 
 import os
-import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import torch
-
-# Add root directory to path to access src
-root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-sys.path.append(root_dir)
 
 from src.datasets.tiger_pose import TigerPoseDataset, tiger_pose_to_h36m_format
 from human_pose_pipeline.pose_estimation.inference_helper import (
@@ -25,10 +20,16 @@ from human_pose_pipeline.pose_estimation.inference_helper import (
     get_pose_estimations_jax,
     joint_mapping
 )
-from human_pose_pipeline.evaluation.pose_metrics import MIRROR_13_JOINT_MODEL_MAP
+
+from human_pose_pipeline.pose_estimation.h36m_settings import (
+    MIRROR_13_JOINT_MODEL_MAP,
+    YOLO_IMAGE_SIZE
+)
+
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
 
-def transform_tiger_image_for_human_detection(image_pil, target_size=(512, 640)):
+def transform_tiger_image_for_human_detection(image_pil, target_size=YOLO_IMAGE_SIZE):
     """
     Transform tiger image to make it more suitable for human detection:
     1. Rotate by 90 degrees (tigers are wider than tall, humans are taller than wide)
@@ -212,7 +213,7 @@ def visualize_step_by_step(original_image, original_keypoints_12, rotated_image,
     # Final transformed image with final keypoints (13 joints, but still tiger structure)
     # We'll use a custom drawing function that maps the 13 H36M joints back to tiger connections
     draw_skeleton_tiger_from_h36m(axes[1, 0], final_image, final_keypoints_13, valid_mask_13,
-                                 "3. Resized Image (512x640)\n(tiger mapped to 13 H36M joints)", 'green', 'Transformed GT')
+                                 "3. Resized Image\n(tiger mapped to 13 H36M joints)", 'green', 'Transformed GT')
 
     # Final image with both ground truth and predicted pose
     axes[1, 1].imshow(final_image)
@@ -332,7 +333,7 @@ def main():
 
         # Transform image
         transformed_image, transform_info = transform_tiger_image_for_human_detection(
-            original_image, target_size=(512, 640)
+            original_image, target_size=YOLO_IMAGE_SIZE
         )
 
         # Create intermediate rotated image for visualization
@@ -367,7 +368,7 @@ def main():
 
         # Skip human detection and use full image as bounding box
         resized_image, original_dimensions, scale_factors = resize_image(transformed_image)
-        person_boxes = [[0.0, 0.0, 512, 640]]  # Full image
+        person_boxes = [[0.0, 0.0, YOLO_IMAGE_SIZE[0], YOLO_IMAGE_SIZE[1]]]  # Full image
 
         # Perform pose estimation
         pose_estimations = get_pose_estimations_jax(

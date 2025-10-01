@@ -14,17 +14,11 @@ Based on pose_estimation_2D.py but adapted for comparative evaluation.
 """
 
 import os
-import sys
 import numpy as np
 import matplotlib.pyplot as plt
-import cv2
 from PIL import Image
 from tqdm import tqdm
 import torch
-
-# Add root directory to path to access src
-root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-sys.path.append(root_dir)
 
 from src.datasets.h36m import Human36mDatasetSequence
 from src.datasets.tiger_pose import TigerPoseDataset, tiger_pose_to_h36m_format
@@ -37,13 +31,15 @@ from human_pose_pipeline.pose_estimation.inference_helper import (
     joint_mapping
 )
 from human_pose_pipeline.evaluation.pose_metrics import (
-    MIRROR_13_JOINT_MODEL_MAP,
     pck_jax,
     mpjpe_jax
 )
-from human_pose_pipeline.utils.visualization import (
-    visualize_poses_matplotlib
+from human_pose_pipeline.pose_estimation.h36m_settings import (
+    MIRROR_13_JOINT_MODEL_MAP,
+    YOLO_IMAGE_SIZE
 )
+
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
 
 def transform_tiger_image_for_human_detection(image_pil, target_size=(256, 256)):
@@ -437,7 +433,7 @@ def predict_poses_on_tiger_dataset(model, params, batch_stats, human_detector, d
 
             # Apply tiger transformations to make it more suitable for human detection
             transformed_image, transform_info = transform_tiger_image_for_human_detection(
-                image_pil, target_size=(512, 640)
+                image_pil, target_size=YOLO_IMAGE_SIZE
             )
 
             # Run pose estimation on transformed tiger image
@@ -446,7 +442,7 @@ def predict_poses_on_tiger_dataset(model, params, batch_stats, human_detector, d
 
             # Step 2: Detect humans (skipped, use full image as bounding box)
             # Full image as batch of 1
-            person_boxes = [[0.0, 0.0, 512, 640]]
+            person_boxes = [[0.0, 0.0, YOLO_IMAGE_SIZE[0], YOLO_IMAGE_SIZE[1]]]
 
             # Step 3: Perform pose estimation
             pose_estimations = get_pose_estimations_jax(

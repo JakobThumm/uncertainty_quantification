@@ -12,31 +12,38 @@ import jax.numpy as jnp
 from typing import Tuple, Union, Optional
 from easydict import EasyDict
 
+from human_pose_pipeline.pose_estimation.h36m_settings import (
+    TRANSFORM_SIGMA,
+    TRANSFORM_IMAGE_SIZE,
+    TRANSFORM_HEATMAP_SIZE,
+    NORMALIZATION_OFFSET
+)
+
 # RegressFlow configuration (matching Marian's CONFIG)
-CONFIG = EasyDict({
-    'DATA_PRESET': {
-        'TYPE': 'simple',
-        'SIGMA': 2,
-        'NUM_JOINTS': 17,
-        'IMAGE_SIZE': [256, 192],  # Height, Width
-        'HEATMAP_SIZE': [64, 48]
-    },
-    'MODEL': {
-        'TYPE': 'RegressFlow',
-        'NUM_LAYERS': 50,
-        'NUM_FC_FILTERS': [-1],
-        'HIDDEN_LIST': [-1],
-        'PRETRAINED': '',
-        'TRY_LOAD': ''
-    },
-    'TEST': {
-        'FLIP_TEST': True,
-        'HEATMAP2COORD': 'coord'
-    },
-    'LOSS': {
-        'TYPE': 'RLELoss'
-    }
-})
+# CONFIG = EasyDict({
+#     'DATA_PRESET': {
+#         'TYPE': 'simple',
+#         'SIGMA': 2,
+#         'NUM_JOINTS': 17,
+#         'IMAGE_SIZE': [256, 192],  # Height, Width
+#         'HEATMAP_SIZE': [64, 48]
+#     },
+#     'MODEL': {
+#         'TYPE': 'RegressFlow',
+#         'NUM_LAYERS': 50,
+#         'NUM_FC_FILTERS': [-1],
+#         'HIDDEN_LIST': [-1],
+#         'PRETRAINED': '',
+#         'TRY_LOAD': ''
+#     },
+#     'TEST': {
+#         'FLIP_TEST': True,
+#         'HEATMAP2COORD': 'coord'
+#     },
+#     'LOSS': {
+#         'TYPE': 'RLELoss'
+#     }
+# })
 
 class SimpleTransform:
     """
@@ -88,9 +95,9 @@ class SimpleTransform:
         # Convert to tensor format and apply RegressFlow normalization
         img = im_to_jax(img)
         # Apply RegressFlow's specific normalization (subtract mean values)
-        img = img.at[0].add(-0.406)
-        img = img.at[1].add(-0.457)
-        img = img.at[2].add(-0.480)
+        img = img.at[0].add(NORMALIZATION_OFFSET[0])
+        img = img.at[1].add(NORMALIZATION_OFFSET[1])
+        img = img.at[2].add(NORMALIZATION_OFFSET[2])
 
         return img, bbox, center, scale, trans
 
@@ -116,9 +123,9 @@ class SimpleTransform:
 
         # Convert to JAX array and apply normalization
         img = im_to_jax(img)
-        img = img.at[0].add(-0.406)
-        img = img.at[1].add(-0.457)
-        img = img.at[2].add(-0.480)
+        img = img.at[0].add(NORMALIZATION_OFFSET[0])
+        img = img.at[1].add(NORMALIZATION_OFFSET[1])
+        img = img.at[2].add(NORMALIZATION_OFFSET[2])
 
         output = {
             'type': '2d_data',
@@ -150,10 +157,10 @@ def preprocess_image_with_bbox(image_array, bbox):
     """
     transformation = SimpleTransform(
         scale_factor=0,
-        input_size=CONFIG.DATA_PRESET.IMAGE_SIZE,
-        output_size=CONFIG.DATA_PRESET.HEATMAP_SIZE,
+        input_size=[TRANSFORM_IMAGE_SIZE[1], TRANSFORM_IMAGE_SIZE[0]],  # Height, Width
+        output_size=[TRANSFORM_HEATMAP_SIZE[1], TRANSFORM_HEATMAP_SIZE[0]],  # Height, Width
         rot=0,
-        sigma=CONFIG.DATA_PRESET.SIGMA,
+        sigma=TRANSFORM_SIGMA,
         train=False
     )
 
@@ -343,7 +350,7 @@ def transform_predictions_to_original_space(pred_joints_normalized, trans, scale
             - 'covariance': Scaled covariance (if provided)
     """
     # Step 1: Convert normalized coordinates to pixel coordinates in preprocessed image
-    img_height, img_width = CONFIG.DATA_PRESET.IMAGE_SIZE
+    img_height, img_width = TRANSFORM_IMAGE_SIZE[1], TRANSFORM_IMAGE_SIZE[0]
     pred_joints_pixel = pred_joints_normalized.copy()
     pred_joints_pixel[:, 0] = (pred_joints_normalized[:, 0] + 0.5) * img_width
     pred_joints_pixel[:, 1] = (pred_joints_normalized[:, 1] + 0.5) * img_height

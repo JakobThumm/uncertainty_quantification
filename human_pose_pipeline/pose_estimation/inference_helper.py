@@ -28,7 +28,9 @@ from human_pose_pipeline.utils.transform_utils import (
 )
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
-    JOINT_IDX_13_MODEL
+    JOINT_IDX_13_MODEL,
+    YOLO_IMAGE_SIZE,
+    YOLO_CONFIDENCE_THRESHOLD
 )
 
 
@@ -37,7 +39,7 @@ def joint_mapping(joints, mapping):
     return joints[mapping]
 
 
-def resize_image(pil_image, target_size=(512, 640)):
+def resize_image(pil_image, target_size=YOLO_IMAGE_SIZE):
     """
     Resize image to network input dimensions.
 
@@ -62,7 +64,8 @@ def resize_image(pil_image, target_size=(512, 640)):
     return resized_image, (original_image_width, original_image_height), (scale_x, scale_y)
 
 
-def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, device_torch, threshold=0.8, visualize=True):
+def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, device_torch,
+                       threshold=YOLO_CONFIDENCE_THRESHOLD, visualize=True):
     """
     Complete 2D pose estimation pipeline: resize -> detect humans -> estimate poses.
 
@@ -86,7 +89,7 @@ def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, de
     resized_image, original_dimensions, scale_factors = resize_image(pil_image)
 
     # Step 2: Detect humans
-    person_boxes = detect_humans(human_detector, resized_image, device_torch, threshold=0.4)
+    person_boxes = detect_humans(human_detector, resized_image, device_torch, threshold=threshold)
 
     if not person_boxes:
         print("No humans detected with the specified threshold.")
@@ -467,8 +470,8 @@ def visualize_pose_estimation_results(pil_image, pose_estimations, save_path=Non
         for joint_idx, keypoint in enumerate(keypoints):
             center = tuple(map(int, keypoint))
             cv2.circle(image_np, center, 4, color, -1)
-            cv2.putText(image_np, str(joint_idx), (center[0]+5, center[1]-5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            cv2.putText(image_np, str(joint_idx), (center[0] + 5, center[1] - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
         # Draw bounding box
         if 'bbox' in pose_data:

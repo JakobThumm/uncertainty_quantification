@@ -8,22 +8,14 @@ the low-memory Lanczos uncertainty quantification for OOD detection.
 """
 
 import os
-import sys
 import numpy as np
-import jax
 import jax.numpy as jnp
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple
 from PIL import Image
 import torch
 
-# Add root directory to path to access src
-root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-sys.path.append(root_dir)
-
 # Import sketching Lanczos functionality
 from src.ood_scores.lm_lanczos import low_memory_lanczos_score_fun
-from src.models import pretrained_model_from_string
-from src.datasets import dataloader_from_string
 
 # Import pose estimation functionality
 from human_pose_pipeline.pose_estimation.inference_helper import (
@@ -31,7 +23,13 @@ from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_human_detector,
     process_frame_2d
 )
-from human_pose_pipeline.evaluation.pose_metrics import MIRROR_13_JOINT_MODEL_MAP
+
+from human_pose_pipeline.pose_estimation.h36m_settings import (
+    MIRROR_13_JOINT_MODEL_MAP,
+    YOLO_IMAGE_SIZE
+)
+
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
 
 class PoseDataWrapper:
@@ -270,7 +268,7 @@ def compute_pose_ood_scores(
     tiger_transform = None
     if apply_tiger_transforms:
         from human_pose_pipeline.examples.id_vs_ood_pose_prediction import transform_tiger_image_for_human_detection
-        tiger_transform = lambda img: transform_tiger_image_for_human_detection(img, target_size=(512, 640))[0]
+        tiger_transform = lambda img: transform_tiger_image_for_human_detection(img, target_size=YOLO_IMAGE_SIZE)[0]
 
     # Process ID dataset
     print("Processing ID dataset...")
