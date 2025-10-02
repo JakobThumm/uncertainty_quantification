@@ -286,7 +286,7 @@ def preprocess_h36m_dataset_gpu(
                         # ==================== STEP 4: GPU batch preprocessing ====================
                         t0 = time.time()
                         images_preprocessed, poses_normalized, metadata = batched_preprocess_frames_gpu(
-                            frames=batch_frames_raw,
+                            frames=batch_frames_resized,
                             bboxes=batch_bboxes,
                             poses=batch_poses_raw,
                             scale_factors=batch_scale_factors,

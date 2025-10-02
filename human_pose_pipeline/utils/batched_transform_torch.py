@@ -197,6 +197,67 @@ def batched_affine_transform_images(
     return transformed
 
 
+def batched_crop_and_resize(
+    images: torch.Tensor,
+    centers: torch.Tensor,
+    scales: torch.Tensor,
+    output_size: Tuple[int, int]
+) -> torch.Tensor:
+    """
+    Crop regions from images and resize to output size (batched, simplified for rotation=0)
+
+    Args:
+        images: (B, C, H, W) tensor of images
+        centers: (B, 2) tensor of [center_x, center_y]
+        scales: (B, 2) tensor of [scale_x, scale_y] - size of region to extract
+        output_size: (width, height) of output images
+
+    Returns:
+        transformed: (B, C, output_h, output_w) transformed images
+    """
+    batch_size = images.shape[0]
+    output_w, output_h = output_size
+    device = images.device
+
+    # Extract crops for each image in the batch
+    crops = []
+    for i in range(batch_size):
+        cx, cy = centers[i, 0].item(), centers[i, 1].item()
+        scale_x, scale_y = scales[i, 0].item(), scales[i, 1].item()
+
+        # Compute crop box (half-width and half-height)
+        half_w = scale_x / 2.0
+        half_h = scale_y / 2.0
+
+        # Crop coordinates
+        x1 = int(cx - half_w)
+        y1 = int(cy - half_h)
+        x2 = int(cx + half_w)
+        y2 = int(cy + half_h)
+
+        # Clamp to image bounds
+        img_h, img_w = images.shape[2], images.shape[3]
+        x1_clamp = max(0, x1)
+        y1_clamp = max(0, y1)
+        x2_clamp = min(img_w, x2)
+        y2_clamp = min(img_h, y2)
+
+        # Crop the region
+        crop = images[i:i+1, :, y1_clamp:y2_clamp, x1_clamp:x2_clamp]
+
+        # If crop is empty due to out-of-bounds, create zeros
+        if crop.shape[2] == 0 or crop.shape[3] == 0:
+            crop = torch.zeros((1, images.shape[1], 1, 1), device=device, dtype=images.dtype)
+
+        # Resize to output size
+        crop_resized = F.interpolate(crop, size=(output_h, output_w), mode='bilinear', align_corners=False)
+        crops.append(crop_resized)
+
+    # Stack all crops
+    result = torch.cat(crops, dim=0)
+    return result
+
+
 def batched_affine_transform_points(
     points: torch.Tensor,
     transforms: torch.Tensor
@@ -306,18 +367,32 @@ def batched_preprocess_frames_gpu(
     centers, scales = box_to_center_scale_batch(bboxes_tensor, aspect_ratio)
     scales = scales * 1.0  # Additional scale multiplier (same as SimpleTransform)
 
-    # Get affine transformation matrices
+    # Get affine transformation matrices (for pose transformation)
     transforms = get_affine_transform_batch(centers, scales, output_image_size, rot=0, device=device)
 
-    # Debug: print first transformation matrix
-    if len(transforms) > 0:
-        print(f"[DEBUG] First bbox: {bboxes_tensor[0].cpu().numpy()}")
-        print(f"[DEBUG] First center: {centers[0].cpu().numpy()}")
-        print(f"[DEBUG] First scale: {scales[0].cpu().numpy()}")
-        print(f"[DEBUG] First transform matrix:\n{transforms[0].cpu().numpy()}")
-
-    # Apply affine transformations to images
+    # Crop and resize images (simplified approach for rotation=0)
     images_preprocessed = batched_affine_transform_images(frames_tensor, transforms, output_image_size)
+    # images_preprocessed = batched_crop_and_resize(frames_tensor, centers, scales, output_image_size)
+
+    # DEBUG: Visualize first preprocessed image (after affine transform, before normalization)
+    # import matplotlib.pyplot as plt
+    # debug_img0 = frames_tensor[0].cpu().permute(1, 2, 0).numpy()  # (H, W, 3)
+    # debug_img_viz0 = np.clip(debug_img0, 0, 1)
+    # plt.figure(figsize=(8, 8))
+    # plt.imshow(debug_img_viz0)
+    # plt.title('Preprocessed Image [0] (before affine transform)')
+    # plt.axis('off')
+    # plt.savefig('visualizations/debug_preprocessed_img_0_before.png', dpi=150, bbox_inches='tight')
+    # plt.close()
+    # debug_img = images_preprocessed[0].cpu().permute(1, 2, 0).numpy()  # (H, W, 3)
+    # debug_img_viz = np.clip(debug_img, 0, 1)
+    # plt.figure(figsize=(8, 8))
+    # plt.imshow(debug_img_viz)
+    # plt.title('Preprocessed Image [0] (after affine transform, before normalization)')
+    # plt.axis('off')
+    # plt.savefig('visualizations/debug_preprocessed_img_0_after.png', dpi=150, bbox_inches='tight')
+    # plt.close()
+    # print(f"[DEBUG] Saved preprocessed images to visualizations/debug_preprocessed_img_0_before.png and visualizations/debug_preprocessed_img_0_after.png")
 
     # Apply RegressFlow normalization
     images_preprocessed = normalize_images_regressflow(images_preprocessed)
