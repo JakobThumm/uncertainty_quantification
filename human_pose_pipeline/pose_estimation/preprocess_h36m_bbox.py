@@ -392,7 +392,7 @@ def preprocess_h36m_dataset(base_directory, output_directory, splits=['train', '
 
                             pose_transformed = cv2.transform(np.expand_dims(pose_resized, axis=0), trans)[0]
 
-                            img_height, img_width = CONFIG.DATA_PRESET.IMAGE_SIZE
+                            img_height, img_width = [TRANSFORM_IMAGE_SIZE[1], TRANSFORM_IMAGE_SIZE[0]]
                             pose_normalized = pose_transformed.copy()
                             pose_normalized[:, 0] = (pose_transformed[:, 0] / img_width) - 0.5
                             pose_normalized[:, 1] = (pose_transformed[:, 1] / img_height) - 0.5
