@@ -19,7 +19,10 @@ import pickle
 
 from src.models.wrapper import model_from_string
 from src.datasets.h36m_preprocessed import Human36mPreprocessedDataset
-from human_pose_pipeline.utils.transform_utils import transform_predictions_to_original_space
+from human_pose_pipeline.utils.transform_utils import (
+    transform_predictions_to_original_space,
+    denormalize_image_regressflow
+)
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_IDX_13_MODEL,
@@ -186,6 +189,20 @@ def main():
         sample_idx = 0
 
     image, pose_flat, metadata = dataset[sample_idx]
+
+    # Visualize preprocessed image (denormalized)
+    print("\nVisualizing preprocessed image...")
+    image_denorm = denormalize_image_regressflow(image)
+
+    # Display the preprocessed image
+    fig, ax = plt.subplots(1, 1, figsize=(8, 10))
+    ax.imshow(image_denorm)
+    ax.set_title(f'Preprocessed Image (denormalized)\nSample {sample_idx}', fontsize=14, fontweight='bold')
+    ax.axis('off')
+    plt.tight_layout()
+    plt.savefig('preprocessed_image_debug.png', dpi=150, bbox_inches='tight')
+    print(f"Saved preprocessed image to preprocessed_image_debug.png")
+    plt.close()
 
     print(f"\nProcessing sample {sample_idx}:")
     print(f"  Subject: {metadata['subject']}")

@@ -387,3 +387,40 @@ def transform_predictions_to_original_space(pred_joints_normalized, trans, scale
             result['covariance'] = covariance_original
 
     return result
+
+def denormalize_image_regressflow(image):
+    """
+    Reverse RegressFlow normalization to convert image back to viewable [0, 1] range
+
+    Args:
+        image: Normalized image, either:
+            - JAX/NumPy array with shape (C, H, W) or (B, C, H, W)
+            - Values in RegressFlow normalized space (mean-subtracted)
+
+    Returns:
+        np.ndarray: Denormalized image in [0, 1] range, shape (H, W, C) if input was (C, H, W),
+                    or (B, H, W, C) if input was (B, C, H, W)
+    """
+    image_array = np.array(image)
+    is_batched = len(image_array.shape) == 4
+
+    # Reverse normalization: subtract negative offset = add positive mean
+    normalization_offset = np.array(NORMALIZATION_OFFSET)
+
+    if is_batched:
+        # (B, C, H, W) format
+        offset_reshaped = normalization_offset.reshape(1, 3, 1, 1)
+        image_denorm = image_array - offset_reshaped
+        # Convert to (B, H, W, C)
+        image_denorm = np.transpose(image_denorm, (0, 2, 3, 1))
+    else:
+        # (C, H, W) format
+        offset_reshaped = normalization_offset.reshape(3, 1, 1)
+        image_denorm = image_array - offset_reshaped
+        # Convert to (H, W, C)
+        image_denorm = np.transpose(image_denorm, (1, 2, 0))
+
+    # Clip to [0, 1] range
+    image_denorm = np.clip(image_denorm, 0, 1)
+
+    return image_denorm

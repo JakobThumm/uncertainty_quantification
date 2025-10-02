@@ -127,24 +127,67 @@ def get_affine_transform_batch(centers: torch.Tensor, scales: torch.Tensor,
 
 def batched_affine_transform_images(
     images: torch.Tensor,
-    transforms: torch.Tensor,
+    transforms_cv: torch.Tensor,
     output_size: Tuple[int, int]
 ) -> torch.Tensor:
     """
     Apply affine transformations to batch of images
 
+    Converts OpenCV-style affine matrices to PyTorch format and applies them.
+
     Args:
         images: (B, C, H, W) tensor of images
-        transforms: (B, 2, 3) affine transformation matrices
+        transforms_cv: (B, 2, 3) OpenCV-style affine transformation matrices
         output_size: (width, height) of output images
 
     Returns:
         transformed: (B, C, output_h, output_w) transformed images
     """
+    batch_size = images.shape[0]
+    input_h, input_w = images.shape[2], images.shape[3]
     output_w, output_h = output_size
 
+    # Convert OpenCV affine matrices to PyTorch format
+    # OpenCV: pixel coords -> pixel coords
+    # PyTorch: normalized coords [-1,1] -> normalized coords [-1,1]
+
+    # Create normalized coordinate transformation matrices
+    transforms_pt = torch.zeros_like(transforms_cv)
+
+    for i in range(batch_size):
+        M = transforms_cv[i]  # (2, 3) OpenCV matrix
+
+        # Use cv2.invertAffineTransform to get inverse
+        M_inv = cv2.invertAffineTransform(M.cpu().numpy())
+        M_inv_torch = torch.from_numpy(M_inv).to(transforms_cv.device)
+
+        # Convert to 3x3 homogeneous form for easier composition
+        M_inv_hom = torch.eye(3, device=transforms_cv.device, dtype=torch.float32)
+        M_inv_hom[:2, :] = M_inv_torch
+
+        # Scale transformations for normalized coordinates
+        # Output: norm -> pixel: x_pix = (x_norm + 1) * output_w / 2
+        scale_out_hom = torch.tensor([[output_w/2.0, 0, output_w/2.0],
+                                       [0, output_h/2.0, output_h/2.0],
+                                       [0, 0, 1]],
+                                      device=transforms_cv.device, dtype=torch.float32)
+
+        # Input: pixel -> norm: x_norm = 2 * x_pix / input_w - 1
+        scale_in_hom = torch.tensor([[2.0/input_w, 0, -1],
+                                      [0, 2.0/input_h, -1],
+                                      [0, 0, 1]],
+                                     device=transforms_cv.device, dtype=torch.float32)
+
+        # Combine: output_norm -> output_pix -> input_pix -> input_norm
+        # M_pt = scale_in @ M_inv @ scale_out
+        temp = torch.mm(M_inv_hom, scale_out_hom)
+        M_pt_hom = torch.mm(scale_in_hom, temp)
+
+        # Extract 2x3 affine matrix
+        transforms_pt[i] = M_pt_hom[:2, :]
+
     # Create sampling grid
-    grid = F.affine_grid(transforms, [images.shape[0], images.shape[1], output_h, output_w],
+    grid = F.affine_grid(transforms_pt, [batch_size, images.shape[1], output_h, output_w],
                          align_corners=False)
 
     # Apply transformation
@@ -194,8 +237,10 @@ def normalize_images_regressflow(images: torch.Tensor) -> torch.Tensor:
         normalized: (B, C, H, W) normalized images
     """
     # RegressFlow uses ImageNet mean subtraction
-    mean = torch.tensor(NORMALIZATION_OFFSET, device=images.device, dtype=images.dtype).view(1, 3, 1, 1)
-    return images - mean
+    # NORMALIZATION_OFFSET contains negative values [-0.406, -0.457, -0.480]
+    # We add these negative values (equivalent to subtracting positive mean)
+    offset = torch.tensor(NORMALIZATION_OFFSET, device=images.device, dtype=images.dtype).view(1, 3, 1, 1)
+    return images + offset
 
 
 def batched_preprocess_frames_gpu(
@@ -239,7 +284,13 @@ def batched_preprocess_frames_gpu(
 
     # Convert frames to torch tensor (B, H, W, 3) -> (B, 3, H, W)
     frames_np = np.stack(valid_frames, axis=0)  # (B, H, W, 3)
-    frames_tensor = torch.from_numpy(frames_np).to(device).float() / 255.0  # Normalize to [0, 1]
+
+    # Normalize to [0, 1] if needed
+    if frames_np.max() > 1.0:
+        frames_tensor = torch.from_numpy(frames_np).to(device).float() / 255.0
+    else:
+        frames_tensor = torch.from_numpy(frames_np).to(device).float()
+
     frames_tensor = frames_tensor.permute(0, 3, 1, 2)  # (B, 3, H, W)
 
     # Convert bboxes to tensor
@@ -257,6 +308,13 @@ def batched_preprocess_frames_gpu(
 
     # Get affine transformation matrices
     transforms = get_affine_transform_batch(centers, scales, output_image_size, rot=0, device=device)
+
+    # Debug: print first transformation matrix
+    if len(transforms) > 0:
+        print(f"[DEBUG] First bbox: {bboxes_tensor[0].cpu().numpy()}")
+        print(f"[DEBUG] First center: {centers[0].cpu().numpy()}")
+        print(f"[DEBUG] First scale: {scales[0].cpu().numpy()}")
+        print(f"[DEBUG] First transform matrix:\n{transforms[0].cpu().numpy()}")
 
     # Apply affine transformations to images
     images_preprocessed = batched_affine_transform_images(frames_tensor, transforms, output_image_size)
