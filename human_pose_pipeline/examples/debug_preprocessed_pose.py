@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import jax
 import json
 import pickle
+import cv2
 
 from src.models.wrapper import model_from_string
 from src.datasets.h36m_preprocessed import Human36mPreprocessedDataset
@@ -23,11 +24,15 @@ from human_pose_pipeline.utils.transform_utils import (
     transform_predictions_to_original_space,
     denormalize_image_regressflow
 )
+from human_pose_pipeline.utils.visualization import (
+    visualize_poses_matplotlib
+)
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_IDX_13_MODEL,
     CONNECTIONS_13,
-    JOINT_NAMES_13
+    JOINT_NAMES_13,
+    TRANSFORM_IMAGE_SIZE
 )
 
 
@@ -190,19 +195,22 @@ def main():
 
     image, pose_flat, metadata = dataset[sample_idx]
 
-    # Visualize preprocessed image (denormalized)
-    print("\nVisualizing preprocessed image...")
-    image_denorm = denormalize_image_regressflow(image)
+    # Transform ground truth pose from original image space to preprocessed image space
+    print("\nPreparing ground truth pose...")
+    pose_13_original = np.array(metadata['pose_pixel'])  # (13, 2) in original image pixel coords
+    scale_x, scale_y = metadata['scale_factors']
+    trans = np.array(metadata['trans'])
 
-    # Display the preprocessed image
-    fig, ax = plt.subplots(1, 1, figsize=(8, 10))
-    ax.imshow(image_denorm)
-    ax.set_title(f'Preprocessed Image (denormalized)\nSample {sample_idx}', fontsize=14, fontweight='bold')
-    ax.axis('off')
-    plt.tight_layout()
-    plt.savefig('preprocessed_image_debug.png', dpi=150, bbox_inches='tight')
-    print(f"Saved preprocessed image to preprocessed_image_debug.png")
-    plt.close()
+    # Apply same transformations as images: 1) scale, 2) affine transform
+    pose_resized = pose_13_original.copy()
+    pose_resized[:, 0] = pose_resized[:, 0] / scale_x
+    pose_resized[:, 1] = pose_resized[:, 1] / scale_y
+
+    # Apply affine transformation to get pose in preprocessed image pixel space
+    gt_pose_pixels = cv2.transform(np.expand_dims(pose_resized, axis=0), trans)[0]
+
+    # Image is in (C, H, W) format (3, 256, 192)
+    image_w, image_h = TRANSFORM_IMAGE_SIZE[0], TRANSFORM_IMAGE_SIZE[1]
 
     print(f"\nProcessing sample {sample_idx}:")
     print(f"  Subject: {metadata['subject']}")
@@ -275,8 +283,40 @@ def main():
     for joint_name, error in zip(JOINT_NAMES_13, errors):
         print(f"    {joint_name:12s}: {error:.2f} pixels")
 
-    # Visualize
-    print("\nGenerating visualization...")
+    # Convert predicted pose to pixel coordinates in preprocessed image space
+    pred_pose_pixels = np.zeros_like(pred_joints_13)
+    pred_pose_pixels[:, 0] = (pred_joints_13[:, 0] + 0.5) * image_w
+    pred_pose_pixels[:, 1] = (pred_joints_13[:, 1] + 0.5) * image_h
+
+    # Convert uncertainties to pixel coordinates if available
+    if uncertainties_13 is not None:
+        pred_uncertainties_pixels = uncertainties_13.copy()
+        pred_uncertainties_pixels[:, 0] = uncertainties_13[:, 0] * image_w
+        pred_uncertainties_pixels[:, 1] = uncertainties_13[:, 1] * image_h
+    else:
+        pred_uncertainties_pixels = None
+
+    # Prepare image for visualization (denormalize and convert to PIL)
+    from PIL import Image as PILImage
+    image_denorm = denormalize_image_regressflow(image)
+    image_pil = PILImage.fromarray((image_denorm * 255).astype(np.uint8))
+
+    # Visualize poses on preprocessed image
+    print("\nGenerating preprocessed image visualization...")
+    preprocessed_save_path = 'preprocessed_image_with_poses.png'
+    visualize_poses_matplotlib(
+        image=image_pil,
+        gt_pose=gt_pose_pixels,
+        pred_pose=pred_pose_pixels,
+        pred_uncertainties=pred_uncertainties_pixels,
+        pred_covariances=covariance_13,
+        save_path=preprocessed_save_path,
+        show_uncertainty=(uncertainties_13 is not None)
+    )
+    print(f"Saved preprocessed image with poses to {preprocessed_save_path}")
+
+    # Visualize pose comparison in original image space
+    print("\nGenerating original space comparison...")
     visualize_pose_comparison(
         pred_pose_original, gt_pose_original, errors,
         metadata, save_path=args.save_path

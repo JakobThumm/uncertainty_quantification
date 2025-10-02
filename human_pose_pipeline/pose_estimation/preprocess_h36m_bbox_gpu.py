@@ -212,6 +212,7 @@ def preprocess_h36m_dataset_gpu(
                     # Collect all preprocessed data for this video
                     all_preprocessed_images = []
                     all_preprocessed_poses = []
+                    all_original_poses = []
                     all_metadata = {
                         'bboxes': [],
                         'centers': [],
@@ -315,6 +316,7 @@ def preprocess_h36m_dataset_gpu(
                         # Accumulate results
                         all_preprocessed_images.append(images_np)
                         all_preprocessed_poses.append(poses_mirrored)
+                        all_original_poses.append(batch_poses_raw[metadata['valid_indices']][:, MIRROR_13_JOINT_MODEL_MAP])
 
                         # Accumulate metadata
                         valid_batch_indices = metadata['valid_indices']
@@ -336,11 +338,7 @@ def preprocess_h36m_dataset_gpu(
                     t0 = time.time()
                     sequence_images = np.concatenate(all_preprocessed_images, axis=0)  # (N, 3, 256, 192)
                     sequence_poses = np.concatenate(all_preprocessed_poses, axis=0)  # (N, 13, 2)
-
-                    # Compute pixel poses for metadata (reverse normalization)
-                    sequence_poses_pixel = sequence_poses.copy()
-                    sequence_poses_pixel[:, :, 0] = (sequence_poses[:, :, 0] + 0.5) * TRANSFORM_IMAGE_SIZE[0]
-                    sequence_poses_pixel[:, :, 1] = (sequence_poses[:, :, 1] + 0.5) * TRANSFORM_IMAGE_SIZE[1]
+                    sequence_poses_pixel = np.concatenate(all_original_poses, axis=0)  # (N, 13, 2)
 
                     # Save preprocessed images
                     images_output_path = os.path.join(images_output_dir, f"{base}.npy")

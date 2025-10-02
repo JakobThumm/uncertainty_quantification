@@ -177,7 +177,7 @@ def visualize_poses_matplotlib(image: Union[np.ndarray, Image.Image],
                               pred_covariances: Optional[np.ndarray] = None,
                               save_path: Optional[str] = None,
                               show_uncertainty: bool = True,
-                              uncertainty_n_std: float = 2) -> None:
+                              uncertainty_n_std: float = 3) -> None:
     """
     Create matplotlib visualization with multiple panels showing poses and uncertainties
 
