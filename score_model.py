@@ -19,7 +19,7 @@ from src.ood_scores.diagonal_lla import diagonal_lla_score_fun
 from src.ood_scores.scod import scod_score_fun
 from src.ood_scores.swag import swag_score_fun
 from src.ood_scores.hm_lanczos import high_memory_lanczos_score_fun, smart_lanczos_score_fun
-from src.ood_scores.lm_lanczos import low_memory_lanczos_score_fun
+from src.ood_scores.lm_lanczos import low_memory_lanczos_score_fun, _get_cache_base_key, _save_score_functions, _load_score_functions
 from src.ood_scores.projected_ensemble import projected_ensemble_score_fun
 from src.ood_scores.max_logit import max_logit_score_fun
 
@@ -83,7 +83,8 @@ parser.add_argument("--verbose", action="store_true", required=False, default=Fa
 parser.add_argument("--cache_dir", type=str, default=None, help="If set, save newly computed elements to this directory")
 parser.add_argument("--load_ggn_vector_product", action="store_true", required=False, default=False, help="Load GGN vector product from cache instead of computing")
 parser.add_argument("--load_sketch_op", action="store_true", required=False, default=False, help="Load sketch operator from cache (requires --load_ggn_vector_product)")
-parser.add_argument("--load_eigenpairs", action="store_true", required=False, default=False, help="Load eigenvectors/eigenvalues from cache (requires --load_ggn_vector_product and --load_sketch_op)") 
+parser.add_argument("--load_eigenpairs", action="store_true", required=False, default=False, help="Load eigenvectors/eigenvalues from cache (requires --load_ggn_vector_product and --load_sketch_op)")
+parser.add_argument("--load_score_functions", action="store_true", required=False, default=False, help="Load all score functions from cache, skipping entire building phase") 
 
 
 
@@ -221,86 +222,124 @@ if __name__ == "__main__":
         else:
             args_dict["sketch_padding"] = get_optimal_padding(compute_num_params(params_dict['params']))
             print(f"No sketch_padding value given. Computed the optimal one: {args_dict['sketch_padding']}")
-        
 
-    if args.score == "max_logit":
-        score_fun = max_logit_score_fun(model, params_dict)
-        eigenval = []
-    elif args.score == "ensemble":
-        params_dicts_list = [params_dict]
-        for i in range(args.model_seed + 1, args.model_seed + args.ensemble_size):
-            _, params_dict , _= pretrained_model_from_string(
-                dataset_name = args.ID_dataset,
-                model_name = args.model,
-                run_name = args.run_name,
-                seed = i,
-                n_samples = args.n_samples,
-                save_path = args.model_save_path
+
+    # Try to load score functions from cache if requested
+    load_score_functions = args_dict.get('load_score_functions', False)
+    score_fun_loaded = False
+
+    if load_score_functions and args_dict.get('cache_dir'):
+        try:
+            print("Loading score functions from cache...")
+            # Get the cache base key (need trainset_size and n_params)
+            trainset_size = int(0.9 * args_dict["subsample_trainset"]) if args_dict.get("subsample_trainset") else None
+            n_params = compute_num_params(params_dict["params"])
+            base_key = _get_cache_base_key(args_dict, trainset_size, n_params)
+
+            score_fun, eigenval, approx_quadratic_form, quadratic_form = _load_score_functions(
+                args_dict['cache_dir'], base_key
             )
-            params_dicts_list.append(params_dict)
-        score_fun = ensemble_score_fun(model, params_dicts_list)
-        eigenval = []
-        approx_quadratic_form, quadratic_form = None, None
-    elif args.score == "projected_ensemble":
-        score_fun, quadratic_form, approx_quadratic_form = projected_ensemble_score_fun(model, params_dict, train_loader, args_dict)
-        eigenval = []
-    elif args.score == "diagonal_lla":
-        score_fun, quadratic_form, approx_quadratic_form = diagonal_lla_score_fun(model, params_dict, train_loader, args_dict)
-        eigenval = []
-    elif args.score == "scod":
-        args_dict['use_eigenvals'] = True
-        score_fun, eigenval, approx_quadratic_form = scod_score_fun(model, params_dict, train_loader, args_dict, use_eigenvals=True)
-        # score_fun and approx_quadratic_form are functions!
-        quadratic_form = None
-    elif args.score == "swag":
-        score_fun, _, _ = swag_score_fun(
-            model, params_dict, train_loader, args_dict,
-            diag_only = args_dict['swag_diag_only'], 
-            max_num_models = args_dict['swag_n_vec'], 
-            swa_c_epochs = None, swa_c_batches = args_dict['swag_collect_interval'],
-            swa_lr = args_dict['swag_lr'], 
-            momentum = args_dict['swag_momentum'], 
-            wd=0.0 #1e-6
-        )
-        eigenval = []
-        approx_quadratic_form, quadratic_form = None, None
-    else:
-        print("else mode")
-        if args_dict['lanczos_hm_iter']==0: # typo here?? or hm = 0 means lm mode ??
-            # low memory lanczos methods
-            # corrsponding to sketched_local_ensemble
-            print("low memory lanczos methods") # smart_lla
-            score_fun, eigenval, approx_quadratic_form, quadratic_form = low_memory_lanczos_score_fun(
-                model, 
-                params_dict, 
-                train_loader, 
-                args_dict, 
-                use_eigenvals = args_dict['use_eigenvals']
+            score_fun_loaded = True
+            print("Successfully loaded score functions from cache - skipping building phase!")
+        except FileNotFoundError as e:
+            print(f"Failed to load score functions: {e}")
+            print("Computing score functions from scratch...")
+            score_fun_loaded = False
+        except Exception as e:
+            print(f"Error loading score functions: {e}")
+            print("Computing score functions from scratch...")
+            score_fun_loaded = False
+
+    if not score_fun_loaded:
+        # Build score functions from scratch
+        if args.score == "max_logit":
+            score_fun = max_logit_score_fun(model, params_dict)
+            eigenval = []
+        elif args.score == "ensemble":
+            params_dicts_list = [params_dict]
+            for i in range(args.model_seed + 1, args.model_seed + args.ensemble_size):
+                _, params_dict , _= pretrained_model_from_string(
+                    dataset_name = args.ID_dataset,
+                    model_name = args.model,
+                    run_name = args.run_name,
+                    seed = i,
+                    n_samples = args.n_samples,
+                    save_path = args.model_save_path
+                )
+                params_dicts_list.append(params_dict)
+            score_fun = ensemble_score_fun(model, params_dicts_list)
+            eigenval = []
+            approx_quadratic_form, quadratic_form = None, None
+        elif args.score == "projected_ensemble":
+            score_fun, quadratic_form, approx_quadratic_form = projected_ensemble_score_fun(model, params_dict, train_loader, args_dict)
+            eigenval = []
+        elif args.score == "diagonal_lla":
+            score_fun, quadratic_form, approx_quadratic_form = diagonal_lla_score_fun(model, params_dict, train_loader, args_dict)
+            eigenval = []
+        elif args.score == "scod":
+            args_dict['use_eigenvals'] = True
+            score_fun, eigenval, approx_quadratic_form = scod_score_fun(model, params_dict, train_loader, args_dict, use_eigenvals=True)
+            # score_fun and approx_quadratic_form are functions!
+            quadratic_form = None
+        elif args.score == "swag":
+            score_fun, _, _ = swag_score_fun(
+                model, params_dict, train_loader, args_dict,
+                diag_only = args_dict['swag_diag_only'],
+                max_num_models = args_dict['swag_n_vec'],
+                swa_c_epochs = None, swa_c_batches = args_dict['swag_collect_interval'],
+                swa_lr = args_dict['swag_lr'],
+                momentum = args_dict['swag_momentum'],
+                wd=0.0 #1e-6
             )
+            eigenval = []
+            approx_quadratic_form, quadratic_form = None, None
         else:
-            # high memory lanczos methods
-            print("high memory lanczos methods")
-            
-            if args_dict['lanczos_lm_iter']==0:
-                # corrspond to "local_ensemble", "low_rank_lla", but seems both lanczos_lm_iter=0
-                # standard high memory lanczos
-                print("high_memory_lanczos_score_fun")
-                score_fun, eigenval, approx_quadratic_form, quadratic_form = high_memory_lanczos_score_fun(
-                    model, 
-                    params_dict, 
-                    train_loader, 
-                    args_dict, 
+            print("else mode")
+            if args_dict['lanczos_hm_iter']==0: # typo here?? or hm = 0 means lm mode ??
+                # low memory lanczos methods
+                # corrsponding to sketched_local_ensemble
+                print("low memory lanczos methods") # smart_lla
+                score_fun, eigenval, approx_quadratic_form, quadratic_form = low_memory_lanczos_score_fun(
+                    model,
+                    params_dict,
+                    train_loader,
+                    args_dict,
                     use_eigenvals = args_dict['use_eigenvals']
                 )
             else:
-                # high memory lanczos is used as preconditioner to smart low memory lanczos
-                score_fun, eigenval, approx_quadratic_form, quadratic_form = smart_lanczos_score_fun(
-                    model, 
-                    params_dict, 
-                    train_loader, 
-                    args_dict, 
-                    use_eigenvals = args_dict['use_eigenvals']
-                )
+                # high memory lanczos methods
+                print("high memory lanczos methods")
+
+                if args_dict['lanczos_lm_iter']==0:
+                    # corrspond to "local_ensemble", "low_rank_lla", but seems both lanczos_lm_iter=0
+                    # standard high memory lanczos
+                    print("high_memory_lanczos_score_fun")
+                    score_fun, eigenval, approx_quadratic_form, quadratic_form = high_memory_lanczos_score_fun(
+                        model,
+                        params_dict,
+                        train_loader,
+                        args_dict,
+                        use_eigenvals = args_dict['use_eigenvals']
+                    )
+                else:
+                    # high memory lanczos is used as preconditioner to smart low memory lanczos
+                    score_fun, eigenval, approx_quadratic_form, quadratic_form = smart_lanczos_score_fun(
+                        model,
+                        params_dict,
+                        train_loader,
+                        args_dict,
+                        use_eigenvals = args_dict['use_eigenvals']
+                    )
+
+        # Save score functions if cache_dir is specified and we just computed them
+        if args_dict.get('cache_dir') and not score_fun_loaded:
+            try:
+                trainset_size = int(0.9 * args_dict["subsample_trainset"]) if args_dict.get("subsample_trainset") else None
+                n_params = compute_num_params(params_dict["params"])
+                base_key = _get_cache_base_key(args_dict, trainset_size, n_params)
+                _save_score_functions(args_dict['cache_dir'], base_key, score_fun, eigenval, approx_quadratic_form, quadratic_form, args_dict)
+            except Exception as e:
+                print(f"Warning: Failed to save score functions to cache: {e}")
     if args.verbose:
         print(f"Eigenvalues: {eigenval}")
 

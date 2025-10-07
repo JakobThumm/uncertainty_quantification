@@ -140,6 +140,47 @@ def _load_eigenpairs(cache_dir, base_key):
     return cache_data['eigenvec'], cache_data['eigenval']
 
 
+def _save_score_functions(cache_dir, base_key, score_fun, eigenval, approx_quadratic_form, quadratic_form, args_dict):
+    """Save score functions and eigenvalues"""
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f"{base_key}_score_functions.cloudpickle")
+
+    cache_data = {
+        'score_fun': score_fun,
+        'eigenval': eigenval,
+        'approx_quadratic_form': approx_quadratic_form,
+        'quadratic_form': quadratic_form,
+        'lanczos_lm_iter': args_dict['lanczos_lm_iter'],
+        'lanczos_hm_iter': args_dict.get('lanczos_hm_iter', 0),
+        'use_eigenvals': args_dict.get('use_eigenvals', False),
+        'prior_std': args_dict.get('prior_std', 0.1),
+    }
+
+    with open(cache_path, 'wb') as f:
+        cloudpickle.dump(cache_data, f)
+
+    print(f"Saved score functions to {cache_path}")
+
+
+def _load_score_functions(cache_dir, base_key):
+    """Load score functions and eigenvalues from cache"""
+    cache_path = os.path.join(cache_dir, f"{base_key}_score_functions.cloudpickle")
+
+    if not os.path.exists(cache_path):
+        raise FileNotFoundError(f"Score functions cache file not found: {cache_path}")
+
+    with open(cache_path, 'rb') as f:
+        cache_data = cloudpickle.load(f)
+
+    print(f"Loaded score functions from {cache_path}")
+    return (
+        cache_data['score_fun'],
+        cache_data['eigenval'],
+        cache_data['approx_quadratic_form'],
+        cache_data['quadratic_form']
+    )
+
+
 def low_memory_lanczos_score_fun(
         model,
         params_dict,
