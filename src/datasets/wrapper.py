@@ -168,9 +168,10 @@ def dataloader_from_string(
     elif dataset_name == "H36M":
         train_loader, valid_loader, test_loader = get_h36m_preprocessed(
             preprocessed_dir = os.path.join(data_path, "H36M", "pre_processed"),
-            batch_size = batch_size, 
+            batch_size = batch_size,
             shuffle = shuffle,
-            seed = seed
+            seed = seed,
+            n_samples = n_samples
         )
     elif dataset_name == "MNIST":
         classes = list(range(10))
@@ -387,10 +388,11 @@ def dataloader_from_string(
         )
     elif dataset_name == "tiger-pose":
         train_loader, valid_loader, test_loader = get_tiger_pose_preprocessed(
+            preprocessed_dir = os.path.join(data_path, "tiger-pose", "preprocessed"),
             batch_size = batch_size,
             shuffle = shuffle,
             seed = seed,
-            preprocessed_dir = os.path.join(data_path, "tiger-pose", "preprocessed")
+            n_samples = n_samples
         )
     else:
         raise ValueError(f"Dataset {dataset_name} is not implemented")

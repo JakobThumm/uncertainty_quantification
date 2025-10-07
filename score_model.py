@@ -30,6 +30,7 @@ parser.add_argument("--ID_dataset", type=str, choices=["Sinusoidal", "H36M", "UC
 parser.add_argument('--OOD_datasets', nargs='+', help='List of OOD datasets to score')
 parser.add_argument("--n_samples", default=None, type=int, help="Number of datapoint used for training. None means all")
 parser.add_argument("--subsample_trainset", default=None, type=int, help="Subsampling of the train datasets used to compute scores")
+parser.add_argument("--subsample_testset", default=None, type=int, help="Subsampling of the train datasets used to compute scores")
 parser.add_argument("--train_batch_size", default=64, type=int)
 parser.add_argument("--test_batch_size", default=256, type=int)
 parser.add_argument("--serialize_ggn_on_batches", action="store_true", required=False, default=False)
@@ -100,7 +101,7 @@ if __name__ == "__main__":
 
     ################
     ### datasets ###
-    train_loader, _, _ = dataloader_from_string(
+    train_loader, _, ID_loader = dataloader_from_string(
         args.ID_dataset,
         n_samples = args.subsample_trainset,
         batch_size = args.train_batch_size,
@@ -109,15 +110,15 @@ if __name__ == "__main__":
         download = False,
         data_path = args.data_path
     )
-    _, _, ID_loader = dataloader_from_string(
-        args.ID_dataset,
-        n_samples = None,
-        batch_size = args.test_batch_size,
-        shuffle = False,
-        seed = args.model_seed,
-        download = False, # False
-        data_path = args.data_path
-    )
+    # _, _, ID_loader = dataloader_from_string(
+    #     args.ID_dataset,
+    #     n_samples = args.subsample_testset,
+    #     batch_size = args.test_batch_size,
+    #     shuffle = False,
+    #     seed = args.model_seed,
+    #     download = False, # False
+    #     data_path = args.data_path
+    # )
     print(f"Got IN-distribution dataset {args.ID_dataset} with {len(train_loader.dataset)} train data and {len(ID_loader.dataset)} test data")
 
     if "MNIST-R" in args.OOD_datasets:
@@ -147,9 +148,9 @@ if __name__ == "__main__":
             batch_size = args.test_batch_size,
             shuffle = False,
             seed = 0,
-            download = True,
+            download = False,
             data_path = args.data_path,
-        )[2] for OOD_dataset in args_dict["OOD_datasets"]
+        )[0] for OOD_dataset in args_dict["OOD_datasets"]  # was [2] <- test dataset. Changed to [0] to get train dataset for tiger pose
         ]
     for d, loader in zip(args_dict["OOD_datasets"], OOD_loaders):
         print(f"Got OUT-of-distribution dataset {d} with {len(loader.dataset)} test data")
