@@ -52,11 +52,11 @@ python score_model.py --ID_dataset CelebA --OOD_dataset FOOD101 CelebA-Mustache 
 python score_model.py --ID_dataset ImageNet --OOD_datasets SVHN-256 FOOD101-256 ImageNet-classout --model VAN_large --subsample_trainset 100000 --lanczos_hm_iter 0 --lanczos_lm_iter 10 --test_batch_size 8 --train_batch_size 32 --serialize_ggn_on_batches --sketch srft --sketch_size 10000000
 ```
 
-### Human Pose Estimation
+# Human Pose Estimation
 
 The repository includes a human pose estimation pipeline for uncertainty quantification on pose prediction tasks.
 
-#### Data Preprocessing
+## Data Preprocessing
 
 Preprocess the H36M dataset for pose estimation:
 Performs the following steps:
@@ -85,7 +85,7 @@ python human_pose_pipeline/pose_estimation/preprocess_h36m_bbox_gpu.py \
     --device cuda
 ```
 
-#### Running Pose Estimation from Full Images
+## Running Pose Estimation
 
 **2D Pose Estimation:**
 Performs the following steps:
@@ -141,7 +141,7 @@ Evaluate the ID vs. OOD performance by executing the following steps:
 python human_pose_pipeline/examples/id_vs_ood_pose_prediction.py
 ```
 
-#### Debugging and Visualization
+## Debugging and Visualization
 
 **Debug single 2D pose:**
 The 2D Pose Estimation just with a single image and visualization.
@@ -164,6 +164,13 @@ python human_pose_pipeline/examples/debug_preprocessed_pose.py \
 The 3D Pose Estimation just with a single image and visualization.
 ```bash
 python human_pose_pipeline/examples/debug_3d_pose_visualization.py
+```
+
+## OOD Detection Pose Prediction
+
+**Run the Score Model Function on Pose Estimation**
+```
+python score_model.py --ID_dataset H36M --OOD_dataset tiger-pose --data_path datasets/ --model_save_path models_tianle --model RegressFlow --run_name finetuned_h36m_regressflow_pred --subsample_trainset 10000 --lanczos_hm_iter 0 --lanczos_lm_iter 10 --test_batch_size 8 --train_batch_size 32 --serialize_ggn_on_batches --sketch srft --sketch_size 100000
 ```
 
 # Known Issues

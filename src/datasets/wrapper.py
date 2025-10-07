@@ -1,4 +1,5 @@
 import torch
+import os
 
 from src.datasets.sinusoidal import Sinusoidal, get_sinusoidal
 from src.datasets.mnist import MNIST, get_mnist, get_rotated_mnist
@@ -11,7 +12,7 @@ from src.datasets.svhn import SVHN, get_svhn, get_svhn_augmented, get_svhn_scale
 from src.datasets.food101 import FOOD101, get_food101_scaled
 from src.datasets.celeba import CelebA, get_celeba, get_celeba_augmented, get_celeba_ood
 from src.datasets.imagenet import get_imagenet_id, get_imagenet_ood
-from src.datasets.h36m import * # TODO
+from src.datasets.h36m_preprocessed import get_h36m_preprocessed
 from src.datasets.tiger_pose import get_tiger_pose
 from src.datasets.utils import get_subset_loader
 
@@ -165,13 +166,11 @@ def dataloader_from_string(
             data_path = data_path
         )
     elif dataset_name == "H36M":
-        # TODO: change to h36m
-        train_loader, valid_loader, test_loader = get_h36m(
+        train_loader, valid_loader, test_loader = get_h36m_preprocessed(
+            preprocessed_dir = os.path.join(data_path, "H36M", "pre_processed"),
             batch_size = batch_size, 
             shuffle = shuffle,
-            seed = seed,
-            download = False, 
-            #data_path = data_path
+            seed = seed
         )
     elif dataset_name == "MNIST":
         classes = list(range(10))

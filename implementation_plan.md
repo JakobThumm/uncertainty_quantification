@@ -51,6 +51,7 @@ We have two things:
       - [x] Write an example script that predicts the poses for the ID data (h36m) and OOD data (tiger-pose) (similar to pose_estimation_2D.py) without uncertainty and compares the ID vs. OOD performance.
       - [x] Add tiger image transformation to the script
       - [x] Write a tiger dataset preprocessing
+      - [ ] Test the OOD detection with the score_model.py script and save the GNN matrix
       - [ ] Write a script that works with the preprocessed data instead of the full images.
       - [ ] Test score model function on regressflow model with low_memory_lanczos_score_fun
       - [ ] Test with --OOD_dataset tiger-pose

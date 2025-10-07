@@ -98,7 +98,7 @@ if __name__ == "__main__":
         batch_size = args.train_batch_size,
         shuffle = False,
         seed = args.model_seed,
-        download = True,
+        download = False,
         data_path = args.data_path
     )
     _, _, ID_loader = dataloader_from_string(
@@ -107,7 +107,7 @@ if __name__ == "__main__":
         batch_size = args.test_batch_size,
         shuffle = False,
         seed = args.model_seed,
-        download = True, # False
+        download = False, # False
         data_path = args.data_path
     )
     print(f"Got IN-distribution dataset {args.ID_dataset} with {len(train_loader.dataset)} train data and {len(ID_loader.dataset)} test data")

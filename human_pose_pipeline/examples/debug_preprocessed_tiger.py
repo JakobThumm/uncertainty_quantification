@@ -18,6 +18,7 @@ import json
 import pickle
 
 from src.models.wrapper import model_from_string
+from src.datasets.tiger_pose import TigerPosePreprocessedDataset
 from human_pose_pipeline.utils.transform_utils import denormalize_image_regressflow
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
@@ -260,38 +261,35 @@ def main():
     print("\nLoading model...")
     model, params, batch_stats = load_model(args.checkpoint)
 
-    # Load preprocessed data
+    # Load preprocessed data using the dataset class
     print(f"\nLoading preprocessed {args.split} data...")
-    images_path = os.path.join(args.preprocessed_dir, args.split, 'PreprocessedImages', f'tiger_pose_{args.split}.npy')
-    poses_path = os.path.join(args.preprocessed_dir, args.split, 'PreprocessedPoses', f'tiger_pose_{args.split}.npz')
+    dataset = TigerPosePreprocessedDataset(
+        preprocessed_dir=args.preprocessed_dir,
+        split=args.split,
+        return_metadata=True,
+        jax_format=False
+    )
 
-    if not os.path.exists(images_path):
-        raise FileNotFoundError(f"Preprocessed images not found: {images_path}")
-    if not os.path.exists(poses_path):
-        raise FileNotFoundError(f"Preprocessed poses not found: {poses_path}")
-
-    images = np.load(images_path)  # (N, 3, 256, 192)
-    poses_data = np.load(poses_path)
-
-    poses_normalized = poses_data['poses_normalized']  # (N, 13, 2)
-    poses_pixel = poses_data['poses_pixel']  # (N, 13, 2)
-    valid_keypoints = poses_data['valid_keypoints']  # (N, 13)
-
-    print(f"Loaded {len(images)} samples")
-    print(f"  Images shape: {images.shape}")
-    print(f"  Poses normalized shape: {poses_normalized.shape}")
-    print(f"  Poses pixel shape: {poses_pixel.shape}")
+    print(f"Loaded {len(dataset)} samples")
 
     # Get sample
     sample_idx = args.sample_idx
-    if sample_idx >= len(images):
-        print(f"Warning: sample_idx {sample_idx} >= dataset size {len(images)}, using sample 0")
+    if sample_idx >= len(dataset):
+        print(f"Warning: sample_idx {sample_idx} >= dataset size {len(dataset)}, using sample 0")
         sample_idx = 0
 
-    image = images[sample_idx]  # (3, 256, 192)
-    pose_norm = poses_normalized[sample_idx]  # (13, 2)
-    pose_pix = poses_pixel[sample_idx]  # (13, 2)
-    valid_mask = valid_keypoints[sample_idx]  # (13,)
+    # Load sample with metadata
+    image, _, metadata = dataset[sample_idx]
+
+    # Convert tensor to numpy if needed
+    if hasattr(image, 'numpy'):
+        image = image.numpy()
+    else:
+        image = np.array(image)
+
+    # Extract pose data from metadata
+    pose_pix = np.array(metadata['pose_pixel'])  # (13, 2)
+    valid_mask = np.array(metadata['valid_keypoints'])  # (13,)
 
     print(f"\nProcessing sample {sample_idx}:")
     print(f"  Image shape: {image.shape}")
