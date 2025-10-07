@@ -4,6 +4,7 @@ import scipy
 from scipy import linalg
 from functools import partial
 from matfree import decomp
+from tqdm import tqdm
 
 ######################
 # low memory lanczos #
@@ -68,6 +69,21 @@ def low_memory_lanczos_to_tridiag(key, mv_prod, dim, n_iter):
     return skvs, alphas, betas
 
 
+@partial(jax.jit, static_argnames=['mv_prod', 'sketch_op'])
+def lanczos_step_jit(i, state, mv_prod, sketch_op):
+    (w, betas, skvs, alphas, v_old) = state
+    b = jnp.linalg.norm(w)
+    betas = betas.at[i - 1].set(b)
+    v_new = w / b
+    skvs = skvs.at[i].set(sketch_op @ v_new)
+    wp = mv_prod(v_new)
+    a = jnp.dot(wp, v_new)
+    alphas = alphas.at[i].set(a)
+    w = wp - a * v_new - b * v_old
+    v_old = v_new
+    return (w, betas, skvs, alphas, v_old)
+
+
 #@partial(jax.jit, static_argnames=['mv_prod', 'dim', 'n_iter', 'sketch_op'])
 def low_memory_lanczos_to_tridiag_sketch(key, mv_prod, dim, n_iter, sketch_op):
     v_old = jax.random.normal(key, shape=(dim, ))
@@ -85,24 +101,10 @@ def low_memory_lanczos_to_tridiag_sketch(key, mv_prod, dim, n_iter, sketch_op):
     w = wp - a * v_old
     alphas = alphas.at[0].set(a)
 
-    #jax.jit
-    def lanczos_step(i, state):
-        (w, betas, skvs, alphas, v_old) = state
-        b = jnp.linalg.norm(w)
-        betas = betas.at[i - 1].set(b)
-        v_new = w / b
-        skvs = skvs.at[i].set(sketch_op @ v_new)
-        wp = mv_prod(v_new)
-        a = jnp.dot(wp, v_new)
-        alphas = alphas.at[i].set(a)
-        w = wp - a * v_new - b * v_old
-        v_old = v_new
-        return (w, betas, skvs, alphas, v_old)
-
     state = (w, betas, skvs, alphas, v_old)
-    state = jax.lax.fori_loop(1, n_iter, lanczos_step, state)
+    for i in tqdm(range(1, n_iter), desc="Lanczos iterations"):
+        state = lanczos_step_jit(i, state, mv_prod, sketch_op)
     (w, betas, skvs, alphas, v_old) = state
-
     return skvs, alphas, betas
 
 

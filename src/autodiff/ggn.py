@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import flax
 import functools
 from jax import flatten_util
+from jax import make_jaxpr
 from tqdm import tqdm
 
 import time
@@ -127,7 +128,6 @@ def get_ggn_vector_product_dataloader(
     ggn_vector_product_batch(x_init, jnp.ones_like(flatten_param))
     print(f"Aaand again...... it took {time.time()-start} seconds")
 
-    
     def ggn_vector_product_dataloader(v):
         """
         The loop in this function will never be jitted,
@@ -138,15 +138,16 @@ def get_ggn_vector_product_dataloader(
         for batch in tqdm(dataloader, desc="Computing GGN vp over dataloader"):
             #print("batch")
             X = jnp.asarray(batch[0].numpy())
-            #start = time.time()
+            # start = time.time()
             result_batch = ggn_vector_product_batch(X, v)
+            # print(X.shape, X.dtype)
             result += result_batch
-            #print(f".... inside the loop it took {time.time()-start} seconds")
+            # print(f".... inside the loop it took {time.time()-start} seconds")
         return result
     
-    result_shape = jax.ShapeDtypeStruct(flatten_param.shape, flatten_param.dtype)
-    def ggn_vector_product(v):
-        return jax.pure_callback(ggn_vector_product_dataloader, result_shape, v)
+    # result_shape = jax.ShapeDtypeStruct(flatten_param.shape, flatten_param.dtype)
+    # def ggn_vector_product(v):
+    #     return jax.pure_callback(ggn_vector_product_dataloader, result_shape, v)
 
-    #return ggn_vector_product_dataloader  
-    return jax.jit(ggn_vector_product)  
+    return ggn_vector_product_dataloader
+    # return jax.jit(ggn_vector_product)

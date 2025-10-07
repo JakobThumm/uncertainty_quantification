@@ -7,6 +7,7 @@ import argparse
 import datetime
 import jax.numpy as jnp
 import time
+from tqdm import tqdm
 
 from src.models import pretrained_model_from_string, compute_num_params, compute_norm_params
 from src.datasets import dataloader_from_string, get_output_dim
@@ -321,7 +322,7 @@ if __name__ == "__main__":
             scores_dict[f"{distribution}_QF"] = []
             scores_dict[f"{distribution}_QFapprox"] = []
 
-        for batch in loader:
+        for batch in tqdm(loader, desc=f"Computing {distribution} scores"):
             #if done > 200:
             #    break
             X = jnp.array(batch[0].numpy())

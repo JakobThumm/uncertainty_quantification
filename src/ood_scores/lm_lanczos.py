@@ -206,7 +206,8 @@ def low_memory_lanczos_score_fun(
             train_loader = get_subset_loader(
                 train_loader,
                 trainset_size,
-                batch_size = args_dict["train_batch_size"]
+                batch_size = args_dict["train_batch_size"],
+                drop_last = True  # Critical: ensure all batches have same size to avoid JIT recompilation
             )
             # get matrix vector product fun
             if not args_dict["use_hessian"]:
@@ -246,6 +247,7 @@ def low_memory_lanczos_score_fun(
             load_sketch = False
 
     if not load_sketch:
+        print("Creating sketch operator...")
         # Create sketch operator
         key_sketch = jax.random.PRNGKey(args_dict["sketch_seed"])
         if args_dict["sketch"] is None:
@@ -262,7 +264,7 @@ def low_memory_lanczos_score_fun(
         # Save sketch if cache_dir is specified
         if cache_dir:
             _save_sketch_op(cache_dir, base_key, sketch_op, args_dict, n_params)
-
+        print("Successfully created sketch operator.")
     # ========== Eigenpairs (Lanczos + PCA) ==========
     if load_eigenpairs:
         try:
@@ -278,6 +280,7 @@ def low_memory_lanczos_score_fun(
             load_eigenpairs = False
 
     if not load_eigenpairs:
+        print("Computing eigenpairs using Lanczos...")
         # Perform Lanczos and find eigenval/eigenvec pairs
         start = time.time()
         key_lanczos = jax.random.PRNGKey(args_dict["lanczos_seed"])
