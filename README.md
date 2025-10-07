@@ -169,9 +169,55 @@ python human_pose_pipeline/examples/debug_3d_pose_visualization.py
 ## OOD Detection Pose Prediction
 
 **Run the Score Model Function on Pose Estimation**
+```bash
+python score_model.py --ID_dataset H36M --OOD_dataset tiger-pose --data_path datasets/ --model_save_path models_tianle --model RegressFlow --run_name finetuned_h36m_regressflow_pred --subsample_trainset 10000 --lanczos_hm_iter 0 --lanczos_lm_iter 10 --test_batch_size 128 --train_batch_size 128 --serialize_ggn_on_batches --sketch srft --sketch_size 100000
 ```
-python score_model.py --ID_dataset H36M --OOD_dataset tiger-pose --data_path datasets/ --model_save_path models_tianle --model RegressFlow --run_name finetuned_h36m_regressflow_pred --subsample_trainset 10000 --lanczos_hm_iter 0 --lanczos_lm_iter 10 --test_batch_size 8 --train_batch_size 32 --serialize_ggn_on_batches --sketch srft --sketch_size 100000
+
+### Caching Intermediate Computations
+
+The Lanczos algorithm involves several expensive computations (20+ minutes for large models). You can cache intermediate results at different stages to speed up parameter tuning:
+
+**Granular Caching Levels:**
+
+1. **GGN Vector Product** (~20 min JIT compilation)
+2. **Sketch Operator** (fast, but needs to match GGN)
+3. **Eigenpairs** (expensive Lanczos iterations)
+
+**First run - compute everything and save to cache:**
+```bash
+python score_model.py --ID_dataset H36M --OOD_dataset tiger-pose \
+  --data_path datasets/ --model_save_path models_tianle \
+  --model RegressFlow --run_name finetuned_h36m_regressflow_pred \
+  --subsample_trainset 10000 --lanczos_hm_iter 0 --lanczos_lm_iter 81 \
+  --test_batch_size 256 --train_batch_size 256 --serialize_ggn_on_batches \
+  --sketch srft --sketch_size 10000 \
+  --cache_dir cache
 ```
+
+**Load GGN only** (skip ~20 min JIT compilation):
+```bash
+python score_model.py [same args as above] \
+  --cache_dir cache --load_ggn_vector_product
+```
+
+**Load GGN + Sketch** (skip GGN + sketch creation):
+```bash
+python score_model.py [same args as above] \
+  --cache_dir cache --load_ggn_vector_product --load_sketch_op
+```
+
+**Load everything** (skip GGN + sketch + Lanczos, fastest!):
+```bash
+python score_model.py [same args as above] \
+  --cache_dir cache --load_ggn_vector_product --load_sketch_op --load_eigenpairs
+```
+
+**Notes:**
+- `--cache_dir DIR`: If set, automatically saves newly computed elements to DIR
+- Loading has dependencies: sketch requires GGN, eigenpairs requires both
+- Cache files are named based on dataset, model, run_name, and key parameters
+- Cache files use `.cloudpickle` extension
+- Separate files for each stage: `*_ggn.cloudpickle`, `*_sketch.cloudpickle`, `*_eigenpairs.cloudpickle`
 
 # Known Issues
 

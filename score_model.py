@@ -76,7 +76,13 @@ parser.add_argument("--n_epochs_projected_ensemble", default=1, type=int, help="
 parser.add_argument("--use_proj_loss", action="store_true", required=False, default=False)
 
 # print more stuff
-parser.add_argument("--verbose", action="store_true", required=False, default=False) 
+parser.add_argument("--verbose", action="store_true", required=False, default=False)
+
+# caching intermediate computations
+parser.add_argument("--cache_dir", type=str, default=None, help="If set, save newly computed elements to this directory")
+parser.add_argument("--load_ggn_vector_product", action="store_true", required=False, default=False, help="Load GGN vector product from cache instead of computing")
+parser.add_argument("--load_sketch_op", action="store_true", required=False, default=False, help="Load sketch operator from cache (requires --load_ggn_vector_product)")
+parser.add_argument("--load_eigenpairs", action="store_true", required=False, default=False, help="Load eigenvectors/eigenvalues from cache (requires --load_ggn_vector_product and --load_sketch_op)") 
 
 
 

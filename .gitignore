@@ -39,4 +39,4 @@ datasets/
 *.code-workspace
 
 runs/
-yolo*.pt
+yolo*.ptcache/

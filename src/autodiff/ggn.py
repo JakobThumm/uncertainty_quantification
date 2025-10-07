@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import flax
 import functools
 from jax import flatten_util
+from tqdm import tqdm
 
 import time
 
@@ -134,7 +135,7 @@ def get_ggn_vector_product_dataloader(
         file system access etc.
         """
         result = jnp.zeros_like(v)
-        for batch in dataloader:
+        for batch in tqdm(dataloader, desc="Computing GGN vp over dataloader"):
             #print("batch")
             X = jnp.asarray(batch[0].numpy())
             #start = time.time()
