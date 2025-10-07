@@ -224,14 +224,15 @@ if __name__ == "__main__":
             print(f"No sketch_padding value given. Computed the optimal one: {args_dict['sketch_padding']}")
 
 
-    # Try to load score functions from cache if requested
-    load_score_functions = args_dict.get('load_score_functions', False)
-    score_fun_loaded = False
+    # Helper function to try loading score functions from cache
+    def try_load_score_functions():
+        """Try to load score functions from cache, return (success, score_fun, eigenval, approx_qf, qf)"""
+        load_score_functions = args_dict.get('load_score_functions', False)
+        if not (load_score_functions and args_dict.get('cache_dir')):
+            return False, None, None, None, None
 
-    if load_score_functions and args_dict.get('cache_dir'):
         try:
             print("Loading score functions from cache...")
-            # Get the cache base key (need trainset_size and n_params)
             trainset_size = int(0.9 * args_dict["subsample_trainset"]) if args_dict.get("subsample_trainset") else None
             n_params = compute_num_params(params_dict["params"])
             base_key = _get_cache_base_key(args_dict, trainset_size, n_params)
@@ -239,16 +240,18 @@ if __name__ == "__main__":
             score_fun, eigenval, approx_quadratic_form, quadratic_form = _load_score_functions(
                 args_dict['cache_dir'], base_key
             )
-            score_fun_loaded = True
             print("Successfully loaded score functions from cache - skipping building phase!")
+            return True, score_fun, eigenval, approx_quadratic_form, quadratic_form
         except FileNotFoundError as e:
             print(f"Failed to load score functions: {e}")
             print("Computing score functions from scratch...")
-            score_fun_loaded = False
+            return False, None, None, None, None
         except Exception as e:
             print(f"Error loading score functions: {e}")
             print("Computing score functions from scratch...")
-            score_fun_loaded = False
+            return False, None, None, None, None
+
+    score_fun_loaded, score_fun, eigenval, approx_quadratic_form, quadratic_form = try_load_score_functions()
 
     if not score_fun_loaded:
         # Build score functions from scratch
@@ -332,7 +335,11 @@ if __name__ == "__main__":
                     )
 
         # Save score functions if cache_dir is specified and we just computed them
-        if args_dict.get('cache_dir') and not score_fun_loaded:
+        def save_score_functions_if_enabled():
+            """Save score functions to cache if enabled"""
+            if not args_dict.get('cache_dir'):
+                return
+
             try:
                 trainset_size = int(0.9 * args_dict["subsample_trainset"]) if args_dict.get("subsample_trainset") else None
                 n_params = compute_num_params(params_dict["params"])
@@ -340,6 +347,8 @@ if __name__ == "__main__":
                 _save_score_functions(args_dict['cache_dir'], base_key, score_fun, eigenval, approx_quadratic_form, quadratic_form, args_dict)
             except Exception as e:
                 print(f"Warning: Failed to save score functions to cache: {e}")
+
+        save_score_functions_if_enabled()
     if args.verbose:
         print(f"Eigenvalues: {eigenval}")
 

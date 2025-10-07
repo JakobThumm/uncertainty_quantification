@@ -181,6 +181,144 @@ def _load_score_functions(cache_dir, base_key):
     )
 
 
+def _get_or_compute_ggn(params_dict, model, train_loader, args_dict, trainset_size, n_params, cache_dir, base_key):
+    """Get GGN vector product from cache or compute it"""
+    load_ggn = args_dict.get('load_ggn_vector_product', False)
+
+    if load_ggn:
+        try:
+            print("Loading GGN vector product from cache...")
+            ggn_vector_product = _load_ggn_vector_product(cache_dir, base_key)
+            print("Successfully loaded GGN vector product")
+            return ggn_vector_product
+        except FileNotFoundError as e:
+            print(f"Failed to load GGN: {e}")
+            print("Computing GGN vector product from scratch...")
+
+    # Compute GGN vector product
+    if not args_dict["serialize_ggn_on_batches"]:
+        data_array = jnp.asarray([train_loader.dataset[i][0] for i in range(trainset_size)])
+        if not args_dict["use_hessian"]:
+            ggn_vector_product = get_ggn_vector_product(
+                params_dict, model, data_array=data_array,
+                likelihood_type=args_dict["likelihood"]
+            )
+        else:
+            print("Using the Hessian instead of the GGN")
+            ggn_vector_product = get_hessian_vector_product(
+                params_dict, model,
+                data_array=(data_array, jnp.asarray([data[1] for data in train_loader.dataset])),
+                likelihood_type=args_dict["likelihood"]
+            )
+    else:
+        train_loader = get_subset_loader(
+            train_loader, trainset_size,
+            batch_size=args_dict["train_batch_size"],
+            drop_last=True
+        )
+        if not args_dict["use_hessian"]:
+            ggn_vector_product = get_ggn_vector_product_dataloader(
+                params_dict, model, train_loader,
+                likelihood_type=args_dict["likelihood"]
+            )
+        else:
+            print("Using the Hessian instead of the GGN")
+            ggn_vector_product = get_hessian_vector_product_dataloader(
+                params_dict, model, train_loader,
+                likelihood_type=args_dict["likelihood"]
+            )
+
+    # Warm up / JIT compile GGN
+    start = time.time()
+    ggn_vector_product(jax.random.normal(jax.random.PRNGKey(0), shape=(n_params,)))
+    print(f"One GGN vp took {time.time()-start} seconds")
+
+    # Save GGN if cache_dir is specified
+    if cache_dir:
+        _save_ggn_vector_product(cache_dir, base_key, ggn_vector_product, args_dict, trainset_size)
+
+    return ggn_vector_product
+
+
+def _get_or_compute_sketch(args_dict, n_params, cache_dir, base_key):
+    """Get sketch operator from cache or compute it"""
+    load_sketch = args_dict.get('load_sketch_op', False)
+
+    if load_sketch:
+        try:
+            print("Loading sketch operator from cache...")
+            sketch_op = _load_sketch_op(cache_dir, base_key)
+            print("Successfully loaded sketch operator")
+            return sketch_op
+        except FileNotFoundError as e:
+            print(f"Failed to load sketch: {e}")
+            print("Computing sketch operator from scratch...")
+
+    print("Creating sketch operator...")
+    key_sketch = jax.random.PRNGKey(args_dict["sketch_seed"])
+    if args_dict["sketch"] is None:
+        sketch_op = No_sketch()
+    elif args_dict["sketch"] == "srft":
+        print(f"Use srft sketch with num params {n_params} and padding {args_dict['sketch_padding']} --> fake num params = {args_dict['sketch_padding']+n_params} must NOT have prime factors >127 (thanks JAX fft)")
+        sketch_op = SRFT_sketch(key_sketch, n_params, args_dict['sketch_size'], padding=args_dict['sketch_padding'])
+    elif args_dict["sketch"] == "dense":
+        print(f"Use dense sketch with {'optimal' if args_dict['sketch_density'] is None else args_dict['sketch_density']} density")
+        sketch_op = Dense_sketch(key_sketch, n_params, args_dict['sketch_size'], density=args_dict['sketch_density'])
+    else:
+        raise ValueError(f"Sketch '{args_dict['sketch']}' not supported. Use either 'srtf', 'dense' or None.")
+
+    if cache_dir:
+        _save_sketch_op(cache_dir, base_key, sketch_op, args_dict, n_params)
+
+    print("Successfully created sketch operator.")
+    return sketch_op
+
+
+def _get_or_compute_eigenpairs(ggn_vector_product, sketch_op, args_dict, n_params, trainset_size, cache_dir, base_key):
+    """Get eigenpairs from cache or compute them via Lanczos"""
+    load_eigenpairs = args_dict.get('load_eigenpairs', False)
+
+    if load_eigenpairs:
+        try:
+            print("Loading eigenpairs from cache...")
+            eigenvec, eigenval = _load_eigenpairs(cache_dir, base_key)
+            eigenvec = jnp.asarray(eigenvec)
+            eigenval = jnp.asarray(eigenval)
+            print(f"Successfully loaded {len(eigenval)} eigenvalues")
+            print(f"  Eigenvals = {eigenval[:5]} ... {eigenval[-5:]}")
+            return eigenvec, eigenval
+        except FileNotFoundError as e:
+            print(f"Failed to load eigenpairs: {e}")
+            print("Computing eigenpairs from scratch...")
+
+    print("Computing eigenpairs using Lanczos...")
+    start = time.time()
+    key_lanczos = jax.random.PRNGKey(args_dict["lanczos_seed"])
+    eigenvec, eigenval = low_memory_lanczos(key_lanczos, ggn_vector_product, n_params, args_dict["lanczos_lm_iter"], sketch_op)
+    print(f"Lanczos {args_dict['lanczos_lm_iter']} iterations, dataset size {trainset_size}, with {n_params} params model -> took {time.time()-start:.3f} seconds")
+    print(f"returned {len(eigenval)} eigenvals = {eigenval[:5]} ... {eigenval[-5:]}")
+
+    # Orthogonalize and select the first (good) 'n_eigenvec' vectors
+    start = time.time()
+    print("Doing PCA...")
+    U, S, _ = np.linalg.svd(eigenvec @ jnp.diag(eigenval), full_matrices=False)
+    if args_dict['n_eigenvec_lm'] < len(S):
+        threshold = sorted(S, reverse=True)[args_dict['n_eigenvec_lm']]
+        eigenvec = U[:, S > threshold]
+        eigenval = S[S > threshold]
+    else:
+        eigenvec = U
+        eigenval = S
+    eigenvec = jnp.asarray(eigenvec)
+    eigenval = jnp.asarray(eigenval)
+    print(f"PCA took {time.time()-start:.3f} seconds")
+
+    if cache_dir:
+        _save_eigenpairs(cache_dir, base_key, eigenvec, eigenval, args_dict)
+
+    return eigenvec, eigenval
+
+
 def low_memory_lanczos_score_fun(
         model,
         params_dict,
@@ -188,18 +326,18 @@ def low_memory_lanczos_score_fun(
         args_dict,
         use_eigenvals : bool = True
     ):
-    # Setup caching parameters
-    cache_dir = args_dict.get('cache_dir')
+    # Validate cache dependencies
     load_ggn = args_dict.get('load_ggn_vector_product', False)
     load_sketch = args_dict.get('load_sketch_op', False)
     load_eigenpairs = args_dict.get('load_eigenpairs', False)
 
-    # Validate cache dependencies
     if load_sketch and not load_ggn:
         raise ValueError("--load_sketch_op requires --load_ggn_vector_product")
     if load_eigenpairs and not (load_ggn and load_sketch):
         raise ValueError("--load_eigenpairs requires both --load_ggn_vector_product and --load_sketch_op")
 
+    # Setup parameters
+    cache_dir = args_dict.get('cache_dir')
     trainset_size = int(0.9*args_dict["subsample_trainset"])
     n_params = compute_num_params(params_dict["params"])
     prior_scale = 1. / (2 * trainset_size * args_dict['prior_std']**2)
@@ -210,149 +348,19 @@ def low_memory_lanczos_score_fun(
         base_key = _get_cache_base_key(args_dict, trainset_size, n_params)
         print(f"Cache base key: {base_key}")
 
-    # ========== GGN Vector Product ==========
-    if load_ggn:
-        try:
-            print("Loading GGN vector product from cache...")
-            ggn_vector_product = _load_ggn_vector_product(cache_dir, base_key)
-            print("Successfully loaded GGN vector product")
-        except FileNotFoundError as e:
-            print(f"Failed to load GGN: {e}")
-            print("Computing GGN vector product from scratch...")
-            load_ggn = False  # Fall through to computation
+    # Get or compute GGN, sketch, and eigenpairs
+    ggn_vector_product = _get_or_compute_ggn(
+        params_dict, model, train_loader, args_dict, trainset_size, n_params, cache_dir, base_key
+    )
+    sketch_op = _get_or_compute_sketch(args_dict, n_params, cache_dir, base_key)
+    eigenvec, eigenval = _get_or_compute_eigenpairs(
+        ggn_vector_product, sketch_op, args_dict, n_params, trainset_size, cache_dir, base_key
+    )
 
-    if not load_ggn:
-        # Compute GGN vector product
-        if not args_dict["serialize_ggn_on_batches"]:
-            # subsample train dataset
-            data_array = jnp.asarray([train_loader.dataset[i][0] for i in range(trainset_size)])
-            # get matrix vector product fun
-            if not args_dict["use_hessian"]:
-                ggn_vector_product = get_ggn_vector_product(
-                        params_dict,
-                        model,
-                        data_array = data_array,
-                        likelihood_type = args_dict["likelihood"]
-                )
-            else:
-                print("Using the Hessian instead of the GGN")
-                ggn_vector_product = get_hessian_vector_product(
-                        params_dict,
-                        model,
-                        data_array = (data_array, jnp.asarray([data[1] for data in train_loader.dataset])),
-                        likelihood_type = args_dict["likelihood"]
-                )
-        else:
-            # subsample train dataloader
-            train_loader = get_subset_loader(
-                train_loader,
-                trainset_size,
-                batch_size = args_dict["train_batch_size"],
-                drop_last = True  # Critical: ensure all batches have same size to avoid JIT recompilation
-            )
-            # get matrix vector product fun
-            if not args_dict["use_hessian"]:
-                ggn_vector_product = get_ggn_vector_product_dataloader(
-                    params_dict,
-                    model,
-                    train_loader,
-                    likelihood_type = args_dict["likelihood"]
-                )
-            else:
-                print("Using the Hessian instead of the GGN")
-                ggn_vector_product = get_hessian_vector_product_dataloader(
-                    params_dict,
-                    model,
-                    train_loader,
-                    likelihood_type = args_dict["likelihood"]
-                )
-
-        # Warm up / JIT compile GGN
-        start = time.time()
-        ggn_vector_product(jax.random.normal(jax.random.PRNGKey(0), shape=(n_params,)))
-        print(f"One GGN vp took {time.time()-start} seconds")
-
-        # Save GGN if cache_dir is specified
-        if cache_dir:
-            _save_ggn_vector_product(cache_dir, base_key, ggn_vector_product, args_dict, trainset_size)
-
-    # ========== Sketch Operator ==========
-    if load_sketch:
-        try:
-            print("Loading sketch operator from cache...")
-            sketch_op = _load_sketch_op(cache_dir, base_key)
-            print("Successfully loaded sketch operator")
-        except FileNotFoundError as e:
-            print(f"Failed to load sketch: {e}")
-            print("Computing sketch operator from scratch...")
-            load_sketch = False
-
-    if not load_sketch:
-        print("Creating sketch operator...")
-        # Create sketch operator
-        key_sketch = jax.random.PRNGKey(args_dict["sketch_seed"])
-        if args_dict["sketch"] is None:
-            sketch_op = No_sketch()
-        elif args_dict["sketch"] == "srft":
-            print(f"Use srft sketch with num params {n_params} and padding {args_dict['sketch_padding']} --> fake num params = {args_dict['sketch_padding']+n_params} must NOT have prime factors >127 (thanks JAX fft)")
-            sketch_op = SRFT_sketch(key_sketch, n_params, args_dict['sketch_size'], padding=args_dict['sketch_padding'])
-        elif args_dict["sketch"] == "dense":
-            print(f"Use dense sketch with {'optimal' if args_dict['sketch_density'] is None else args_dict['sketch_density']} density")
-            sketch_op = Dense_sketch(key_sketch, n_params, args_dict['sketch_size'], density=args_dict['sketch_density'])
-        else:
-            raise ValueError(f"Sketch '{args_dict['sketch']}' not supported. Use either 'srtf', 'dense' or None.")
-
-        # Save sketch if cache_dir is specified
-        if cache_dir:
-            _save_sketch_op(cache_dir, base_key, sketch_op, args_dict, n_params)
-        print("Successfully created sketch operator.")
-    # ========== Eigenpairs (Lanczos + PCA) ==========
-    if load_eigenpairs:
-        try:
-            print("Loading eigenpairs from cache...")
-            eigenvec, eigenval = _load_eigenpairs(cache_dir, base_key)
-            eigenvec = jnp.asarray(eigenvec)
-            eigenval = jnp.asarray(eigenval)
-            print(f"Successfully loaded {len(eigenval)} eigenvalues")
-            print(f"  Eigenvals = {eigenval[:5]} ... {eigenval[-5:]}")
-        except FileNotFoundError as e:
-            print(f"Failed to load eigenpairs: {e}")
-            print("Computing eigenpairs from scratch...")
-            load_eigenpairs = False
-
-    if not load_eigenpairs:
-        print("Computing eigenpairs using Lanczos...")
-        # Perform Lanczos and find eigenval/eigenvec pairs
-        start = time.time()
-        key_lanczos = jax.random.PRNGKey(args_dict["lanczos_seed"])
-        eigenvec, eigenval = low_memory_lanczos(key_lanczos, ggn_vector_product, n_params, args_dict["lanczos_lm_iter"], sketch_op)
-        print(f"Lanczos {args_dict['lanczos_lm_iter']} iterations, dataset size {trainset_size}, with {n_params} params model -> took {time.time()-start:.3f} seconds")
-        print(f"returned {len(eigenval)} eigenvals = {eigenval[:5]} ... {eigenval[-5:]}")
-
-        # Orthogonalize and select the first (good) 'n_eigenvec' vectors
-        start = time.time()
-        print("Doing PCA...")
-        U, S, _ = np.linalg.svd(eigenvec @ jnp.diag(eigenval), full_matrices=False)
-        if args_dict['n_eigenvec_lm']<len(S):
-            threshold = sorted(S, reverse=True)[args_dict['n_eigenvec_lm']]
-            eigenvec = U[:, S > threshold]  # achtung, these are not really eigenvectors
-            eigenval = S[S > threshold]
-        else:
-            eigenvec = U
-            eigenval = S
-        eigenvec = jnp.asarray(eigenvec)
-        eigenval = jnp.asarray(eigenval)
-        print(f"PCA took {time.time()-start:.3f} seconds")
-
-        # Save eigenpairs if cache_dir is specified
-        if cache_dir:
-            _save_eigenpairs(cache_dir, base_key, eigenvec, eigenval, args_dict)
-
-
-    # define the GGN vector product with the eigenvec decomposition, and its inverse and inverse sqrt
+    # Define score functions
     @jax.jit
     def approx_ggn_vector_product(vector):
-        return sketch_op.T @ jnp.einsum("ab, b, cb, c-> a", eigenvec, eigenval, eigenvec, sketch_op @ vector) 
+        return sketch_op.T @ jnp.einsum("ab, b, cb, c-> a", eigenvec, eigenval, eigenvec, sketch_op @ vector)
 
     if use_eigenvals:
         scale = jnp.sqrt(eigenval / (eigenval + prior_scale))
@@ -363,22 +371,11 @@ def low_memory_lanczos_score_fun(
         @jax.jit
         def inv_sqrt_approx_ggn_vector_product(vector):
             return (sketch_op @ vector).T @ eigenvec
-        
+
     @jax.vmap
     @jax.jit
     def score_fun(datapoint):
         jacobianT_vector_product = get_jacobianT_vector_product(params_dict, model, datapoint, single_datapoint=True)
-        #inv_sqrt_fakeGGN_jacobian_vector_product = lambda vector: inv_sqrt_approx_ggn_vector_product(jacobianT_vector_product(vector))
-        
-        #variance_I = get_frobenius_norm_sequential(
-        #    jacobianT_vector_product,
-        #    dim_in = args_dict["output_dim"]
-        #)
-        #variance_P = get_frobenius_norm_sequential(
-        #    inv_sqrt_fakeGGN_jacobian_vector_product,
-        #    dim_in = args_dict["output_dim"]
-        #)
-        #variance = variance_I - variance_P
         variance = get_frobenius_norm_difference_sequential(
             jacobianT_vector_product,
             inv_sqrt_approx_ggn_vector_product,
@@ -398,7 +395,7 @@ def low_memory_lanczos_score_fun(
             sequential = True
         )
         return qf
-    
+
     @jax.vmap
     @jax.jit
     def approx_quadratic_form(datapoint):
@@ -410,6 +407,5 @@ def low_memory_lanczos_score_fun(
             dim_in = args_dict["output_dim"],
         )
         return approx_qf
-    
-    return score_fun, eigenval, approx_quadratic_form, quadratic_form
 
+    return score_fun, eigenval, approx_quadratic_form, quadratic_form
