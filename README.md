@@ -52,6 +52,120 @@ python score_model.py --ID_dataset CelebA --OOD_dataset FOOD101 CelebA-Mustache 
 python score_model.py --ID_dataset ImageNet --OOD_datasets SVHN-256 FOOD101-256 ImageNet-classout --model VAN_large --subsample_trainset 100000 --lanczos_hm_iter 0 --lanczos_lm_iter 10 --test_batch_size 8 --train_batch_size 32 --serialize_ggn_on_batches --sketch srft --sketch_size 10000000
 ```
 
+### Human Pose Estimation
+
+The repository includes a human pose estimation pipeline for uncertainty quantification on pose prediction tasks.
+
+#### Data Preprocessing
+
+Preprocess the H36M dataset for pose estimation:
+Performs the following steps:
+  1. Transform the input image (1000, 1000) to YOLO 11 image size of (512, 640) (width, height).
+  2. Find human bounding boxes in the image using YOLO 11 with variable size. 
+  3. Change the box size to have the correct aspect ratio of 3/4.
+  4. Crop the image to the box size.
+  5. Transform the cropped image to the input size of the pose estimation network (192, 256).
+  6. Normalize the RGB values by dividing by 255 and adding the offset -0.406, -0.457, -0.480 (not sure where this comes from. I assume average over images in H36M dataset)
+
+**Single-frame preprocessing:**
+```bash
+python human_pose_pipeline/pose_estimation/preprocess_h36m_bbox.py \
+    --input_dir datasets/H36M/extracted \
+    --output_dir datasets/H36M/pre_processed \
+    --splits train \
+    --num_frames 1
+```
+
+**GPU-accelerated batch preprocessing:**
+```bash
+python human_pose_pipeline/pose_estimation/preprocess_h36m_bbox_gpu.py \
+    --dataset_dir datasets/H36M/extracted \
+    --output_dir datasets/H36M/pre_processed \
+    --batch_size 128 \
+    --device cuda
+```
+
+#### Running Pose Estimation from Full Images
+
+**2D Pose Estimation:**
+Performs the following steps:
+  1. Transform the input image (1000, 1000) to YOLO 11 image size of (512, 640) (width, height).
+  2. Find human bounding boxes in the image using YOLO 11 with variable size. 
+  3. Change the box size to have the correct aspect ratio of 3/4.
+  4. Crop the image to the box size.
+  5. Transform the cropped image to the input size of the pose estimation network (192, 256).
+  6. Normalize the RGB values by dividing by 255 and adding the offset -0.406, -0.457, -0.480 (not sure where this comes from. I assume average over images in H36M dataset)
+  7. Estimate human pose.
+  8. Transform human pose back into original image frame.
+
+```bash
+python human_pose_pipeline/examples/pose_estimation_2D.py
+```
+
+**2D Pose Estimation on Preprocessed Data:**
+Performs the following steps:
+  1. Load the preprocessed dataset.
+  2. Estimate human pose.
+  3. Transform human pose back into original image frame.
+```bash
+python human_pose_pipeline/examples/evaluate_preprocessed_h36m.py \
+    --preprocessed_dir datasets/H36M/pre_processed \
+    --checkpoint models_tianle/H36M/RegressFlow/seed_420 \
+    --split validation \
+    --num_samples 100 \
+    --visualize \
+    --save_dir results/preprocessed_eval_vis
+```
+
+**3D Pose Estimation:**
+Additionally execute 3D triangulation:
+  7. Perform human pose estimation on two images of different camera frames.
+  8. Transform human pose back into original image frame.
+  9. Perform 3D triangulation based on camera transforms.
+  10. Estimate 3D uncertainty.
+
+```bash
+python human_pose_pipeline/examples/pose_estimation_3D.py
+```
+
+**ID vs. OOD Prediction:**
+Evaluate the ID vs. OOD performance by executing the following steps:
+  1. Perform steps 1-8 of 2D Pose Estimation.
+  2. Preprocess tiger dataset: 
+    - Rotate image by 90° to also have approximately 3/4 aspect ratio
+    - Scale image to the input size of the pose estimation network (192, 256).
+    - Normalize the RGB values by dividing by 255 and adding the offset -0.406, -0.457, -0.480.
+  3. Predict tiger pose.
+  4. Compare performance on human pose vs. tiger pose prediction.
+```bash
+python human_pose_pipeline/examples/id_vs_ood_pose_prediction.py
+```
+
+#### Debugging and Visualization
+
+**Debug single 2D pose:**
+The 2D Pose Estimation just with a single image and visualization.
+```bash
+python human_pose_pipeline/examples/debug_pose_visualization.py
+```
+
+**Debug preprocessed pose:**
+The 2D Pose Estimation on Preprocessed Data just with a single image and visualization.
+```bash
+python human_pose_pipeline/examples/debug_preprocessed_pose.py \
+    --preprocessed_dir datasets/H36M/pre_processed \
+    --checkpoint models_tianle/H36M/RegressFlow/seed_420 \
+    --split train \
+    --sample_idx 0 \
+    --save_path results/debug_pose.png
+```
+
+**Debug 3D pose:**
+The 3D Pose Estimation just with a single image and visualization.
+```bash
+python human_pose_pipeline/examples/debug_3d_pose_visualization.py
+```
+
 # Known Issues
 
 ## CuDNN Version Mismatch Error
