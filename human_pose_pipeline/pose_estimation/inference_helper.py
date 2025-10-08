@@ -82,25 +82,21 @@ def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, de
             - 'uncertainties': Standard deviations (placeholder for now)
             - 'covariance': Covariance values (placeholder for now)
     """
-    # Step 1: Resize image
-    resized_image, original_dimensions, scale_factors = resize_image(pil_image)
-
-    # Step 2: Detect humans
-    person_boxes = detect_humans(human_detector, resized_image, device_torch, threshold=threshold)
-
-    if not person_boxes:
-        print("No humans detected with the specified threshold.")
-        return []
-
-    scale_x, scale_y = scale_factors
-
-    # Convert PIL to numpy for processing
-    resized_image_np = np.array(resized_image)
+    bounding_box_images = extract_bounding_box_images(
+        full_image=pil_image,
+        human_detector=human_detector,
+        device_torch=device_torch,
+        threshold=threshold
+    )
     pose_estimations = []
 
-    for i, bbox in enumerate(person_boxes):
-        # Transform image to model input dimension from bounding box
-        bounding_box_image, _, center, scale, trans, processed_bbox = preprocess_image_with_bbox(resized_image_np, bbox)
+    for i, bounding_box_image_struct in enumerate(bounding_box_images):
+        scale_x, scale_y = bounding_box_image_struct['scale_factors_yolo']
+        bbox = bounding_box_image_struct['bbox']
+        bounding_box_image = bounding_box_image_struct['image']
+        center = bounding_box_image_struct['center']
+        scale = bounding_box_image_struct['scale']
+        trans = bounding_box_image_struct['trans']
         # Predict human pose
         pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, model, params, batch_stats)
         # Transfrom back to original image space
@@ -128,6 +124,60 @@ def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, de
 
     # Step 3: Perform pose estimation
     return pose_estimations
+
+
+def extract_bounding_box_images(
+        full_image,
+        human_detector,
+        device_torch,
+        threshold=YOLO_CONFIDENCE_THRESHOLD
+):
+    """
+    Extract bounding box images of detected humans from the full image.
+
+    Args:
+        full_image (PIL.Image.Image): The input high-resolution image
+        human_detector: The pre-loaded YOLO human detection model (PyTorch)
+        device_torch: PyTorch device for human detection
+        threshold (float, optional): Confidence threshold for human detection
+    Returns:
+        list of structs with keys:
+            - 'scale_factors_yolo': Scale factors (x, y) from original to YOLO input size
+            - 'bbox': Bounding box coordinates [x1, y1, x2, y2]
+            - 'image': Cropped bounding box image (PIL.Image)
+            - 'center': Center of the bounding box in YOLO image [x, y]
+            - 'scale': Width and height of the bounding box in YOLO image [w, h]
+            - 'trans': Transformation matrix (2x3) from YOLO image to cropped bbox image
+    """
+    # Step 1: Resize image
+    resized_image, original_dimensions, scale_factors = resize_image(full_image)
+
+    # Step 2: Detect humans
+    person_boxes = detect_humans(human_detector, resized_image, device_torch, threshold=threshold)
+
+    if not person_boxes:
+        print("No humans detected with the specified threshold.")
+        return []
+
+    scale_x, scale_y = scale_factors
+
+    # Convert PIL to numpy for processing
+    resized_image_np = np.array(resized_image)
+    bounding_box_images = []
+
+    for i, bbox in enumerate(person_boxes):
+        # Transform image to model input dimension from bounding box
+        bounding_box_image, _, center, scale, trans, processed_bbox = preprocess_image_with_bbox(resized_image_np, bbox)
+        bbox_struct = {
+            'scale_factors_yolo': scale_factors,
+            'bbox': bbox,
+            'image': bounding_box_image,
+            'center': center,
+            'scale': scale,
+            'trans': trans
+        }
+        bounding_box_images.append(bbox_struct)
+    return bounding_box_images
 
 
 def predict_pose(bounding_box_image, model, params, batch_stats):
