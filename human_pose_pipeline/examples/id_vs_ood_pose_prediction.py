@@ -290,7 +290,7 @@ def evaluate_pose_prediction_accuracy(predictions, ground_truth, valid_mask, thr
 
 
 def predict_poses_on_h36m_dataset(model, params, batch_stats, human_detector, device_torch,
-                                 dataset, dataset_name, max_samples=None):
+                                  dataset, dataset_name, max_samples=None):
     """
     Run pose prediction on H36M dataset using the same approach as pose_estimation_2D.py.
     """
@@ -325,7 +325,7 @@ def predict_poses_on_h36m_dataset(model, params, batch_stats, human_detector, de
 
             # Run pose estimation
             pose_predictions = process_frame_2d(
-                frame=frame,
+                frame=frame_image_pil,
                 model=model,
                 params=params,
                 batch_stats=batch_stats,

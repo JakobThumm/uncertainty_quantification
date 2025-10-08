@@ -19,7 +19,7 @@ from src.ood_scores.diagonal_lla import diagonal_lla_score_fun
 from src.ood_scores.scod import scod_score_fun
 from src.ood_scores.swag import swag_score_fun
 from src.ood_scores.hm_lanczos import high_memory_lanczos_score_fun, smart_lanczos_score_fun
-from src.ood_scores.lm_lanczos import low_memory_lanczos_score_fun, _get_cache_base_key, _save_score_functions, _load_score_functions
+from src.ood_scores.lm_lanczos import low_memory_lanczos_score_fun, _get_cache_base_key, _save_score_functions, load_score_functions
 from src.ood_scores.projected_ensemble import projected_ensemble_score_fun
 from src.ood_scores.max_logit import max_logit_score_fun
 
@@ -228,8 +228,8 @@ if __name__ == "__main__":
     # Helper function to try loading score functions from cache
     def try_load_score_functions():
         """Try to load score functions from cache, return (success, score_fun, eigenval, approx_qf, qf)"""
-        load_score_functions = args_dict.get('load_score_functions', False)
-        if not (load_score_functions and args_dict.get('cache_dir')):
+        load_in_score_functions = args_dict.get('load_score_functions', False)
+        if not (load_in_score_functions and args_dict.get('cache_dir')):
             return False, None, None, None, None
 
         try:
@@ -238,7 +238,7 @@ if __name__ == "__main__":
             n_params = compute_num_params(params_dict["params"])
             base_key = _get_cache_base_key(args_dict, trainset_size, n_params)
 
-            score_fun, eigenval, approx_quadratic_form, quadratic_form = _load_score_functions(
+            score_fun, eigenval, approx_quadratic_form, quadratic_form = load_score_functions(
                 args_dict['cache_dir'], base_key
             )
             print("Successfully loaded score functions from cache - skipping building phase!")

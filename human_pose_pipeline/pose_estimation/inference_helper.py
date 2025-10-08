@@ -118,7 +118,7 @@ def pose_estimation_2d(
             is_ood = False
         else:
             ood_score = score_fn(bounding_box_image)
-            ood_score = float(ood_score)
+            ood_score = float(np.asarray(ood_score))
             is_ood = ood_score > ood_threshold
             t2 = time()
             print(f"OOD scoring time: {t2 - t1:.3f} seconds")

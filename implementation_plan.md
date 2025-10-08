@@ -52,13 +52,17 @@ We have two things:
       - [x] Add tiger image transformation to the script
       - [x] Write a tiger dataset preprocessing
       - [x] Test the OOD detection with the score_model.py script and save the GNN matrix
-      - [ ] Write a script that works with the preprocessed data instead of the full images.
-      - [ ] Test score model function on regressflow model with low_memory_lanczos_score_fun
-      - [ ] Test with --OOD_dataset tiger-pose
-      - [ ] Add OOD classification to the evaluation script 
+      - [x] Write a script that works with the preprocessed data instead of the full images.
+      - [x] Test score model function on regressflow model with low_memory_lanczos_score_fun
+      - [x] Test with --OOD_dataset tiger-pose
+      - [x] Add OOD classification to the evaluation script 
       - [x] plot a histogram over OOD scores with different colors for the two classes (ID vs OOD) -> Should already be implemented somewhere in this repo.
-      - [ ] plot a scatter plot with pose prediction accuracy over OOD score.
-      - [ ] perform an evaluation of how many datapoints are within 1, 2, 3, and 4 sigma for datapoints that were classified as ID vs OOD.
+      - [x] plot a scatter plot with pose prediction accuracy over OOD score.
+      - [x] perform an evaluation of how many datapoints are within 1, 2, 3, and 4 sigma for datapoints that were classified as ID vs OOD.
+      - [ ] Speed up pipeline: 
+        - [ ] Figure out which parts take the longest
+        - [ ] maybe pre processing on GPU
+        - [ ] definetly parallilze pose estimation and OOD scoring.
  4. Test the pre-trained pose prediction models
     - Use the pre-trained models with converted weights into JAX.
     - First, perform pose prediction on a few H3.6M examples.

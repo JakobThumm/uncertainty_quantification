@@ -162,7 +162,7 @@ def _save_score_functions(cache_dir, base_key, score_fun, eigenval, approx_quadr
     print(f"Saved score functions to {cache_path}")
 
 
-def _load_score_functions(cache_dir, base_key):
+def load_score_functions(cache_dir, base_key):
     """Load score functions and eigenvalues from cache"""
     cache_path = os.path.join(cache_dir, f"{base_key}_score_functions.cloudpickle")
 
