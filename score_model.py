@@ -47,7 +47,7 @@ parser.add_argument("--score", type=str, choices=["scod", "swag", "ensemble", "p
                                                    "smart_lla", "diagonal_lla", "max_logit"], default=None)
 # lanczos
 parser.add_argument("--lanczos_hm_iter", default=10, type=int, help="Lancsos high-memory iterations to run")
-parser.add_argument("--lanczos_lm_iter", default=100, type=int, help="Lancsos low-mwmory iterations to run")
+parser.add_argument("--lanczos_lm_iter", default=100, type=int, help="Lancsos low-memory iterations to run")
 parser.add_argument("--n_eigenvec_hm", default=None, type=int, help="Number of eigenvectors to store. Default None set it to half of lanczos iterations")
 parser.add_argument("--n_eigenvec_lm", default=None, type=int, help="Number of eigenvectors to store. Default None set it to half of lanczos iterations")
 parser.add_argument("--lanczos_seed", default=0, type=int, help="Seed for the initial vector of Lanczos")
@@ -101,7 +101,7 @@ if __name__ == "__main__":
 
     ################
     ### datasets ###
-    train_loader, _, ID_loader = dataloader_from_string(
+    train_loader, _, _ = dataloader_from_string(
         args.ID_dataset,
         n_samples = args.subsample_trainset,
         batch_size = args.train_batch_size,
@@ -110,15 +110,15 @@ if __name__ == "__main__":
         download = False,
         data_path = args.data_path
     )
-    # _, _, ID_loader = dataloader_from_string(
-    #     args.ID_dataset,
-    #     n_samples = args.subsample_testset,
-    #     batch_size = args.test_batch_size,
-    #     shuffle = False,
-    #     seed = args.model_seed,
-    #     download = False, # False
-    #     data_path = args.data_path
-    # )
+    _, _, ID_loader = dataloader_from_string(
+        args.ID_dataset,
+        n_samples = args.subsample_testset,
+        batch_size = args.test_batch_size,
+        shuffle = False,
+        seed = args.model_seed,
+        download = False, # False
+        data_path = args.data_path
+    )
     print(f"Got IN-distribution dataset {args.ID_dataset} with {len(train_loader.dataset)} train data and {len(ID_loader.dataset)} test data")
 
     if "MNIST-R" in args.OOD_datasets:

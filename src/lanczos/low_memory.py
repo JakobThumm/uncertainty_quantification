@@ -69,7 +69,9 @@ def low_memory_lanczos_to_tridiag(key, mv_prod, dim, n_iter):
     return skvs, alphas, betas
 
 
-@partial(jax.jit, static_argnames=['mv_prod', 'sketch_op'])
+# Depending on your network size and number of iterations, jit compilation might be faster than just-in-time execution.
+# Activate jit compilation by uncommenting the following line.
+# @partial(jax.jit, static_argnames=['mv_prod', 'sketch_op'])
 def lanczos_step_jit(i, state, mv_prod, sketch_op):
     (w, betas, skvs, alphas, v_old) = state
     b = jnp.linalg.norm(w)
