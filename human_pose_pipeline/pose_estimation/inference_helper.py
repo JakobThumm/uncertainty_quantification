@@ -92,11 +92,96 @@ def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, de
         print("No humans detected with the specified threshold.")
         return []
 
+    scale_x, scale_y = scale_factors
+
+    # Convert PIL to numpy for processing
+    resized_image_np = np.array(resized_image)
+    pose_estimations = []
+
+    for i, bbox in enumerate(person_boxes):
+        # Transform image to model input dimension from bounding box
+        bounding_box_image, _, center, scale, trans, processed_bbox = preprocess_image_with_bbox(resized_image_np, bbox)
+        # Predict human pose
+        pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, model, params, batch_stats)
+        # Transfrom back to original image space
+        result = transform_predictions_to_original_space(
+            pred_joints_13, trans, scale_x, scale_y,
+            uncertainties=uncertainties_13,
+            covariance=covariance_13
+        )
+        # Fallback if no uncertainties are predicted
+        if result.get('uncertainties') is None:
+            result['uncertainties'] = np.ones_like(result['keypoints']) * 10.0  # 10 pixel std dev
+        if result.get('covariance') is None:
+            result['covariance'] = np.ones(len(result['keypoints'])) * 0.1  # Small covariance
+
+        # Store results for this person
+        pose = {
+            'keypoints': result['keypoints'].tolist(),
+            'uncertainties': result['uncertainties'].tolist(),
+            'covariance': result['covariance'].tolist(),
+            'bbox': bbox,
+            'center': center.tolist(),
+            'scale': scale.tolist()
+        }
+        pose_estimations.append(pose)
+
     # Step 3: Perform pose estimation
-    return get_pose_estimations_jax(
-        resized_image, original_dimensions, scale_factors, person_boxes,
-        model, params, batch_stats, visualize
-    )
+    return pose_estimations
+
+
+def predict_pose(bounding_box_image, model, params, batch_stats):
+    """Predict pose for a single bounding box image using the JAX model.
+
+    Args:
+        bounding_box_image (np.ndarray): Cropped image of the detected human
+        model: The JAX pose estimation model
+        params: JAX model parameters
+        batch_stats: JAX model batch statistics (if available)
+    Returns:
+        tuple: (pred_joints_13, uncertainties_13, covariance_13)
+    """
+    # Get model predictions using JAX
+    with jax.disable_jit(False):  # Enable JIT for inference
+        if batch_stats is not None:
+            output = model.apply_test(params, batch_stats, bounding_box_image)
+        else:
+            output = model.apply_test(params, bounding_box_image)
+
+    # Extract predictions - JAX model outputs (following Marian's approach)
+    if isinstance(output, dict):
+        # RegressFlowWithAleatoric returns dictionary with uncertainty outputs
+        pred_joints = np.array(output['pred_jts'][0])  # Joint coordinates (17, 2)
+        log_variance = np.array(output.get('log_variance', output.get('pure_sigma', None)))
+        if log_variance is not None:
+            log_variance = log_variance[0]  # Remove batch dimension (17, 2)
+        covariance_raw = np.array(output.get('covariance', None))
+        if covariance_raw is not None:
+            covariance_raw = covariance_raw[0]  # Remove batch dimension (17,)
+    else:
+        # Regular RegressFlow returns tensor directly - reshape from flattened
+        pred_joints_flat = np.array(output[0])  # Remove batch dimension
+        pred_joints = pred_joints_flat.reshape(17, 2)  # 17 joints × 2 coords
+        log_variance = None
+        covariance_raw = None
+
+    # Convert log variance to standard deviation (following Marian's approach)
+    if log_variance is not None:
+        uncertainties = np.sqrt(np.exp(log_variance))  # (17, 2)
+    else:
+        uncertainties = None
+
+    # Select only the 13 joints of interest (same as Marian's approach)
+    pred_joints_13 = pred_joints[JOINT_IDX_13_MODEL]  # (13, 2)
+    if uncertainties is not None:
+        uncertainties_13 = uncertainties[JOINT_IDX_13_MODEL]  # (13, 2)
+    else:
+        uncertainties_13 = None
+    if covariance_raw is not None:
+        covariance_13 = covariance_raw[JOINT_IDX_13_MODEL]  # (13,)
+    else:
+        covariance_13 = None
+    return pred_joints_13, uncertainties_13, covariance_13
 
 
 def process_frame_2d(frame, model, params, batch_stats, human_detector, device_torch, mirror_map):
@@ -148,110 +233,6 @@ def process_frame_2d(frame, model, params, batch_stats, human_detector, device_t
 
     return mapped_pose, mapped_uncertainty, mapped_covariance, joint_covariances
 
-
-def get_pose_estimations_jax(resized_image, original_dimensions, scale_factors, person_boxes, model, params, batch_stats, visualize=True):
-    """
-    Perform pose estimation on detected humans using JAX model and return keypoints in original image dimensions.
-
-    Args:
-        resized_image (PIL.Image.Image): The resized image
-        original_dimensions (tuple): Original image dimensions (width, height)
-        scale_factors (tuple): Scale factors for coordinate transformation (scale_x, scale_y)
-        person_boxes (list): List of detected human bounding boxes
-        model: The JAX pose estimation model
-        params: JAX model parameters
-        batch_stats: JAX model batch statistics (if available)
-        visualize (bool, optional): Whether to visualize the results
-
-    Returns:
-        List[Dict]: List of dictionaries containing for each detected person:
-            - 'keypoints': Joint coordinates [[x1,y1], [x2,y2], ...]
-            - 'uncertainties': Standard deviations (placeholder for now)
-            - 'covariance': Covariance values (placeholder for now)
-    """
-    # Unpack dimensions and scale factors
-    original_image_width, original_image_height = original_dimensions
-    scale_x, scale_y = scale_factors
-
-    # Convert PIL to numpy for processing
-    resized_image_np = np.array(resized_image)
-
-    pose_estimations = []
-
-    # Process each detected person
-    for i, bbox in enumerate(person_boxes):
-        # Preprocess image with detected bounding box using our JAX utilities
-        input_tensor, _, center, scale, trans, processed_bbox = preprocess_image_with_bbox(resized_image_np, bbox)
-
-        # Get model predictions using JAX
-        with jax.disable_jit(False):  # Enable JIT for inference
-            if batch_stats is not None:
-                output = model.apply_test(params, batch_stats, input_tensor)
-            else:
-                output = model.apply_test(params, input_tensor)
-
-        # Extract predictions - JAX model outputs (following Marian's approach)
-        if isinstance(output, dict):
-            # RegressFlowWithAleatoric returns dictionary with uncertainty outputs
-            pred_joints = np.array(output['pred_jts'][0])  # Joint coordinates (17, 2)
-            log_variance = np.array(output.get('log_variance', output.get('pure_sigma', None)))
-            if log_variance is not None:
-                log_variance = log_variance[0]  # Remove batch dimension (17, 2)
-            covariance_raw = np.array(output.get('covariance', None))
-            if covariance_raw is not None:
-                covariance_raw = covariance_raw[0]  # Remove batch dimension (17,)
-        else:
-            # Regular RegressFlow returns tensor directly - reshape from flattened
-            pred_joints_flat = np.array(output[0])  # Remove batch dimension
-            pred_joints = pred_joints_flat.reshape(17, 2)  # 17 joints × 2 coords
-            log_variance = None
-            covariance_raw = None
-
-        # Convert log variance to standard deviation (following Marian's approach)
-        if log_variance is not None:
-            uncertainties = np.sqrt(np.exp(log_variance))  # (17, 2)
-        else:
-            uncertainties = None
-
-        # Select only the 13 joints of interest (same as Marian's approach)
-        pred_joints_13 = pred_joints[JOINT_IDX_13_MODEL]  # (13, 2)
-        if uncertainties is not None:
-            uncertainties_13 = uncertainties[JOINT_IDX_13_MODEL]  # (13, 2)
-        else:
-            uncertainties_13 = None
-        if covariance_raw is not None:
-            covariance_13 = covariance_raw[JOINT_IDX_13_MODEL]  # (13,)
-        else:
-            covariance_13 = None
-
-        # Transform predictions to original image space using the new unified function
-        result = transform_predictions_to_original_space(
-            pred_joints_13, trans, scale_x, scale_y,
-            uncertainties=uncertainties_13,
-            covariance=covariance_13
-        )
-
-        pred_joints_original = result['keypoints']
-        uncertainties_original = result.get('uncertainties')
-        covariance_original = result.get('covariance')
-
-        # Fallback if no uncertainties were provided
-        if uncertainties_original is None:
-            uncertainties_original = np.ones_like(pred_joints_original) * 5.0  # 5 pixel std dev
-            covariance_original = np.ones(len(pred_joints_original)) * 0.1  # Small covariance
-
-        # Store results for this person
-        pose = {
-            'keypoints': pred_joints_original.tolist(),
-            'uncertainties': uncertainties_original.tolist(),
-            'covariance': covariance_original.tolist() if covariance_original is not None else [0.1] * len(pred_joints_original),
-            'bbox': bbox,
-            'center': center.tolist(),
-            'scale': scale.tolist()
-        }
-        pose_estimations.append(pose)
-
-    return pose_estimations
 
 def initialize_human_detector(device_torch=None):
     """
