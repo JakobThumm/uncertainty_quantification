@@ -9,6 +9,7 @@ import os
 import logging
 import json
 import pickle
+from time import time
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -27,7 +28,8 @@ from human_pose_pipeline.utils.transform_utils import (
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_IDX_13_MODEL,
     YOLO_IMAGE_SIZE,
-    YOLO_CONFIDENCE_THRESHOLD
+    YOLO_CONFIDENCE_THRESHOLD,
+    OOD_THRESHOLD
 )
 
 
@@ -62,7 +64,7 @@ def resize_image(pil_image, target_size=YOLO_IMAGE_SIZE):
 
 
 def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, device_torch,
-                       threshold=YOLO_CONFIDENCE_THRESHOLD, visualize=True):
+                       human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD):
     """
     Complete 2D pose estimation pipeline: resize -> detect humans -> estimate poses.
 
@@ -73,20 +75,22 @@ def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, de
         batch_stats: JAX model batch statistics (if available)
         human_detector: The pre-loaded YOLO human detection model (PyTorch)
         device_torch: PyTorch device for human detection
-        threshold (float, optional): Confidence threshold for human detection
-        visualize (bool, optional): Whether to visualize the results
+        human_detection_threshold (float, optional): Confidence threshold for human detection
 
     Returns:
         List[Dict]: List of dictionaries containing for each detected person:
             - 'keypoints': Joint coordinates [[x1,y1], [x2,y2], ...]
-            - 'uncertainties': Standard deviations (placeholder for now)
-            - 'covariance': Covariance values (placeholder for now)
+            - 'uncertainties': Standard deviations
+            - 'covariance': Covariance values
+            - 'bbox': Bounding box in the YOLO image frame [x1, y1, x2, y2]
+            - 'center': Center of the bounding box in the YOLO image frame [x, y]
+            - 'scale': Width and height of the bounding box in the YOLO image frame [w, h]
     """
     bounding_box_images = extract_bounding_box_images(
         full_image=pil_image,
         human_detector=human_detector,
         device_torch=device_torch,
-        threshold=threshold
+        threshold=human_detection_threshold
     )
     pose_estimations = []
 
@@ -122,7 +126,84 @@ def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, de
         }
         pose_estimations.append(pose)
 
-    # Step 3: Perform pose estimation
+    return pose_estimations
+
+
+def pose_estimation_2d_with_ood_detection(
+        pil_image, model, params, batch_stats, human_detector, score_fn, device_torch, 
+        human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
+        ood_threshold=OOD_THRESHOLD):
+    """
+    Complete 2D pose estimation pipeline: resize -> detect humans -> estimate poses.
+
+    Args:
+        pil_image (PIL.Image.Image): The input high-resolution image
+        model: The JAX pose estimation model
+        params: JAX model parameters
+        batch_stats: JAX model batch statistics (if available)
+        human_detector: The pre-loaded YOLO human detection model (PyTorch)
+        score_fn: Function to compute OOD score from model outputs
+        device_torch: PyTorch device for human detection
+        human_detection_threshold (float, optional): Confidence threshold for human detection
+        ood_threshold (float, optional): Threshold for OOD detection in pose estimation
+
+    Returns:
+        List[Dict]: List of dictionaries containing for each detected person:
+            - 'keypoints': Joint coordinates [[x1,y1], [x2,y2], ...]
+            - 'uncertainties': Standard deviations
+            - 'covariance': Covariance values
+            - 'bbox': Bounding box in the YOLO image frame [x1, y1, x2, y2]
+            - 'center': Center of the bounding box in the YOLO image frame [x, y]
+            - 'scale': Width and height of the bounding box in the YOLO image frame [w, h]
+            - 'ood_score': OOD score for the detected person
+            - 'is_ood': Boolean indicating if the person is classified as OOD based on the threshold
+    """
+    bounding_box_images = extract_bounding_box_images(
+        full_image=pil_image,
+        human_detector=human_detector,
+        device_torch=device_torch,
+        threshold=human_detection_threshold
+    )
+    pose_estimations = []
+
+    for i, bounding_box_image_struct in enumerate(bounding_box_images):
+        scale_x, scale_y = bounding_box_image_struct['scale_factors_yolo']
+        bbox = bounding_box_image_struct['bbox']
+        bounding_box_image = bounding_box_image_struct['image']
+        center = bounding_box_image_struct['center']
+        scale = bounding_box_image_struct['scale']
+        trans = bounding_box_image_struct['trans']
+        # Predict human pose
+        t0 = time()
+        pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, model, params, batch_stats)
+        t1 = time()
+        print(f"Pose prediction time: {t1 - t0:.3f} seconds")
+        ood_score = score_fn(bounding_box_image)
+        # Transfrom back to original image space
+        result = transform_predictions_to_original_space(
+            pred_joints_13, trans, scale_x, scale_y,
+            uncertainties=uncertainties_13,
+            covariance=covariance_13
+        )
+        # Fallback if no uncertainties are predicted
+        if result.get('uncertainties') is None:
+            result['uncertainties'] = np.ones_like(result['keypoints']) * 10.0  # 10 pixel std dev
+        if result.get('covariance') is None:
+            result['covariance'] = np.ones(len(result['keypoints'])) * 0.1  # Small covariance
+
+        # Store results for this person
+        pose = {
+            'keypoints': result['keypoints'].tolist(),
+            'uncertainties': result['uncertainties'].tolist(),
+            'covariance': result['covariance'].tolist(),
+            'bbox': bbox,
+            'center': center.tolist(),
+            'scale': scale.tolist(),
+            'ood_score': float(ood_score),
+            'is_ood': float(ood_score) > ood_threshold
+        }
+        pose_estimations.append(pose)
+
     return pose_estimations
 
 

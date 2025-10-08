@@ -30,3 +30,5 @@ PREDICTION_NUM_JOINTS = 17,
 TRANSFORM_IMAGE_SIZE = [192, 256]  # Width, Height
 TRANSFORM_HEATMAP_SIZE = [48, 64]  # Width, Height
 NORMALIZATION_OFFSET = [-0.406, -0.457, -0.480]
+
+OOD_THRESHOLD = 0.3  # Threshold for OOD detection in pose estimation
