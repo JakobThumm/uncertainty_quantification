@@ -40,7 +40,8 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_IDX_17,
     JOINT_IDX_13,
     CONNECTIONS_13,
-    MIRROR_13_JOINT_MODEL_MAP
+    MIRROR_13_JOINT_MODEL_MAP,
+    YOLO_CONFIDENCE_THRESHOLD
 )
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -242,15 +243,21 @@ def main():
         for i, frame in enumerate(sample['frames']):
             print(f"Processing camera {i+1}...")
 
-            pose, uncertainty, covariance_scalar, covariance = process_frame_2d(
+            pose_predictions = process_frame_2d(
                 frame=frame,
                 model=model,
                 params=params,
                 batch_stats=batch_stats,
                 human_detector=human_detector,
                 device_torch=device_torch,
-                mirror_map=MIRROR_13_JOINT_MODEL_MAP
+                mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+                score_fn=None,  # No OOD scoring for now
+                human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD
             )
+            # Take the first detected person
+            pose = pose_predictions[0]['keypoints']
+            uncertainty = pose_predictions[0]['uncertainties']
+            covariance_scalar = pose_predictions[0]['covariance']
 
             if pose is None:
                 print(f"No human detected in camera {i+1}!")

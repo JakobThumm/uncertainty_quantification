@@ -26,6 +26,7 @@ from human_pose_pipeline.pose_estimation.inference_helper import (
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     MIRROR_13_JOINT_MODEL_MAP,
+    YOLO_CONFIDENCE_THRESHOLD,
     YOLO_IMAGE_SIZE
 )
 
@@ -124,15 +125,19 @@ def process_pose_dataset_for_ood(
                 image_pil = apply_transforms(image_pil)
 
             # Run pose estimation to get model input format
-            pose, uncertainty, covariance_scalar, joint_covariances = process_frame_2d(
+            pose_predictions = process_frame_2d(
                 frame=image_pil,
                 model=model,
                 params=params,
                 batch_stats=batch_stats,
                 human_detector=human_detector,
                 device_torch=device_torch,
-                mirror_map=MIRROR_13_JOINT_MODEL_MAP
+                mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+                score_fn=None,  # No OOD scoring for now
+                human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD
             )
+            # Take the first detected person
+            pose = pose_predictions[0]['keypoints']
 
             # Check if pose detection was successful
             if np.sum(np.abs(pose)) > 0:

@@ -26,7 +26,8 @@ from human_pose_pipeline.utils.visualization import (
     visualize_pose_sequence
 )
 from human_pose_pipeline.pose_estimation.h36m_settings import (
-    MIRROR_13_JOINT_MODEL_MAP
+    MIRROR_13_JOINT_MODEL_MAP,
+    YOLO_CONFIDENCE_THRESHOLD
 )
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -158,15 +159,21 @@ def main():
                 frame_image_pil = frames[frame_idx]
 
                 # Get pose estimations using JAX model
-                mapped_pose, mapped_uncertainty, mapped_covariance, joint_covariances = process_frame_2d(
+                pose_predictions = process_frame_2d(
                     frame=frame_image_pil,
                     model=model,
                     params=params,
                     batch_stats=batch_stats,
                     human_detector=human_detector,
                     device_torch=device_torch,
-                    mirror_map=MIRROR_13_JOINT_MODEL_MAP
+                    mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+                    score_fn=None,  # No OOD scoring for now
+                    human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD
                 )
+                # Take the first detected person
+                mapped_pose = pose_predictions[0]['keypoints']
+                mapped_uncertainty = pose_predictions[0]['uncertainties']
+                mapped_covariance = pose_predictions[0]['covariance']
 
                 estimated_poses.append(mapped_pose)
                 estimated_uncertainties.append(mapped_uncertainty)

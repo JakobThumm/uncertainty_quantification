@@ -21,10 +21,9 @@ from PIL import Image
 
 
 from human_pose_pipeline.pose_estimation.inference_helper import (
-    joint_mapping,
     initialize_jax_models,
     initialize_human_detector,
-    pose_estimation_2d
+    process_frame_2d
 )
 from human_pose_pipeline.evaluation.pose_metrics import (
     mpjpe_jax
@@ -219,32 +218,21 @@ def main():
         # Run pose estimation
         print("\nRunning pose estimation...")
 
-        pose_estimations = pose_estimation_2d(
-            pil_image=sample['image'],
+        pose_predictions = process_frame_2d(
+            frame=sample['image'],
             model=model,
             params=params,
             batch_stats=batch_stats,
             human_detector=human_detector,
             device_torch=device_torch,
-            threshold=YOLO_CONFIDENCE_THRESHOLD
+            mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+            score_fn=None,  # No OOD scoring for now
+            human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD
         )
-
-        if not pose_estimations:
-            print("No humans detected! Using dummy pose for visualization.")
-            pred_pose_13 = np.zeros((13, 2))
-            pred_uncertainties = np.ones((13, 2)) * 5.0
-            pred_covariances = np.ones(13) * 0.1
-        else:
-            print(f"Detected {len(pose_estimations)} human(s)")
-            # Extract pose data - already in 13-joint format from our updated function
-            first_pose = np.array(pose_estimations[0]['keypoints'])  # Already 13 joints
-            first_uncertainties = np.array(pose_estimations[0]['uncertainties'])  # Already 13 joints
-            first_covariances = np.array(pose_estimations[0]['covariance'])  # Already 13 joints
-
-            # Apply mirror mapping to correct left/right joint swapping (matching Marian's approach)
-            pred_pose_13 = joint_mapping(first_pose, MIRROR_13_JOINT_MODEL_MAP)
-            pred_uncertainties = joint_mapping(first_uncertainties, MIRROR_13_JOINT_MODEL_MAP)
-            pred_covariances = joint_mapping(first_covariances, MIRROR_13_JOINT_MODEL_MAP)
+        # Take the first detected person
+        pred_pose_13 = pose_predictions[0]['keypoints']
+        pred_uncertainties = pose_predictions[0]['uncertainties']
+        pred_covariances = pose_predictions[0]['covariance']
 
         gt_pose_13 = sample['pose_13']
 

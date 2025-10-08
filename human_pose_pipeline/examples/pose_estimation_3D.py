@@ -36,7 +36,9 @@ from human_pose_pipeline.utils.visualization import (
 )
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
-    CONNECTIONS_13
+    CONNECTIONS_13,
+    MIRROR_13_JOINT_MODEL_MAP,
+    YOLO_CONFIDENCE_THRESHOLD
 )
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -372,18 +374,31 @@ def main():
             cov_cam2 = None
 
             for cam_idx, frame in enumerate(frames):
-                pose, uncertainty, covariance_scalar, covariance = process_frame_2d(
-                    frame.copy(), model, params, batch_stats, human_detector, device_torch, MIRROR_13_JOINT_MODEL_MAP
+                # Get pose estimations using JAX model
+                pose_predictions = process_frame_2d(
+                    frame=frame.copy(),
+                    model=model,
+                    params=params,
+                    batch_stats=batch_stats,
+                    human_detector=human_detector,
+                    device_torch=device_torch,
+                    mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+                    score_fn=None,  # No OOD scoring for now
+                    human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD
                 )
+                # Take the first detected person
+                pose = pose_predictions[0]['keypoints']
+                uncertainty = pose_predictions[0]['uncertainties']
+                covariance_matrix = pose_predictions[0]['covariance_matrix']
 
                 if cam_idx == 0:
                     poses_cam1 = pose
                     uncertainties_cam1 = uncertainty
-                    cov_cam1 = covariance
+                    cov_cam1 = covariance_matrix
                 elif cam_idx == 1:
                     poses_cam2 = pose
                     uncertainties_cam2 = uncertainty
-                    cov_cam2 = covariance
+                    cov_cam2 = covariance_matrix
 
             # Triangulate 3D points if both poses are available
             if poses_cam1 is not None and poses_cam2 is not None:

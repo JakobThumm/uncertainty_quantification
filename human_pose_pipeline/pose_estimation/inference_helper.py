@@ -5,6 +5,7 @@ This module provides inference functions for human pose estimation using JAX mod
 Based on Marian's Inference_Helper.py but adapted for JAX instead of PyTorch.
 """
 
+from operator import is_
 import os
 import logging
 import json
@@ -63,74 +64,8 @@ def resize_image(pil_image, target_size=YOLO_IMAGE_SIZE):
     return resized_image, (original_image_width, original_image_height), (scale_x, scale_y)
 
 
-def pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, device_torch,
-                       human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD):
-    """
-    Complete 2D pose estimation pipeline: resize -> detect humans -> estimate poses.
-
-    Args:
-        pil_image (PIL.Image.Image): The input high-resolution image
-        model: The JAX pose estimation model
-        params: JAX model parameters
-        batch_stats: JAX model batch statistics (if available)
-        human_detector: The pre-loaded YOLO human detection model (PyTorch)
-        device_torch: PyTorch device for human detection
-        human_detection_threshold (float, optional): Confidence threshold for human detection
-
-    Returns:
-        List[Dict]: List of dictionaries containing for each detected person:
-            - 'keypoints': Joint coordinates [[x1,y1], [x2,y2], ...]
-            - 'uncertainties': Standard deviations
-            - 'covariance': Covariance values
-            - 'bbox': Bounding box in the YOLO image frame [x1, y1, x2, y2]
-            - 'center': Center of the bounding box in the YOLO image frame [x, y]
-            - 'scale': Width and height of the bounding box in the YOLO image frame [w, h]
-    """
-    bounding_box_images = extract_bounding_box_images(
-        full_image=pil_image,
-        human_detector=human_detector,
-        device_torch=device_torch,
-        threshold=human_detection_threshold
-    )
-    pose_estimations = []
-
-    for i, bounding_box_image_struct in enumerate(bounding_box_images):
-        scale_x, scale_y = bounding_box_image_struct['scale_factors_yolo']
-        bbox = bounding_box_image_struct['bbox']
-        bounding_box_image = bounding_box_image_struct['image']
-        center = bounding_box_image_struct['center']
-        scale = bounding_box_image_struct['scale']
-        trans = bounding_box_image_struct['trans']
-        # Predict human pose
-        pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, model, params, batch_stats)
-        # Transfrom back to original image space
-        result = transform_predictions_to_original_space(
-            pred_joints_13, trans, scale_x, scale_y,
-            uncertainties=uncertainties_13,
-            covariance=covariance_13
-        )
-        # Fallback if no uncertainties are predicted
-        if result.get('uncertainties') is None:
-            result['uncertainties'] = np.ones_like(result['keypoints']) * 10.0  # 10 pixel std dev
-        if result.get('covariance') is None:
-            result['covariance'] = np.ones(len(result['keypoints'])) * 0.1  # Small covariance
-
-        # Store results for this person
-        pose = {
-            'keypoints': result['keypoints'].tolist(),
-            'uncertainties': result['uncertainties'].tolist(),
-            'covariance': result['covariance'].tolist(),
-            'bbox': bbox,
-            'center': center.tolist(),
-            'scale': scale.tolist()
-        }
-        pose_estimations.append(pose)
-
-    return pose_estimations
-
-
-def pose_estimation_2d_with_ood_detection(
-        pil_image, model, params, batch_stats, human_detector, score_fn, device_torch, 
+def pose_estimation_2d(
+        pil_image, model, params, batch_stats, human_detector, device_torch, score_fn=None, 
         human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
         ood_threshold=OOD_THRESHOLD):
     """
@@ -142,7 +77,7 @@ def pose_estimation_2d_with_ood_detection(
         params: JAX model parameters
         batch_stats: JAX model batch statistics (if available)
         human_detector: The pre-loaded YOLO human detection model (PyTorch)
-        score_fn: Function to compute OOD score from model outputs
+        score_fn: Function to compute OOD score from model outputs. If None -> No OOD scoring.
         device_torch: PyTorch device for human detection
         human_detection_threshold (float, optional): Confidence threshold for human detection
         ood_threshold (float, optional): Threshold for OOD detection in pose estimation
@@ -155,8 +90,8 @@ def pose_estimation_2d_with_ood_detection(
             - 'bbox': Bounding box in the YOLO image frame [x1, y1, x2, y2]
             - 'center': Center of the bounding box in the YOLO image frame [x, y]
             - 'scale': Width and height of the bounding box in the YOLO image frame [w, h]
-            - 'ood_score': OOD score for the detected person
-            - 'is_ood': Boolean indicating if the person is classified as OOD based on the threshold
+            - 'ood_score': OOD score for the detected person (0 if no score_fn provided)
+            - 'is_ood': Boolean indicating if the person is classified as OOD based on the threshold (False if no score_fn provided)
     """
     bounding_box_images = extract_bounding_box_images(
         full_image=pil_image,
@@ -178,7 +113,15 @@ def pose_estimation_2d_with_ood_detection(
         pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, model, params, batch_stats)
         t1 = time()
         print(f"Pose prediction time: {t1 - t0:.3f} seconds")
-        ood_score = score_fn(bounding_box_image)
+        if score_fn is None:
+            ood_score = 0.0
+            is_ood = False
+        else:
+            ood_score = score_fn(bounding_box_image)
+            ood_score = float(ood_score)
+            is_ood = ood_score > ood_threshold
+            t2 = time()
+            print(f"OOD scoring time: {t2 - t1:.3f} seconds")
         # Transfrom back to original image space
         result = transform_predictions_to_original_space(
             pred_joints_13, trans, scale_x, scale_y,
@@ -199,8 +142,8 @@ def pose_estimation_2d_with_ood_detection(
             'bbox': bbox,
             'center': center.tolist(),
             'scale': scale.tolist(),
-            'ood_score': float(ood_score),
-            'is_ood': float(ood_score) > ood_threshold
+            'ood_score': ood_score,
+            'is_ood': is_ood
         }
         pose_estimations.append(pose)
 
@@ -315,7 +258,9 @@ def predict_pose(bounding_box_image, model, params, batch_stats):
     return pred_joints_13, uncertainties_13, covariance_13
 
 
-def process_frame_2d(frame, model, params, batch_stats, human_detector, device_torch, mirror_map):
+def process_frame_2d(frame, model, params, batch_stats, human_detector, device_torch,
+                     mirror_map, score_fn=None,
+                     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD):
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -326,9 +271,22 @@ def process_frame_2d(frame, model, params, batch_stats, human_detector, device_t
         batch_stats: JAX model batch statistics
         human_detector: YOLO human detector
         device_torch: PyTorch device for YOLO
+        mirror_map: Joint mapping to correct left/right swapping
+        score_fn: Function to compute OOD score from model outputs. If None -> No OOD scoring.
+        human_detection_threshold (float, optional): Confidence threshold for human detection
+        ood_threshold (float, optional): Threshold for OOD detection in pose estimation
 
     Returns:
-        tuple: (pose, uncertainty, covariance_scalar, joint_covariances)
+        List[Dict]: List of dictionaries containing for each detected person:
+            - 'keypoints': Joint coordinates [[x1,y1], [x2,y2], ...]
+            - 'uncertainties': Standard deviations
+            - 'covariance': Covariance values
+            - 'covariance_matrix': Per-joint 2x2 covariance matrices
+            - 'bbox': Bounding box in the YOLO image frame [x1, y1, x2, y2]
+            - 'center': Center of the bounding box in the YOLO image frame [x, y]
+            - 'scale': Width and height of the bounding box in the YOLO image frame [w, h]
+            - 'ood_score': OOD score for the detected person (0 if no score_fn provided)
+            - 'is_ood': Boolean indicating if the person is classified as OOD based on the threshold (False if no score_fn provided)
     """
     if not isinstance(frame, Image.Image):
         frame = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
@@ -339,30 +297,25 @@ def process_frame_2d(frame, model, params, batch_stats, human_detector, device_t
         batch_stats=batch_stats,
         human_detector=human_detector,
         device_torch=device_torch,
-        threshold=0.8
+        score_fn=score_fn,
+        human_detection_threshold=human_detection_threshold,
+        ood_threshold=ood_threshold
     )
 
-    if not pose_estimations:
-        return np.zeros((13, 2)), np.zeros((13, 2)), np.zeros(13), np.zeros((13, 2, 2))
+    for i in range(len(pose_estimations)):
+        pose_estimations[i]['keypoints'] = joint_mapping(np.array(pose_estimations[i]['keypoints']), mirror_map)
+        pose_estimations[i]['uncertainties'] = joint_mapping(np.array(pose_estimations[i]['uncertainties']), mirror_map)
+        pose_estimations[i]['covariance'] = joint_mapping(np.array(pose_estimations[i]['covariance']), mirror_map)
+        # Construct per-joint 2x2 covariance matrices
+        joint_covariances = np.zeros((13, 2, 2))
+        for j in range(13):
+            joint_covariances[i] = [
+                [float(pose_estimations[i]['uncertainties'][j, 0])**2, float(pose_estimations[i]['covariance'][j])],
+                [float(pose_estimations[i]['covariance'][j]), float(pose_estimations[i]['uncertainties'][j, 1])**2]
+            ]
+        pose_estimations[i]['covariance_matrix'] = joint_covariances
 
-    first_pose = np.array(pose_estimations[0]['keypoints'])
-    first_uncertainty = np.array(pose_estimations[0]['uncertainties'])
-    first_covariance = np.array(pose_estimations[0]['covariance'])
-
-    # Apply mirror mapping to correct left/right joint swapping
-    mapped_pose = joint_mapping(first_pose, mirror_map)
-    mapped_uncertainty = joint_mapping(first_uncertainty, mirror_map)
-    mapped_covariance = joint_mapping(first_covariance, mirror_map)
-
-    # Construct per-joint 2x2 covariance matrices
-    joint_covariances = np.zeros((13, 2, 2))
-    for i in range(13):
-        joint_covariances[i] = [
-            [float(mapped_uncertainty[i, 0])**2, float(mapped_covariance[i])],
-            [float(mapped_covariance[i]), float(mapped_uncertainty[i, 1])**2]
-        ]
-
-    return mapped_pose, mapped_uncertainty, mapped_covariance, joint_covariances
+    return pose_estimations
 
 
 def initialize_human_detector(device_torch=None):
@@ -596,10 +549,3 @@ def visualize_pose_estimation_results(pil_image, pose_estimations, save_path=Non
         print(f"Visualization saved to: {save_path}")
 
     return result_image
-
-
-def get_pose_estimations(pil_image, model, params, batch_stats, human_detector, device_torch, threshold=0.8, visualize=True):
-    """
-    Convenience wrapper that matches Marian's function signature
-    """
-    return pose_estimation_2d(pil_image, model, params, batch_stats, human_detector, device_torch, threshold, visualize)
