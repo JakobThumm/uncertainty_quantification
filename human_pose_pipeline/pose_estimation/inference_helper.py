@@ -19,6 +19,18 @@ import matplotlib.pyplot as plt
 import cv2
 import matplotlib.patches as patches
 import matplotlib.lines as mlines
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, ALL_COMPLETED
+import threading
+
+# Global thread pool for parallel execution (reused across calls)
+_thread_pool = None
+
+def get_thread_pool():
+    """Get or create a global thread pool with 2 workers."""
+    global _thread_pool
+    if _thread_pool is None:
+        _thread_pool = ThreadPoolExecutor(max_workers=2)
+    return _thread_pool
 
 from src.models.wrapper import model_from_string
 from human_pose_pipeline.utils.transform_utils import (
@@ -108,26 +120,43 @@ def pose_estimation_2d(
         center = bounding_box_image_struct['center']
         scale = bounding_box_image_struct['scale']
         trans = bounding_box_image_struct['trans']
-        # Predict human pose
+
+        # Run pose prediction and OOD scoring in parallel
         t0 = time()
-        pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, model, params, batch_stats)
-        t1 = time()
-        print(f"Pose prediction time: {t1 - t0:.3f} seconds")
+
         if score_fn is None:
+            # No OOD scoring - run pose prediction only
+            pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, model, params, batch_stats)
             ood_score = 0.0
             is_ood = False
         else:
-            ood_score = score_fn(bounding_box_image)
-            ood_score = float(np.asarray(ood_score))
+            # Run pose prediction and OOD scoring in parallel using thread pool
+            executor = get_thread_pool()
+
+            # Submit both tasks to the thread pool simultaneously
+            pose_future = executor.submit(predict_pose, bounding_box_image, model, params, batch_stats)
+            ood_future = executor.submit(score_fn, bounding_box_image)
+
+            # Wait for BOTH futures to complete simultaneously (more efficient than sequential .result() calls)
+            wait([pose_future, ood_future], return_when=ALL_COMPLETED)
+
+            # Get results (these are now instant since both are done)
+            pred_joints_13, uncertainties_13, covariance_13 = pose_future.result()
+            ood_score = float(np.asarray(ood_future.result()))
             is_ood = ood_score > ood_threshold
-            t2 = time()
-            print(f"OOD scoring time: {t2 - t1:.3f} seconds")
-        # Transfrom back to original image space
+
+        t1 = time()
+        print(f"Pose prediction + OOD scoring time (parallel): {t1 - t0:.3f} seconds")
+
+        # Transform back to original image space
+        t3 = time()
         result = transform_predictions_to_original_space(
             pred_joints_13, trans, scale_x, scale_y,
             uncertainties=uncertainties_13,
             covariance=covariance_13
         )
+        t4 = time()
+        print(f"Coordinate transformation time: {t4 - t3:.3f} seconds")
         # Fallback if no uncertainties are predicted
         if result.get('uncertainties') is None:
             result['uncertainties'] = np.ones_like(result['keypoints']) * 10.0  # 10 pixel std dev
@@ -146,6 +175,8 @@ def pose_estimation_2d(
             'is_ood': is_ood
         }
         pose_estimations.append(pose)
+        t5 = time()
+        print(f"Element storage time: {t5 - t4:.3f} seconds")
 
     return pose_estimations
 
@@ -173,11 +204,16 @@ def extract_bounding_box_images(
             - 'scale': Width and height of the bounding box in YOLO image [w, h]
             - 'trans': Transformation matrix (2x3) from YOLO image to cropped bbox image
     """
+    t0 = time()
     # Step 1: Resize image
     resized_image, original_dimensions, scale_factors = resize_image(full_image)
+    t1 = time()
+    print(f"Image resizing time: {t1 - t0:.3f} seconds")
 
     # Step 2: Detect humans
     person_boxes = detect_humans(human_detector, resized_image, device_torch, threshold=threshold)
+    t2 = time()
+    print(f"Human detection time: {t2 - t1:.3f} seconds")
 
     if not person_boxes:
         print("No humans detected with the specified threshold.")
@@ -201,6 +237,8 @@ def extract_bounding_box_images(
             'trans': trans
         }
         bounding_box_images.append(bbox_struct)
+    t3 = time()
+    print(f"Bounding box extraction time: {t3 - t2:.3f} seconds")
     return bounding_box_images
 
 
@@ -301,7 +339,7 @@ def process_frame_2d(frame, model, params, batch_stats, human_detector, device_t
         human_detection_threshold=human_detection_threshold,
         ood_threshold=ood_threshold
     )
-
+    t0 = time()
     for i in range(len(pose_estimations)):
         pose_estimations[i]['keypoints'] = joint_mapping(np.array(pose_estimations[i]['keypoints']), mirror_map)
         pose_estimations[i]['uncertainties'] = joint_mapping(np.array(pose_estimations[i]['uncertainties']), mirror_map)
@@ -314,7 +352,8 @@ def process_frame_2d(frame, model, params, batch_stats, human_detector, device_t
                 [float(pose_estimations[i]['covariance'][j]), float(pose_estimations[i]['uncertainties'][j, 1])**2]
             ]
         pose_estimations[i]['covariance_matrix'] = joint_covariances
-
+    t1 = time()
+    print(f"Post-processing time (mirroring + covariance matrices): {t1 - t0:.3f} seconds")
     return pose_estimations
 
 

@@ -21,6 +21,7 @@ from scipy.stats import chi2
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import jax.numpy as jnp
+from time import time
 
 from src.datasets.h36m import Human36mDatasetSequence
 from src.ood_scores.lm_lanczos import load_score_functions, _get_cache_base_key
@@ -142,8 +143,6 @@ def evaluate_h36m_with_ood(
     Returns:
         dict: Evaluation results
     """
-    print("\nEvaluating H36M dataset...")
-
     results = {
         'ood_scores': [],
         'pose_accuracies': [],  # MPJPE for each sample
@@ -157,23 +156,51 @@ def evaluate_h36m_with_ood(
 
     samples_processed = 0
 
+    # Warm-up run
+    print("Warming up the model...")
+    warmup_frame = dataset[0]['frames'][0]
+    _ = process_frame_2d(
+        frame=warmup_frame,
+        model=model,
+        params=params,
+        batch_stats=batch_stats,
+        human_detector=human_detector,
+        device_torch=device_torch,
+        mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+        score_fn=score_fn,
+        human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
+        ood_threshold=ood_threshold
+    )
+    print("Warm-up complete!")
+
+    print("\nEvaluating H36M dataset...")
     # H36M dataset processing
     for idx, sample in enumerate(tqdm(dataset, desc="Processing H36M")):
+        t0 = time()
         if max_samples is not None and samples_processed >= max_samples:
             break
 
         full_sequence = np.array(sample['pose_sequence'])
+        t0a = time()
         frames = sample['frames']
+        t0b = time()
 
-        # Process first few frames
-        max_frames = min(1, len(frames))
-        for frame_idx in range(max_frames):
+        # max_frames = len(frames)
+        # for frame_idx in range(max_frames):
+
+        # Test one random frame instead of all frames
+        frame_idx = np.random.randint(len(frames))
+        if True:
             if max_samples is not None and samples_processed >= max_samples:
                 break
 
             frame_image_pil = frames[frame_idx]
 
             # Get pose estimation with OOD scoring
+            t1 = time()
+            print(f"Data loading time (pose_sequence): {t0a - t0:.3f} seconds")
+            print(f"Data loading time (frames): {t0b - t0a:.3f} seconds")
+            print(f"Frame indexing time: {t1 - t0b:.3f} seconds")
             pose_predictions = process_frame_2d(
                 frame=frame_image_pil,
                 model=model,
@@ -186,6 +213,8 @@ def evaluate_h36m_with_ood(
                 human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
                 ood_threshold=ood_threshold
             )
+            t2 = time()
+            print(f"Frame processing time (including OOD scoring): {t2 - t1:.3f} seconds")
 
             if not pose_predictions:
                 continue
@@ -212,7 +241,8 @@ def evaluate_h36m_with_ood(
             results['ground_truth'].append(ground_truth)
             results['predictions'].append(estimated_pose)
             results['uncertainties'].append(uncertainties)
-
+            t3 = time()
+            print(f"Metric computation and storage time: {t3 - t2:.3f} seconds")
             samples_processed += 1
 
     # Convert to numpy arrays
