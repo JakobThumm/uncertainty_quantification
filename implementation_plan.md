@@ -59,10 +59,11 @@ We have two things:
       - [x] plot a histogram over OOD scores with different colors for the two classes (ID vs OOD) -> Should already be implemented somewhere in this repo.
       - [x] plot a scatter plot with pose prediction accuracy over OOD score.
       - [x] perform an evaluation of how many datapoints are within 1, 2, 3, and 4 sigma for datapoints that were classified as ID vs OOD.
-      - [ ] Speed up pipeline: 
-        - [ ] Figure out which parts take the longest
-        - [ ] maybe pre processing on GPU
-        - [ ] definetly parallilze pose estimation and OOD scoring.
+      - [x] Speed up pipeline: 
+        - [x] Figure out which parts take the longest
+        - [x] Maybe pre processing on GPU
+        - [x] Definetly parallilze pose estimation and OOD scoring.
+        - [ ] Train smaller models
  4. Test the pre-trained pose prediction models
     - Use the pre-trained models with converted weights into JAX.
     - First, perform pose prediction on a few H3.6M examples.
