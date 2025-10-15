@@ -227,11 +227,13 @@ def model_from_string(
         wrapped_model = wrap_model_with_batchstats(model)
     elif model_name == "RegressFlow":
         from easydict import EasyDict
+        # Calculate number of joints from output_dim (output_dim = num_joints * 2)
+        num_joints = output_dim // 2
         CONFIG = EasyDict({
             'DATA_PRESET': {
                 'TYPE': 'simple',
                 'SIGMA': 2,
-                'NUM_JOINTS': 17,
+                'NUM_JOINTS': num_joints,  # Use calculated value instead of hardcoded 17
                 'IMAGE_SIZE': [256, 192],  # Height, Width
                 'HEATMAP_SIZE': [64, 48]
             },
@@ -260,7 +262,7 @@ def model_from_string(
                 'PRETRAINED': CONFIG.MODEL.PRETRAINED,
                 'TRY_LOAD': CONFIG.MODEL.TRY_LOAD
             }
-        
+
         model = RegressFlowFlax(
                     preset_cfg=cfg['PRESET'],
                     fc_filters=cfg['NUM_FC_FILTERS'],
@@ -269,11 +271,13 @@ def model_from_string(
         wrapped_model = wrap_model_with_batchstats(model)
     elif model_name == "RegressFlowWithAleatoric":
         from easydict import EasyDict
+        # Calculate number of joints from output_dim (output_dim = num_joints * 2)
+        num_joints = output_dim // 2
         CONFIG = EasyDict({
             'DATA_PRESET': {
                 'TYPE': 'simple',
                 'SIGMA': 2,
-                'NUM_JOINTS': 17,
+                'NUM_JOINTS': num_joints,  # Use calculated value instead of hardcoded 17
                 'IMAGE_SIZE': [256, 192],  # Height, Width
                 'HEATMAP_SIZE': [64, 48]
             },

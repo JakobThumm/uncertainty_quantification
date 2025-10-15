@@ -189,9 +189,21 @@ def main():
 
         # Initialize JAX pose estimation model with uncertainty estimation
         models_dir = os.path.join(root_dir, "models_tianle", "H36M", "RegressFlow", "seed_420")
-        checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
+
+        # Use 3-joint reduced model for faster OOD detection
+        # Change to "finetuned_h36m_regressflow_with_unc" for full 17-joint model
+        use_3joint_model = True  # Set to False to use full 17-joint model
+
+        if use_3joint_model:
+            checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_pred_3joints")
+            num_output_joints = 3
+            print("Using 3-joint reduced model (nose, left wrist, right wrist) for faster inference")
+        else:
+            checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
+            num_output_joints = 17
+            print("Using full RegressFlowWithAleatoric model for uncertainty estimation")
+
         pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
-        print("Using RegressFlowWithAleatoric model for uncertainty estimation")
 
         # Initialize YOLO human detector
         human_detector, device_torch = initialize_human_detector('cuda')
@@ -227,7 +239,8 @@ def main():
             device_torch=device_torch,
             mirror_map=MIRROR_13_JOINT_MODEL_MAP,
             score_fn=None,  # No OOD scoring for now
-            human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD
+            human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
+            num_output_joints=num_output_joints  # Pass number of joints from model
         )
         # Take the first detected person
         pred_pose_13 = pose_predictions[0]['keypoints']
@@ -248,7 +261,7 @@ def main():
 
         # Create visualization
         print("\nCreating visualization...")
-        save_path = f"debug_pose_visualization_frame_{sample['frame_idx']}.png"
+        save_path = f"visualizations/debug_pose_visualization_frame_{sample['frame_idx']}.png"
         visualize_poses_matplotlib(
             image=sample['image'],
             gt_pose=gt_pose_13,

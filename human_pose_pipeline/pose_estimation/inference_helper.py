@@ -80,7 +80,8 @@ def pose_estimation_2d(
         pil_image, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch, score_fn=None,
         human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
         ood_threshold=OOD_THRESHOLD,
-        parallelize=False):
+        parallelize=False,
+        num_output_joints=17):
     """
     Complete 2D pose estimation pipeline: resize -> detect humans -> estimate poses.
 
@@ -128,14 +129,14 @@ def pose_estimation_2d(
 
         if score_fn is None:
             # No OOD scoring - run pose prediction only
-            pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats)
+            pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints)
             ood_score = 0.0
         elif score_fn is not None and parallelize:
             # Run pose prediction and OOD scoring in parallel using thread pool
             executor = get_thread_pool()
 
             # Submit both tasks to the thread pool simultaneously
-            pose_future = executor.submit(predict_pose, bounding_box_image, pose_estimation_jit_fn, params, batch_stats)
+            pose_future = executor.submit(predict_pose, bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints)
             ood_future = executor.submit(score_fn, bounding_box_image)
 
             # Wait for BOTH futures to complete simultaneously (more efficient than sequential .result() calls)
@@ -145,7 +146,7 @@ def pose_estimation_2d(
             pred_joints_13, uncertainties_13, covariance_13 = pose_future.result()
             ood_score = float(np.asarray(ood_future.result()))
         else:
-            pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats)
+            pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints)
             t1 = time()
             print(f"Pose prediction time: {t1 - t0:.3f} seconds")
             ood_score = float(np.asarray(score_fn(bounding_box_image)))
@@ -247,7 +248,7 @@ def extract_bounding_box_images(
     return bounding_box_images
 
 
-def predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats):
+def predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints=17):
     """Predict pose for a single bounding box image using the JAX model.
 
     Args:
@@ -255,6 +256,7 @@ def predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats
         pose_estimation_jit_fn: JIT-compiled pose estimation function
         params: JAX model parameters
         batch_stats: JAX model batch statistics (if available)
+        num_output_joints: Number of joints the model outputs (17 for full model, 3 for reduced model)
     Returns:
         tuple: (pred_joints_13, uncertainties_13, covariance_13)
     """
@@ -267,42 +269,94 @@ def predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats
     # Extract predictions - JAX model outputs (following Marian's approach)
     if isinstance(output, dict):
         # RegressFlowWithAleatoric returns dictionary with uncertainty outputs
-        pred_joints = np.array(output['pred_jts'][0])  # Joint coordinates (17, 2)
+        pred_joints = np.array(output['pred_jts'][0])  # Joint coordinates (num_output_joints, 2)
         log_variance = np.array(output.get('log_variance', output.get('pure_sigma', None)))
         if log_variance is not None:
-            log_variance = log_variance[0]  # Remove batch dimension (17, 2)
+            log_variance = log_variance[0]  # Remove batch dimension (num_output_joints, 2)
         covariance_raw = np.array(output.get('covariance', None))
         if covariance_raw is not None:
-            covariance_raw = covariance_raw[0]  # Remove batch dimension (17,)
+            covariance_raw = covariance_raw[0]  # Remove batch dimension (num_output_joints,)
     else:
         # Regular RegressFlow returns tensor directly - reshape from flattened
         pred_joints_flat = np.array(output[0])  # Remove batch dimension
-        pred_joints = pred_joints_flat.reshape(17, 2)  # 17 joints × 2 coords
+        pred_joints = pred_joints_flat.reshape(num_output_joints, 2)  # num_output_joints × 2 coords
         log_variance = None
         covariance_raw = None
 
     # Convert log variance to standard deviation (following Marian's approach)
     if log_variance is not None:
-        uncertainties = np.sqrt(np.exp(log_variance))  # (17, 2)
+        uncertainties = np.sqrt(np.exp(log_variance))  # (num_output_joints, 2)
     else:
         uncertainties = None
 
-    # Select only the 13 joints of interest (same as Marian's approach)
-    pred_joints_13 = pred_joints[JOINT_IDX_13_MODEL]  # (13, 2)
-    if uncertainties is not None:
-        uncertainties_13 = uncertainties[JOINT_IDX_13_MODEL]  # (13, 2)
+    # Handle reduced 3-joint model (nose, left wrist, right wrist)
+    if num_output_joints == 3:
+        # For 3-joint model: indices are [0=nose, 1=left_wrist, 2=right_wrist]
+        # We need to expand to 13 joints by filling missing joints with nose position
+        pred_joints_13 = expand_3joints_to_13joints(pred_joints)
+        if uncertainties is not None:
+            uncertainties_13 = expand_3joints_to_13joints(uncertainties)
+        else:
+            uncertainties_13 = None
+        if covariance_raw is not None:
+            # For 3-joint covariance, replicate nose covariance for missing joints
+            covariance_13 = np.zeros(13)
+            covariance_13[0] = covariance_raw[0]  # Nose
+            covariance_13[5] = covariance_raw[1]  # LWrist
+            covariance_13[6] = covariance_raw[2]  # RWrist
+            covariance_13[1:5] = covariance_raw[0]  # Shoulders and elbows -> nose covariance
+            covariance_13[7:] = covariance_raw[0]  # Hips, knees, ankles -> nose covariance
+        else:
+            covariance_13 = None
     else:
-        uncertainties_13 = None
-    if covariance_raw is not None:
-        covariance_13 = covariance_raw[JOINT_IDX_13_MODEL]  # (13,)
-    else:
-        covariance_13 = None
+        # Select only the 13 joints of interest (same as Marian's approach)
+        pred_joints_13 = pred_joints[JOINT_IDX_13_MODEL]  # (13, 2)
+        if uncertainties is not None:
+            uncertainties_13 = uncertainties[JOINT_IDX_13_MODEL]  # (13, 2)
+        else:
+            uncertainties_13 = None
+        if covariance_raw is not None:
+            covariance_13 = covariance_raw[JOINT_IDX_13_MODEL]  # (13,)
+        else:
+            covariance_13 = None
     return pred_joints_13, uncertainties_13, covariance_13
+
+
+def expand_3joints_to_13joints(joints_3):
+    """
+    Expand 3-joint predictions (nose, left_wrist, right_wrist) to 13 joints.
+    Missing joints are filled with nose position for debugging purposes.
+
+    Args:
+        joints_3: Array of shape (3, 2) with [nose, left_wrist, right_wrist]
+
+    Returns:
+        joints_13: Array of shape (13, 2) with all 13 joints
+    """
+    # 13-joint order: Nose, LShoulder, RShoulder, LElbow, RElbow, LWrist, RWrist,
+    #                 LHip, RHip, LKnee, RKnee, LAnkle, RAnkle
+    joints_13 = np.zeros((13, 2))
+
+    nose = joints_3[0]
+    left_wrist = joints_3[1]
+    right_wrist = joints_3[2]
+
+    # Set the 3 known joints
+    joints_13[0] = nose         # Nose
+    joints_13[5] = left_wrist   # LWrist
+    joints_13[6] = right_wrist  # RWrist
+
+    # Fill all other joints with nose position (for debugging)
+    for i in [1, 2, 3, 4, 7, 8, 9, 10, 11, 12]:
+        joints_13[i] = nose
+
+    return joints_13
 
 
 def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                      mirror_map, score_fn=None,
-                     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD):
+                     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
+                     num_output_joints=17):
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -341,7 +395,8 @@ def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_d
         device_torch=device_torch,
         score_fn=score_fn,
         human_detection_threshold=human_detection_threshold,
-        ood_threshold=ood_threshold
+        ood_threshold=ood_threshold,
+        num_output_joints=num_output_joints
     )
     t0 = time()
     for i in range(len(pose_estimations)):
