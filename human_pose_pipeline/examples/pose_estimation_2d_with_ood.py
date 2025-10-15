@@ -122,7 +122,7 @@ def compute_pose_accuracy(ground_truth, estimated_pose):
 
 
 def evaluate_h36m_with_ood(
-    dataset, model, params, batch_stats,
+    dataset, pose_estimation_jit_fn, params, batch_stats,
     human_detector, device_torch, score_fn, ood_threshold,
     max_samples=None
 ):
@@ -131,7 +131,7 @@ def evaluate_h36m_with_ood(
 
     Args:
         dataset: H36M dataset to evaluate
-        model: JAX pose estimation model
+        pose_estimation_jit_fn: JIT-compiled pose estimation function
         params: Model parameters
         batch_stats: Batch statistics
         human_detector: YOLO detector
@@ -161,7 +161,7 @@ def evaluate_h36m_with_ood(
     warmup_frame = dataset[0]['frames'][0]
     _ = process_frame_2d(
         frame=warmup_frame,
-        model=model,
+        pose_estimation_jit_fn=pose_estimation_jit_fn,
         params=params,
         batch_stats=batch_stats,
         human_detector=human_detector,
@@ -185,12 +185,11 @@ def evaluate_h36m_with_ood(
         frames = sample['frames']
         t0b = time()
 
-        # max_frames = len(frames)
-        # for frame_idx in range(max_frames):
-
         # Test one random frame instead of all frames
-        frame_idx = np.random.randint(len(frames))
-        if True:
+        # frame_idx = np.random.randint(len(frames))
+        # if True:
+        max_frames = len(frames)
+        for frame_idx in range(max_frames):
             if max_samples is not None and samples_processed >= max_samples:
                 break
 
@@ -203,7 +202,7 @@ def evaluate_h36m_with_ood(
             print(f"Frame indexing time: {t1 - t0b:.3f} seconds")
             pose_predictions = process_frame_2d(
                 frame=frame_image_pil,
-                model=model,
+                pose_estimation_jit_fn=pose_estimation_jit_fn,
                 params=params,
                 batch_stats=batch_stats,
                 human_detector=human_detector,
@@ -386,7 +385,7 @@ def main():
     parser.add_argument('--model_save_path', type=str, default='models_tianle', help='Path to saved models')
     parser.add_argument('--run_name', type=str, default='finetuned_h36m_regressflow_pred', help='Model run name')
     parser.add_argument('--ood_threshold', type=float, default=0.3, help='OOD threshold')
-    parser.add_argument('--max_samples', type=int, default=50, help='Max samples from H36M')
+    parser.add_argument('--max_samples', type=int, default=None, help='Max samples from H36M')
     parser.add_argument('--output_dir', type=str, default='results/pose_ood_evaluation', help='Output directory')
 
     args = parser.parse_args()
@@ -399,7 +398,7 @@ def main():
     print("\n1. Loading models...")
     models_dir = os.path.join(root_dir, args.model_save_path, "H36M", "RegressFlow", "seed_420")
     checkpoint_path = os.path.join(models_dir, args.run_name)
-    model, params, batch_stats = initialize_jax_models(checkpoint_path)
+    pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path)
 
     human_detector, device_torch = initialize_human_detector('cuda')
 
@@ -425,7 +424,7 @@ def main():
     # Evaluate H36M dataset
     print("\n4. Evaluating H36M dataset...")
     h36m_results = evaluate_h36m_with_ood(
-        h36m_dataset, model, params, batch_stats,
+        h36m_dataset, pose_estimation_jit_fn, params, batch_stats,
         human_detector, device_torch, score_fn, args.ood_threshold,
         max_samples=args.max_samples
     )

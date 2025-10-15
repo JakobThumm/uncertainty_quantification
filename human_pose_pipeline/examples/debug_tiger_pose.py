@@ -279,7 +279,7 @@ def main():
         # Initialize JAX pose estimation model
         models_dir = os.path.join(root_dir, "models_tianle", "H36M", "RegressFlow", "seed_420")
         checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
-        model, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
+        pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
 
         # Initialize YOLO human detector (not used but required for consistency)
         human_detector, device_torch = initialize_human_detector('cuda')
@@ -373,7 +373,7 @@ def main():
         # Perform pose estimation
         pose_estimations = get_pose_estimations_jax(
             transformed_image, original_dimensions, scale_factors, person_boxes,
-            model, params, batch_stats, False
+            pose_estimation_jit_fn, params, batch_stats, False
         )
 
         if pose_estimations:

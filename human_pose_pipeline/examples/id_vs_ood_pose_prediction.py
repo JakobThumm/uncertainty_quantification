@@ -289,7 +289,7 @@ def evaluate_pose_prediction_accuracy(predictions, ground_truth, valid_mask, thr
     }
 
 
-def predict_poses_on_h36m_dataset(model, params, batch_stats, human_detector, device_torch,
+def predict_poses_on_h36m_dataset(pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                                   dataset, dataset_name, max_samples=None):
     """
     Run pose prediction on H36M dataset using the same approach as pose_estimation_2D.py.
@@ -326,7 +326,7 @@ def predict_poses_on_h36m_dataset(model, params, batch_stats, human_detector, de
             # Run pose estimation
             pose_predictions = process_frame_2d(
                 frame=frame_image_pil,
-                model=model,
+                pose_estimation_jit_fn=pose_estimation_jit_fn,
                 params=params,
                 batch_stats=batch_stats,
                 human_detector=human_detector,
@@ -397,7 +397,7 @@ def predict_poses_on_h36m_dataset(model, params, batch_stats, human_detector, de
     }
 
 
-def predict_poses_on_tiger_dataset(model, params, batch_stats, human_detector, device_torch,
+def predict_poses_on_tiger_dataset(pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                                   processed_batches, dataset_name, max_batches=None):
     """
     Run pose prediction on tiger dataset using processed batches.
@@ -452,7 +452,7 @@ def predict_poses_on_tiger_dataset(model, params, batch_stats, human_detector, d
             # Step 3: Perform pose estimation
             pose_estimations = get_pose_estimations_jax(
                 transformed_image, original_dimensions, scale_factors, person_boxes,
-                model, params, batch_stats, False
+                pose_estimation_jit_fn, params, batch_stats, False
             )
 
             if pose_estimations:
@@ -609,7 +609,7 @@ def main():
         # Use uncertainty-enabled model
         models_dir = os.path.join(root_dir, "models_tianle", "H36M", "RegressFlow", "seed_420")
         checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
-        model, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
+        pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
         print("JAX RegressFlow model with uncertainty loaded successfully!")
 
         # Initialize YOLO human detector
@@ -663,12 +663,12 @@ def main():
         max_samples = 20  # Limit for quick testing
 
         h36m_results = predict_poses_on_h36m_dataset(
-            model, params, batch_stats, human_detector, device_torch,
+            pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
             h36m_dataset, "H36M", max_samples=max_samples
         )
 
         tiger_results = predict_poses_on_tiger_dataset(
-            model, params, batch_stats, human_detector, device_torch,
+            pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
             processed_tiger_batches, "Tiger", max_batches=3
         )
 

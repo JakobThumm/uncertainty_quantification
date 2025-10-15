@@ -190,7 +190,7 @@ def main():
         # Initialize JAX pose estimation model with uncertainty estimation
         models_dir = os.path.join(root_dir, "models_tianle", "H36M", "RegressFlow", "seed_420")
         checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
-        model, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
+        pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
         print("Using RegressFlowWithAleatoric model for uncertainty estimation")
 
         # Initialize YOLO human detector
@@ -220,7 +220,7 @@ def main():
 
         pose_predictions = process_frame_2d(
             frame=sample['image'],
-            model=model,
+            pose_estimation_jit_fn=pose_estimation_jit_fn,
             params=params,
             batch_stats=batch_stats,
             human_detector=human_detector,

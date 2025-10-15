@@ -77,15 +77,16 @@ def resize_image(pil_image, target_size=YOLO_IMAGE_SIZE):
 
 
 def pose_estimation_2d(
-        pil_image, model, params, batch_stats, human_detector, device_torch, score_fn=None, 
+        pil_image, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch, score_fn=None,
         human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
-        ood_threshold=OOD_THRESHOLD):
+        ood_threshold=OOD_THRESHOLD,
+        parallelize=False):
     """
     Complete 2D pose estimation pipeline: resize -> detect humans -> estimate poses.
 
     Args:
         pil_image (PIL.Image.Image): The input high-resolution image
-        model: The JAX pose estimation model
+        pose_estimation_jit_fn: JIT-compiled pose estimation function
         params: JAX model parameters
         batch_stats: JAX model batch statistics (if available)
         human_detector: The pre-loaded YOLO human detection model (PyTorch)
@@ -93,6 +94,7 @@ def pose_estimation_2d(
         device_torch: PyTorch device for human detection
         human_detection_threshold (float, optional): Confidence threshold for human detection
         ood_threshold (float, optional): Threshold for OOD detection in pose estimation
+        parallelize (bool, optional): Whether to run pose prediction and OOD scoring in parallel
 
     Returns:
         List[Dict]: List of dictionaries containing for each detected person:
@@ -126,15 +128,14 @@ def pose_estimation_2d(
 
         if score_fn is None:
             # No OOD scoring - run pose prediction only
-            pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, model, params, batch_stats)
+            pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats)
             ood_score = 0.0
-            is_ood = False
-        else:
+        elif score_fn is not None and parallelize:
             # Run pose prediction and OOD scoring in parallel using thread pool
             executor = get_thread_pool()
 
             # Submit both tasks to the thread pool simultaneously
-            pose_future = executor.submit(predict_pose, bounding_box_image, model, params, batch_stats)
+            pose_future = executor.submit(predict_pose, bounding_box_image, pose_estimation_jit_fn, params, batch_stats)
             ood_future = executor.submit(score_fn, bounding_box_image)
 
             # Wait for BOTH futures to complete simultaneously (more efficient than sequential .result() calls)
@@ -143,10 +144,14 @@ def pose_estimation_2d(
             # Get results (these are now instant since both are done)
             pred_joints_13, uncertainties_13, covariance_13 = pose_future.result()
             ood_score = float(np.asarray(ood_future.result()))
-            is_ood = ood_score > ood_threshold
-
-        t1 = time()
-        print(f"Pose prediction + OOD scoring time (parallel): {t1 - t0:.3f} seconds")
+        else:
+            pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats)
+            t1 = time()
+            print(f"Pose prediction time: {t1 - t0:.3f} seconds")
+            ood_score = float(np.asarray(score_fn(bounding_box_image)))
+        is_ood = ood_score > ood_threshold
+        t2 = time()
+        print(f"Pose prediction + OOD scoring time (parallel): {t2 - t0:.3f} seconds")
 
         # Transform back to original image space
         t3 = time()
@@ -242,23 +247,22 @@ def extract_bounding_box_images(
     return bounding_box_images
 
 
-def predict_pose(bounding_box_image, model, params, batch_stats):
+def predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats):
     """Predict pose for a single bounding box image using the JAX model.
 
     Args:
         bounding_box_image (np.ndarray): Cropped image of the detected human
-        model: The JAX pose estimation model
+        pose_estimation_jit_fn: JIT-compiled pose estimation function
         params: JAX model parameters
         batch_stats: JAX model batch statistics (if available)
     Returns:
         tuple: (pred_joints_13, uncertainties_13, covariance_13)
     """
-    # Get model predictions using JAX
-    with jax.disable_jit(False):  # Enable JIT for inference
-        if batch_stats is not None:
-            output = model.apply_test(params, batch_stats, bounding_box_image)
-        else:
-            output = model.apply_test(params, bounding_box_image)
+    # Get model predictions using JIT-compiled function
+    if batch_stats is not None:
+        output = pose_estimation_jit_fn(params, batch_stats, bounding_box_image)
+    else:
+        output = pose_estimation_jit_fn(params, bounding_box_image)
 
     # Extract predictions - JAX model outputs (following Marian's approach)
     if isinstance(output, dict):
@@ -296,7 +300,7 @@ def predict_pose(bounding_box_image, model, params, batch_stats):
     return pred_joints_13, uncertainties_13, covariance_13
 
 
-def process_frame_2d(frame, model, params, batch_stats, human_detector, device_torch,
+def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                      mirror_map, score_fn=None,
                      human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD):
     """
@@ -304,7 +308,7 @@ def process_frame_2d(frame, model, params, batch_stats, human_detector, device_t
 
     Args:
         frame: Input frame image
-        model: JAX pose estimation model
+        pose_estimation_jit_fn: JIT-compiled pose estimation function
         params: JAX model parameters
         batch_stats: JAX model batch statistics
         human_detector: YOLO human detector
@@ -330,7 +334,7 @@ def process_frame_2d(frame, model, params, batch_stats, human_detector, device_t
         frame = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     pose_estimations = pose_estimation_2d(
         pil_image=frame,
-        model=model,
+        pose_estimation_jit_fn=pose_estimation_jit_fn,
         params=params,
         batch_stats=batch_stats,
         human_detector=human_detector,
@@ -381,6 +385,7 @@ def initialize_human_detector(device_torch=None):
 
     return human_detector, device_torch
 
+
 def initialize_jax_models(checkpoint_path_jax, use_uncertainty=False):
     """
     Initialize and load the JAX pose estimation model.
@@ -390,7 +395,7 @@ def initialize_jax_models(checkpoint_path_jax, use_uncertainty=False):
         use_uncertainty (bool): Whether to use RegressFlowWithAleatoric for uncertainty estimation
 
     Returns:
-        tuple: (jax_model, jax_params, jax_batch_stats)
+        tuple: (pose_estimation_jit_fn, jax_params, jax_batch_stats)
     """
 
     # Load JAX pose estimation model
@@ -436,7 +441,15 @@ def initialize_jax_models(checkpoint_path_jax, use_uncertainty=False):
     print(f"  - Output dim: {args_dict['output_dim']}")
     print(f"  - Has batch stats: {batch_stats is not None}")
 
-    return model, params, batch_stats
+    # Create JIT-compiled inference function for maximum performance
+    print("Compiling JIT inference function...")
+    if batch_stats is not None:
+        pose_estimation_jit_fn = jax.jit(lambda p, bs, x: model.apply_test(p, bs, x))
+    else:
+        pose_estimation_jit_fn = jax.jit(lambda p, x: model.apply_test(p, x))
+    print("JIT compilation complete!")
+
+    return pose_estimation_jit_fn, params, batch_stats
 
 def get_human_detector(device_torch):
     """

@@ -63,7 +63,7 @@ class PoseDataWrapper:
 
 def process_pose_dataset_for_ood(
     dataset,
-    model,
+    pose_estimation_jit_fn,
     params,
     batch_stats,
     human_detector,
@@ -127,7 +127,7 @@ def process_pose_dataset_for_ood(
             # Run pose estimation to get model input format
             pose_predictions = process_frame_2d(
                 frame=image_pil,
-                model=model,
+                pose_estimation_jit_fn=pose_estimation_jit_fn,
                 params=params,
                 batch_stats=batch_stats,
                 human_detector=human_detector,
@@ -230,18 +230,18 @@ def setup_pose_ood_detection(
     print("Setting up pose OOD detection...")
 
     # Initialize JAX pose estimation model
-    model, params, batch_stats = initialize_jax_models(model_path)
+    pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(model_path)
 
-    print(f"Pose model loaded: {model}")
+    print(f"Pose model loaded successfully")
     print(f"Model parameters loaded successfully")
 
-    return model, params, batch_stats
+    return pose_estimation_jit_fn, params, batch_stats
 
 
 def compute_pose_ood_scores(
     id_dataset,
     ood_dataset,
-    model,
+    pose_estimation_jit_fn,
     params,
     batch_stats,
     args_dict: Dict[str, Any],
@@ -279,7 +279,7 @@ def compute_pose_ood_scores(
     print("Processing ID dataset...")
     id_data, id_metadata = process_pose_dataset_for_ood(
         id_dataset,
-        model,
+        pose_estimation_jit_fn,
         params,
         batch_stats,
         human_detector,
@@ -292,7 +292,7 @@ def compute_pose_ood_scores(
     print("Processing OOD dataset...")
     ood_data, ood_metadata = process_pose_dataset_for_ood(
         ood_dataset,
-        model,
+        pose_estimation_jit_fn,
         params,
         batch_stats,
         human_detector,
@@ -326,7 +326,7 @@ def compute_pose_ood_scores(
     print("Computing sketching Lanczos score function...")
     # Compute the low-memory Lanczos score function
     score_fun, eigenval, approx_quadratic_form, quadratic_form = low_memory_lanczos_score_fun(
-        model,
+        pose_estimation_jit_fn,
         params_dict,
         train_loader,
         lanczos_args,
@@ -381,6 +381,6 @@ if __name__ == "__main__":
     args_dict = vars(args)
 
     # Set up model
-    model, params, batch_stats = setup_pose_ood_detection(args.model_path, args_dict)
+    pose_estimation_jit_fn, params, batch_stats = setup_pose_ood_detection(args.model_path, args_dict)
 
     print("Pose OOD detection setup complete!")
