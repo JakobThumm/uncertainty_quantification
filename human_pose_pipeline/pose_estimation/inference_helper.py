@@ -133,8 +133,6 @@ def pose_estimation_2d(
         trans = bounding_box_image_struct['trans']
 
         # Run pose prediction and OOD scoring in parallel
-        t0 = time()
-
         if score_fn is None:
             # No OOD scoring - run pose prediction only
             pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints)
@@ -155,22 +153,15 @@ def pose_estimation_2d(
             ood_score = float(np.asarray(ood_future.result()))
         else:
             pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints)
-            t1 = time()
-            print(f"Pose prediction time: {t1 - t0:.3f} seconds")
             ood_score = float(np.asarray(score_fn(bounding_box_image)))
         is_ood = ood_score > ood_threshold
-        t2 = time()
-        print(f"Pose prediction + OOD scoring time (parallel): {t2 - t0:.3f} seconds")
 
         # Transform back to original image space
-        t3 = time()
         result = transform_predictions_to_original_space(
             pred_joints_13, trans, scale_x, scale_y,
             uncertainties=uncertainties_13,
             covariance=covariance_13
         )
-        t4 = time()
-        print(f"Coordinate transformation time: {t4 - t3:.3f} seconds")
         # Fallback if no uncertainties are predicted
         if result.get('uncertainties') is None:
             result['uncertainties'] = np.ones_like(result['keypoints']) * 10.0  # 10 pixel std dev
@@ -189,8 +180,6 @@ def pose_estimation_2d(
             'is_ood': is_ood
         }
         pose_estimations.append(pose)
-        t5 = time()
-        print(f"Element storage time: {t5 - t4:.3f} seconds")
 
     return pose_estimations
 
@@ -220,8 +209,6 @@ def extract_bounding_box_images(
             - 'scale': Width and height of the bounding box in YOLO image [w, h]
             - 'trans': Transformation matrix (2x3) from YOLO image to cropped bbox image
     """
-    t0 = time()
-
     # Step 1: Resize image
     if use_gpu_acceleration:
         device_str = 'cuda' if str(device_torch).startswith('cuda') else 'cpu'
@@ -229,13 +216,8 @@ def extract_bounding_box_images(
     else:
         resized_image, original_dimensions, scale_factors = resize_image(full_image)
 
-    t1 = time()
-    print(f"Image resizing time: {t1 - t0:.3f} seconds")
-
     # Step 2: Detect humans
     person_boxes = detect_humans(human_detector, resized_image, device_torch, threshold=threshold)
-    t2 = time()
-    print(f"Human detection time: {t2 - t1:.3f} seconds")
 
     if not person_boxes:
         print("No humans detected with the specified threshold.")
@@ -267,9 +249,6 @@ def extract_bounding_box_images(
                 'trans': trans
             }
             bounding_box_images.append(bbox_struct)
-
-    t3 = time()
-    print(f"Bounding box extraction time: {t3 - t2:.3f} seconds")
     return bounding_box_images
 
 
@@ -381,7 +360,7 @@ def expand_3joints_to_13joints(joints_3):
 def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                      mirror_map, score_fn=None,
                      human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
-                     num_output_joints=17, use_gpu_acceleration=True):
+                     num_output_joints=17, use_gpu_acceleration=True, verbose=True):
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -413,6 +392,7 @@ def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_d
     """
     if not isinstance(frame, Image.Image):
         frame = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    t0 = time()
     pose_estimations = pose_estimation_2d(
         pil_image=frame,
         pose_estimation_jit_fn=pose_estimation_jit_fn,
@@ -426,7 +406,6 @@ def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_d
         num_output_joints=num_output_joints,
         use_gpu_acceleration=use_gpu_acceleration
     )
-    t0 = time()
     for i in range(len(pose_estimations)):
         pose_estimations[i]['keypoints'] = joint_mapping(np.array(pose_estimations[i]['keypoints']), mirror_map)
         pose_estimations[i]['uncertainties'] = joint_mapping(np.array(pose_estimations[i]['uncertainties']), mirror_map)
@@ -439,8 +418,9 @@ def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_d
                 [float(pose_estimations[i]['covariance'][j]), float(pose_estimations[i]['uncertainties'][j, 1])**2]
             ]
         pose_estimations[i]['covariance_matrix'] = joint_covariances
-    t1 = time()
-    print(f"Post-processing time (mirroring + covariance matrices): {t1 - t0:.3f} seconds")
+    if verbose:
+        t1 = time()
+        print(f"Total frame processing time (detection + pose estimation): {t1 - t0:.3f} seconds")
     return pose_estimations
 
 
