@@ -66,7 +66,7 @@ We have two things:
         - [x] Properly pre-compile the pose estimation -> speed up from 100ms to 4ms
         - [x] Reduce network output for OOD detection from 17x2 to 3x2 (hand, left hand, right hand) -> speed up from 160ms to 29ms (23ms expected)
         - [x] Write score fn that only scores certain layers to reduce the model size -> Prediction accuracy significantly lower.
-        - [ ] Jaxify the image processing pipeline
+        - [x] Pytorch the image processing pipeline -> from 9ms for image processing to 4ms.
  4. Test the pre-trained pose prediction models
     - Use the pre-trained models with converted weights into JAX.
     - First, perform pose prediction on a few H3.6M examples.

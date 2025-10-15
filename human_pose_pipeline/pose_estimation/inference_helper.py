@@ -37,6 +37,10 @@ from human_pose_pipeline.utils.transform_utils import (
     preprocess_image_with_bbox,
     transform_predictions_to_original_space
 )
+from human_pose_pipeline.utils.gpu_accelerated_utils import (
+    resize_image_gpu,
+    extract_bounding_box_images_gpu
+)
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_IDX_13_MODEL,
@@ -81,7 +85,8 @@ def pose_estimation_2d(
         human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
         ood_threshold=OOD_THRESHOLD,
         parallelize=False,
-        num_output_joints=17):
+        num_output_joints=17,
+        use_gpu_acceleration=False):
     """
     Complete 2D pose estimation pipeline: resize -> detect humans -> estimate poses.
 
@@ -96,6 +101,8 @@ def pose_estimation_2d(
         human_detection_threshold (float, optional): Confidence threshold for human detection
         ood_threshold (float, optional): Threshold for OOD detection in pose estimation
         parallelize (bool, optional): Whether to run pose prediction and OOD scoring in parallel
+        num_output_joints (int, optional): Number of joints the model outputs
+        use_gpu_acceleration (bool, optional): Whether to use GPU-accelerated preprocessing
 
     Returns:
         List[Dict]: List of dictionaries containing for each detected person:
@@ -112,7 +119,8 @@ def pose_estimation_2d(
         full_image=pil_image,
         human_detector=human_detector,
         device_torch=device_torch,
-        threshold=human_detection_threshold
+        threshold=human_detection_threshold,
+        use_gpu_acceleration=use_gpu_acceleration
     )
     pose_estimations = []
 
@@ -191,7 +199,8 @@ def extract_bounding_box_images(
         full_image,
         human_detector,
         device_torch,
-        threshold=YOLO_CONFIDENCE_THRESHOLD
+        threshold=YOLO_CONFIDENCE_THRESHOLD,
+        use_gpu_acceleration=False
 ):
     """
     Extract bounding box images of detected humans from the full image.
@@ -201,6 +210,7 @@ def extract_bounding_box_images(
         human_detector: The pre-loaded YOLO human detection model (PyTorch)
         device_torch: PyTorch device for human detection
         threshold (float, optional): Confidence threshold for human detection
+        use_gpu_acceleration (bool, optional): Whether to use GPU-accelerated preprocessing
     Returns:
         list of structs with keys:
             - 'scale_factors_yolo': Scale factors (x, y) from original to YOLO input size
@@ -211,8 +221,14 @@ def extract_bounding_box_images(
             - 'trans': Transformation matrix (2x3) from YOLO image to cropped bbox image
     """
     t0 = time()
+
     # Step 1: Resize image
-    resized_image, original_dimensions, scale_factors = resize_image(full_image)
+    if use_gpu_acceleration:
+        device_str = 'cuda' if str(device_torch).startswith('cuda') else 'cpu'
+        resized_image, original_dimensions, scale_factors = resize_image_gpu(full_image, device=device_str)
+    else:
+        resized_image, original_dimensions, scale_factors = resize_image(full_image)
+
     t1 = time()
     print(f"Image resizing time: {t1 - t0:.3f} seconds")
 
@@ -225,24 +241,33 @@ def extract_bounding_box_images(
         print("No humans detected with the specified threshold.")
         return []
 
-    scale_x, scale_y = scale_factors
+    # Step 3: Extract bounding boxes
+    if use_gpu_acceleration:
+        # Use GPU-accelerated bounding box extraction
+        device_str = 'cuda' if str(device_torch).startswith('cuda') else 'cpu'
+        resized_image_np = np.array(resized_image)
+        bounding_box_images = extract_bounding_box_images_gpu(
+            full_image, person_boxes, scale_factors, resized_image_np, device=device_str
+        )
+    else:
+        # Use CPU-based bounding box extraction
+        scale_x, scale_y = scale_factors
+        resized_image_np = np.array(resized_image)
+        bounding_box_images = []
 
-    # Convert PIL to numpy for processing
-    resized_image_np = np.array(resized_image)
-    bounding_box_images = []
+        for i, bbox in enumerate(person_boxes):
+            # Transform image to model input dimension from bounding box
+            bounding_box_image, _, center, scale, trans, processed_bbox = preprocess_image_with_bbox(resized_image_np, bbox)
+            bbox_struct = {
+                'scale_factors_yolo': scale_factors,
+                'bbox': bbox,
+                'image': bounding_box_image,
+                'center': center,
+                'scale': scale,
+                'trans': trans
+            }
+            bounding_box_images.append(bbox_struct)
 
-    for i, bbox in enumerate(person_boxes):
-        # Transform image to model input dimension from bounding box
-        bounding_box_image, _, center, scale, trans, processed_bbox = preprocess_image_with_bbox(resized_image_np, bbox)
-        bbox_struct = {
-            'scale_factors_yolo': scale_factors,
-            'bbox': bbox,
-            'image': bounding_box_image,
-            'center': center,
-            'scale': scale,
-            'trans': trans
-        }
-        bounding_box_images.append(bbox_struct)
     t3 = time()
     print(f"Bounding box extraction time: {t3 - t2:.3f} seconds")
     return bounding_box_images
@@ -356,7 +381,7 @@ def expand_3joints_to_13joints(joints_3):
 def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                      mirror_map, score_fn=None,
                      human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
-                     num_output_joints=17):
+                     num_output_joints=17, use_gpu_acceleration=True):
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -371,6 +396,8 @@ def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_d
         score_fn: Function to compute OOD score from model outputs. If None -> No OOD scoring.
         human_detection_threshold (float, optional): Confidence threshold for human detection
         ood_threshold (float, optional): Threshold for OOD detection in pose estimation
+        num_output_joints (int, optional): Number of joints the model outputs
+        use_gpu_acceleration (bool, optional): Whether to use GPU-accelerated preprocessing (default True)
 
     Returns:
         List[Dict]: List of dictionaries containing for each detected person:
@@ -396,7 +423,8 @@ def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_d
         score_fn=score_fn,
         human_detection_threshold=human_detection_threshold,
         ood_threshold=ood_threshold,
-        num_output_joints=num_output_joints
+        num_output_joints=num_output_joints,
+        use_gpu_acceleration=use_gpu_acceleration
     )
     t0 = time()
     for i in range(len(pose_estimations)):
