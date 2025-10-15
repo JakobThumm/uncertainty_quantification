@@ -2,9 +2,9 @@ import jax
 import jax.numpy as jnp
 from src.models import compute_num_params
 from src.datasets.utils import get_subset_loader
-from src.autodiff.ggn import get_ggn_vector_product, get_ggn_vector_product_dataloader
+from src.autodiff.ggn import get_ggn_vector_product, get_ggn_vector_product_dataloader, get_ggn_vector_product_with_layer_filter, get_ggn_vector_product_dataloader_with_layer_filter
 from src.autodiff.hessian import get_hessian_vector_product, get_hessian_vector_product_dataloader
-from src.autodiff.jacobian import get_jacobian_vector_product, get_jacobianT_vector_product
+from src.autodiff.jacobian import get_jacobian_vector_product, get_jacobianT_vector_product, get_jacobian_vector_product_filtered, get_jacobianT_vector_product_filtered
 from src.lanczos.low_memory import low_memory_lanczos
 from src.estimators.frobenius import get_frobenius_norm, get_frobenius_norm_sequential, get_frobenius_norm_difference_sequential
 from src.sketches import No_sketch, Dense_sketch, SRFT_sketch
@@ -181,7 +181,7 @@ def load_score_functions(cache_dir, base_key):
     )
 
 
-def _get_or_compute_ggn(params_dict, model, train_loader, args_dict, trainset_size, n_params, cache_dir, base_key):
+def _get_or_compute_ggn(params_dict, model, train_loader, args_dict, trainset_size, n_params, cache_dir, base_key, target_layers=None):
     """Get GGN vector product from cache or compute it"""
     load_ggn = args_dict.get('load_ggn_vector_product', False)
 
@@ -199,10 +199,18 @@ def _get_or_compute_ggn(params_dict, model, train_loader, args_dict, trainset_si
     if not args_dict["serialize_ggn_on_batches"]:
         data_array = jnp.asarray([train_loader.dataset[i][0] for i in range(trainset_size)])
         if not args_dict["use_hessian"]:
-            ggn_vector_product = get_ggn_vector_product(
-                params_dict, model, data_array=data_array,
-                likelihood_type=args_dict["likelihood"]
-            )
+            if target_layers is not None:
+                print(f"Computing layer-filtered GGN for layers: {target_layers}")
+                ggn_vector_product = get_ggn_vector_product_with_layer_filter(
+                    params_dict, model, data_array=data_array,
+                    likelihood_type=args_dict["likelihood"],
+                    target_layers=target_layers
+                )
+            else:
+                ggn_vector_product = get_ggn_vector_product(
+                    params_dict, model, data_array=data_array,
+                    likelihood_type=args_dict["likelihood"]
+                )
         else:
             print("Using the Hessian instead of the GGN")
             ggn_vector_product = get_hessian_vector_product(
@@ -217,10 +225,18 @@ def _get_or_compute_ggn(params_dict, model, train_loader, args_dict, trainset_si
             drop_last=True
         )
         if not args_dict["use_hessian"]:
-            ggn_vector_product = get_ggn_vector_product_dataloader(
-                params_dict, model, train_loader,
-                likelihood_type=args_dict["likelihood"]
-            )
+            if target_layers is not None:
+                print(f"Computing layer-filtered GGN for layers: {target_layers}")
+                ggn_vector_product = get_ggn_vector_product_dataloader_with_layer_filter(
+                    params_dict, model, train_loader,
+                    likelihood_type=args_dict["likelihood"],
+                    target_layers=target_layers
+                )
+            else:
+                ggn_vector_product = get_ggn_vector_product_dataloader(
+                    params_dict, model, train_loader,
+                    likelihood_type=args_dict["likelihood"]
+                )
         else:
             print("Using the Hessian instead of the GGN")
             ggn_vector_product = get_hessian_vector_product_dataloader(
@@ -324,8 +340,21 @@ def low_memory_lanczos_score_fun(
         params_dict,
         train_loader,
         args_dict,
-        use_eigenvals : bool = True
+        use_eigenvals : bool = True,
+        target_layers = None
     ):
+    """
+    Compute OOD scores using low-memory Lanczos method.
+
+    Args:
+        model: Flax model
+        params_dict: Parameter dictionary
+        train_loader: Training data loader
+        args_dict: Configuration dictionary
+        use_eigenvals: Whether to use eigenvalues in score computation
+        target_layers: Optional list of layer names to compute GGN over (e.g., ['LinearNorm_0', 'BottleneckStage_3'])
+                      If None, uses all layers
+    """
     # Validate cache dependencies
     load_ggn = args_dict.get('load_ggn_vector_product', False)
     load_sketch = args_dict.get('load_sketch_op', False)
@@ -339,7 +368,17 @@ def low_memory_lanczos_score_fun(
     # Setup parameters
     cache_dir = args_dict.get('cache_dir')
     trainset_size = int(0.9*args_dict["subsample_trainset"])
-    n_params = compute_num_params(params_dict["params"])
+
+    # If target_layers specified, compute n_params only for those layers
+    if target_layers is not None:
+        from src.autodiff.ggn import _filter_params_by_layers
+        filtered_params, _ = _filter_params_by_layers(params_dict["params"], target_layers)
+        n_params = compute_num_params(filtered_params)
+        print(f"Using {len(target_layers)} target layers with {n_params:,} parameters")
+    else:
+        n_params = compute_num_params(params_dict["params"])
+        print(f"Using all layers with {n_params:,} parameters")
+
     prior_scale = 1. / (2 * trainset_size * args_dict['prior_std']**2)
 
     # Get base cache key
@@ -350,7 +389,7 @@ def low_memory_lanczos_score_fun(
 
     # Get or compute GGN, sketch, and eigenpairs
     ggn_vector_product = _get_or_compute_ggn(
-        params_dict, model, train_loader, args_dict, trainset_size, n_params, cache_dir, base_key
+        params_dict, model, train_loader, args_dict, trainset_size, n_params, cache_dir, base_key, target_layers=target_layers
     )
     sketch_op = _get_or_compute_sketch(args_dict, n_params, cache_dir, base_key)
     eigenvec, eigenval = _get_or_compute_eigenpairs(
@@ -372,10 +411,14 @@ def low_memory_lanczos_score_fun(
         def inv_sqrt_approx_ggn_vector_product(vector):
             return (sketch_op @ vector).T @ eigenvec
 
+    # Use filtered Jacobian functions that keep all params for forward pass
+    # but only compute gradients for target layers
     @jax.vmap
     @jax.jit
     def score_fun(datapoint):
-        jacobianT_vector_product = get_jacobianT_vector_product(params_dict, model, datapoint, single_datapoint=True)
+        jacobianT_vector_product = get_jacobianT_vector_product_filtered(
+            params_dict, model, datapoint, single_datapoint=True, target_layers=target_layers
+        )
         variance = get_frobenius_norm_difference_sequential(
             jacobianT_vector_product,
             inv_sqrt_approx_ggn_vector_product,
@@ -386,8 +429,12 @@ def low_memory_lanczos_score_fun(
     @jax.vmap
     @jax.jit
     def quadratic_form(datapoint):
-        jacobian_vector_product = get_jacobian_vector_product(params_dict, model, datapoint, single_datapoint=True)
-        jacobianT_vector_product = get_jacobianT_vector_product(params_dict, model, datapoint, single_datapoint=True)
+        jacobian_vector_product = get_jacobian_vector_product_filtered(
+            params_dict, model, datapoint, single_datapoint=True, target_layers=target_layers
+        )
+        jacobianT_vector_product = get_jacobianT_vector_product_filtered(
+            params_dict, model, datapoint, single_datapoint=True, target_layers=target_layers
+        )
         real_quadratic_form = jax.jit(lambda vector: jacobian_vector_product(ggn_vector_product(jacobianT_vector_product(vector))))
         qf = get_frobenius_norm(
             real_quadratic_form,
@@ -399,8 +446,12 @@ def low_memory_lanczos_score_fun(
     @jax.vmap
     @jax.jit
     def approx_quadratic_form(datapoint):
-        jacobian_vector_product = get_jacobian_vector_product(params_dict, model, datapoint, single_datapoint=True)
-        jacobianT_vector_product = get_jacobianT_vector_product(params_dict, model, datapoint, single_datapoint=True)
+        jacobian_vector_product = get_jacobian_vector_product_filtered(
+            params_dict, model, datapoint, single_datapoint=True, target_layers=target_layers
+        )
+        jacobianT_vector_product = get_jacobianT_vector_product_filtered(
+            params_dict, model, datapoint, single_datapoint=True, target_layers=target_layers
+        )
         fake_quadratic_form = jax.jit(lambda vector: jacobian_vector_product(approx_ggn_vector_product(jacobianT_vector_product(vector))))
         approx_qf = get_frobenius_norm(
             fake_quadratic_form,

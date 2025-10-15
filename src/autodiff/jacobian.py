@@ -288,6 +288,144 @@ def get_hidden_jacobianT_vector_product(
 #######################################
 # Instatiate full jacobian explicitly #
 
+def get_jacobianT_vector_product_filtered(
+        params_dict,
+        model: flax.linen.Module,
+        data_array: jax.Array = None,
+        single_datapoint = False,
+        target_layers = None
+    ):
+    """
+    Get JacobianT vector product that only computes gradients for target layers.
+
+    Args:
+        params_dict: Full parameter dictionary (all layers needed for forward pass)
+        model: Flax model
+        data_array: Input data
+        single_datapoint: Whether input is single datapoint
+        target_layers: List of layer names to compute gradients for (e.g., ['LinearNorm_0'])
+                      If None, computes for all parameters
+
+    Returns:
+        jacobianT_vector_product: Function that computes J^T·v but only for target layers
+    """
+    if target_layers is None:
+        # Fall back to standard version
+        return get_jacobianT_vector_product(params_dict, model, data_array, single_datapoint)
+
+    if single_datapoint:
+        data_array = jnp.expand_dims(data_array, 0)
+    B = data_array.shape[0]
+
+    # Get full params for forward pass
+    full_params = params_dict['params']
+
+    # Filter to get only target params
+    from src.autodiff.ggn import _filter_params_by_layers
+    filtered_params, rest_params = _filter_params_by_layers(full_params, target_layers)
+
+    # Set up model evaluation with full params
+    if model.has_attentionmask:
+        attention_mask = params_dict['attention_mask']
+        relative_position_index = params_dict['relative_position_index']
+        def model_on_filtered_params(filt_p):
+            # Merge filtered params back with frozen rest params for forward pass
+            from src.autodiff.ggn import _merge_params
+            full_p = _merge_params(filt_p, rest_params)
+            return model.apply_test(full_p, attention_mask, relative_position_index, data_array)
+    elif model.has_batch_stats:
+        batch_stats = params_dict['batch_stats']
+        def model_on_filtered_params(filt_p):
+            from src.autodiff.ggn import _merge_params
+            full_p = _merge_params(filt_p, rest_params)
+            return model.apply_test(full_p, batch_stats, data_array)
+    else:
+        def model_on_filtered_params(filt_p):
+            from src.autodiff.ggn import _merge_params
+            full_p = _merge_params(filt_p, rest_params)
+            return model.apply_test(full_p, data_array)
+
+    # VJP only with respect to filtered params
+    _, model_on_data_vjp = jax.vjp(model_on_filtered_params, filtered_params)
+    vectorize_fun = lambda tree: flatten_util.ravel_pytree(tree)[0]
+
+    @jax.jit
+    def jacobianT_vector_product(vector):
+        # data times output space -> filtered parameter space
+        vector = vector.reshape((B, -1))
+        Jt_vector = model_on_data_vjp(vector)[0]
+        return vectorize_fun(Jt_vector)
+
+    return jacobianT_vector_product
+
+
+def get_jacobian_vector_product_filtered(
+        params_dict,
+        model: flax.linen.Module,
+        data_array: jax.Array = None,
+        single_datapoint = False,
+        target_layers = None
+    ):
+    """
+    Get Jacobian vector product that only uses target layer parameters.
+
+    Args:
+        params_dict: Full parameter dictionary (all layers needed for forward pass)
+        model: Flax model
+        data_array: Input data
+        single_datapoint: Whether input is single datapoint
+        target_layers: List of layer names to use (e.g., ['LinearNorm_0'])
+                      If None, uses all parameters
+
+    Returns:
+        jacobian_vector_product: Function that computes J·v but only for target layers
+    """
+    if target_layers is None:
+        # Fall back to standard version
+        return get_jacobian_vector_product(params_dict, model, data_array, single_datapoint)
+
+    if single_datapoint:
+        data_array = jnp.expand_dims(data_array, 0)
+
+    # Get full params for forward pass
+    full_params = params_dict['params']
+
+    # Filter to get only target params
+    from src.autodiff.ggn import _filter_params_by_layers
+    filtered_params, rest_params = _filter_params_by_layers(full_params, target_layers)
+
+    devectorize_fun = flatten_util.ravel_pytree(filtered_params)[1]
+
+    # Set up model evaluation
+    if model.has_attentionmask:
+        attention_mask = params_dict['attention_mask']
+        relative_position_index = params_dict['relative_position_index']
+        def model_on_filtered_params(filt_p):
+            from src.autodiff.ggn import _merge_params
+            full_p = _merge_params(filt_p, rest_params)
+            return model.apply_test(full_p, attention_mask, relative_position_index, data_array)
+    elif model.has_batch_stats:
+        batch_stats = params_dict['batch_stats']
+        def model_on_filtered_params(filt_p):
+            from src.autodiff.ggn import _merge_params
+            full_p = _merge_params(filt_p, rest_params)
+            return model.apply_test(full_p, batch_stats, data_array)
+    else:
+        def model_on_filtered_params(filt_p):
+            from src.autodiff.ggn import _merge_params
+            full_p = _merge_params(filt_p, rest_params)
+            return model.apply_test(full_p, data_array)
+
+    @jax.jit
+    def jacobian_vector_product(vector):
+        # filtered parameter space -> data times output space
+        tree = devectorize_fun(vector)
+        _, J_tree = jax.jvp(model_on_filtered_params, (filtered_params,), (tree,))
+        return J_tree.reshape(-1)
+
+    return jacobian_vector_product
+
+
 def get_jacobian_explicit(params_dict, model, output_dim=None):
     vectorize_fun = lambda x : flatten_util.ravel_pytree(x)[0]
 

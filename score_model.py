@@ -85,8 +85,10 @@ parser.add_argument("--cache_dir", type=str, default=None, help="If set, save ne
 parser.add_argument("--load_ggn_vector_product", action="store_true", required=False, default=False, help="Load GGN vector product from cache instead of computing")
 parser.add_argument("--load_sketch_op", action="store_true", required=False, default=False, help="Load sketch operator from cache (requires --load_ggn_vector_product)")
 parser.add_argument("--load_eigenpairs", action="store_true", required=False, default=False, help="Load eigenvectors/eigenvalues from cache (requires --load_ggn_vector_product and --load_sketch_op)")
-parser.add_argument("--load_score_functions", action="store_true", required=False, default=False, help="Load all score functions from cache, skipping entire building phase") 
-
+parser.add_argument("--load_score_functions", action="store_true", required=False, default=False, help="Load all score functions from cache, skipping entire building phase")
+# layer selection
+parser.add_argument('--target_layers', nargs='+', default=None, help='List of layer names to compute OOD scores over (e.g., LinearNorm_0 BottleneckStage_3). If not specified, uses all layers.') 
+parser.add_argument("--output_dim", default=None, type=int, help="Output dimension of the model. If None, it is inferred from the dataset")
 
 
 
@@ -154,8 +156,10 @@ if __name__ == "__main__":
         ]
     for d, loader in zip(args_dict["OOD_datasets"], OOD_loaders):
         print(f"Got OUT-of-distribution dataset {d} with {len(loader.dataset)} test data")
-    args_dict["output_dim"] = get_output_dim(args.ID_dataset)
-    
+    if not args.output_dim:
+        args_dict["output_dim"] = get_output_dim(args.ID_dataset)
+    else:
+        args_dict["output_dim"] = args.output_dim
 
     #############
     ### model ###
@@ -169,6 +173,17 @@ if __name__ == "__main__":
     )
     args_dict["likelihood"] = model_arg_dict["likelihood"] # where it use?
     print(f"Loaded {args.model} with {compute_num_params(params_dict['params'])} parameters of norm {compute_norm_params(params_dict['params']):.2f}")
+
+    # Print information about target layers if specified
+    if args_dict.get('target_layers'):
+        print(f"\nTarget layers for OOD detection: {args_dict['target_layers']}")
+        from src.autodiff.ggn import _filter_params_by_layers
+        filtered_params, _ = _filter_params_by_layers(params_dict["params"], args_dict['target_layers'])
+        filtered_param_count = compute_num_params(filtered_params)
+        total_param_count = compute_num_params(params_dict["params"])
+        print(f"Using {filtered_param_count:,} parameters ({100*filtered_param_count/total_param_count:.2f}% of total)")
+    else:
+        print("\nUsing all layers for OOD detection")
 
     ###################
     ### define score ##
@@ -308,7 +323,8 @@ if __name__ == "__main__":
                     params_dict,
                     train_loader,
                     args_dict,
-                    use_eigenvals = args_dict['use_eigenvals']
+                    use_eigenvals = args_dict['use_eigenvals'],
+                    target_layers = args_dict.get('target_layers')
                 )
             else:
                 # high memory lanczos methods
