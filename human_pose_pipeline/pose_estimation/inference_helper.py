@@ -5,9 +5,6 @@ This module provides inference functions for human pose estimation using JAX mod
 Based on Marian's Inference_Helper.py but adapted for JAX instead of PyTorch.
 """
 
-from operator import is_
-import os
-import logging
 import json
 import pickle
 from time import time
@@ -15,28 +12,23 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from PIL import Image
-import matplotlib.pyplot as plt
 import cv2
-import matplotlib.patches as patches
-import matplotlib.lines as mlines
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait, ALL_COMPLETED
-import threading
+from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 
-# Global thread pool for parallel execution (reused across calls)
-_thread_pool = None
-
-def get_thread_pool():
-    """Get or create a global thread pool with 2 workers."""
-    global _thread_pool
-    if _thread_pool is None:
-        _thread_pool = ThreadPoolExecutor(max_workers=2)
-    return _thread_pool
-
+from human_pose_pipeline.utils.batched_transform_torch import (
+    bboxes_np_to_torch_tensor,
+    compute_transforms_from_bboxes,
+    crop_and_normalize_frames_gpu,
+    detect_humans_in_batch,
+    frames_np_to_torch_tensor
+)
 from src.models.wrapper import model_from_string
 from human_pose_pipeline.utils.transform_utils import (
     preprocess_image_with_bbox,
     transform_predictions_to_original_space
 )
+
+# TODO: Swtich to resize_images_batched and funtions from n_pose_pipeline.utils.batched_transform_torch 
 from human_pose_pipeline.utils.gpu_accelerated_utils import (
     resize_image_gpu,
     extract_bounding_box_images_gpu
@@ -44,10 +36,22 @@ from human_pose_pipeline.utils.gpu_accelerated_utils import (
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_IDX_13_MODEL,
+    TRANSFORM_IMAGE_SIZE,
     YOLO_IMAGE_SIZE,
     YOLO_CONFIDENCE_THRESHOLD,
     OOD_THRESHOLD
 )
+
+# Global thread pool for parallel execution (reused across calls)
+_thread_pool = None
+
+
+def get_thread_pool():
+    """Get or create a global thread pool with 2 workers."""
+    global _thread_pool
+    if _thread_pool is None:
+        _thread_pool = ThreadPoolExecutor(max_workers=2)
+    return _thread_pool
 
 
 def joint_mapping(joints, mapping):
@@ -78,6 +82,37 @@ def resize_image(pil_image, target_size=YOLO_IMAGE_SIZE):
     scale_y = original_image_height / resized_height
 
     return resized_image, (original_image_width, original_image_height), (scale_x, scale_y)
+
+
+def resize_images_batched(frames, target_size=YOLO_IMAGE_SIZE):
+    """
+    Resize a batch of frames using OpenCV
+
+    Args:
+        frames: List or array of numpy arrays (H, W, 3)
+        target_size: (width, height) for output
+
+    Returns:
+        resized_frames: List of PIL Images
+        scale_factors: List of (scale_x, scale_y) tuples
+    """
+    resized_frames = []
+    scale_factors = []
+
+    for frame in frames:
+        h, w = frame.shape[:2]
+        target_w, target_h = target_size
+
+        resized = cv2.resize(frame, target_size, interpolation=cv2.INTER_LINEAR)
+        pil_image = Image.fromarray(resized)
+
+        scale_x = w / target_w
+        scale_y = h / target_h
+
+        resized_frames.append(pil_image)
+        scale_factors.append((scale_x, scale_y))
+
+    return resized_frames, scale_factors
 
 
 def pose_estimation_2d(
@@ -357,6 +392,219 @@ def expand_3joints_to_13joints(joints_3):
     return joints_13
 
 
+def predict_pose_batch(bounding_box_images_batch, pose_estimation_jit_fn, params, batch_stats,
+                       num_output_joints=17, score_fn=None):
+    """Predict pose for a batch of bounding box images using the JAX model.
+
+    Args:
+        bounding_box_images_batch (np.ndarray): Batch of cropped images (B, 3, H, W)
+        pose_estimation_jit_fn: JIT-compiled pose estimation function
+        params: JAX model parameters
+        batch_stats: JAX model batch statistics (if available)
+        num_output_joints: Number of joints the model outputs (17 for full model, 3 for reduced model)
+        score_fn: Optional OOD score function. If provided, computes OOD scores for the batch.
+
+    Returns:
+        tuple: (pred_joints_batch, uncertainties_batch, covariance_batch, ood_scores_batch)
+            Each is a numpy array with batch dimension (B, ...)
+            ood_scores_batch is None if score_fn is not provided
+    """
+    # Get model predictions using JIT-compiled function
+    if batch_stats is not None:
+        output = pose_estimation_jit_fn(params, batch_stats, bounding_box_images_batch)
+    else:
+        output = pose_estimation_jit_fn(params, bounding_box_images_batch)
+
+    batch_size = bounding_box_images_batch.shape[0]
+
+    # Extract predictions - JAX model outputs (following Marian's approach)
+    if isinstance(output, dict):
+        # RegressFlowWithAleatoric returns dictionary with uncertainty outputs
+        pred_joints_batch = np.array(output['pred_jts'])  # (B, num_output_joints, 2)
+        log_variance = np.array(output.get('log_variance', output.get('pure_sigma', None)))
+        if log_variance is not None:
+            uncertainties_batch = np.sqrt(np.exp(log_variance))  # (B, num_output_joints, 2)
+        else:
+            uncertainties_batch = None
+        covariance_batch = np.array(output.get('covariance', None))
+    else:
+        # Regular RegressFlow returns tensor directly - reshape from flattened
+        pred_joints_flat = np.array(output)  # (B, num_output_joints * 2)
+        pred_joints_batch = pred_joints_flat.reshape(batch_size, num_output_joints, 2)
+        uncertainties_batch = None
+        covariance_batch = None
+
+    # Handle reduced 3-joint model (nose, left wrist, right wrist)
+    if num_output_joints == 3:
+        raise NotImplementedError("Batch prediction for 3-joint model not implemented. The 3-joint model is used for the OOD detection only.")
+
+    # Select only the 13 joints of interest (same as Marian's approach)
+    pred_joints_13_batch = pred_joints_batch[:, JOINT_IDX_13_MODEL]  # (B, 13, 2)
+    if uncertainties_batch is not None:
+        uncertainties_13_batch = uncertainties_batch[:, JOINT_IDX_13_MODEL]  # (B, 13, 2)
+    else:
+        uncertainties_13_batch = None
+    if covariance_batch is not None:
+        covariance_13_batch = covariance_batch[:, JOINT_IDX_13_MODEL]  # (B, 13)
+    else:
+        covariance_13_batch = None
+
+    # OOD detection: Compute OOD scores for the batch if score_fn is provided
+    ood_scores_batch = None
+    if score_fn is not None:
+        ood_scores_batch = np.asarray(score_fn(bounding_box_images_batch))
+
+    return pred_joints_13_batch, uncertainties_13_batch, covariance_13_batch, ood_scores_batch
+
+
+def transform_predictions_to_original_space_batch(pred_joints_normalized_batch, transforms_batch,
+                                                  scale_factors_batch, uncertainties_batch=None,
+                                                  covariance_batch=None):
+    """
+    Transform batch of model predictions from normalized coordinates back to original image space.
+
+    This function wraps the existing transform_predictions_to_original_space to avoid code duplication.
+
+    Args:
+        pred_joints_normalized_batch: Joint coordinates in normalized space, shape (B, N, 2)
+        transforms_batch: Affine transformation matrices, shape (B, 2, 3)
+        scale_factors_batch: Scale factors from resized to original, shape (B, 2) with (scale_x, scale_y)
+        uncertainties_batch: Optional uncertainty values, shape (B, N, 2)
+        covariance_batch: Optional covariance values, shape (B, N)
+
+    Returns:
+        dict: Dictionary containing:
+            - 'keypoints': Joint coordinates in original image space (B, N, 2)
+            - 'uncertainties': Scaled uncertainties if provided (B, N, 2)
+            - 'covariance': Scaled covariance if provided (B, N)
+    """
+    batch_size = pred_joints_normalized_batch.shape[0]
+
+    # Process each sample individually using the existing function
+    keypoints_list = []
+    uncertainties_list = []
+    covariance_list = []
+
+    for i in range(batch_size):
+        scale_x, scale_y = scale_factors_batch[i]
+        uncertainties_i = uncertainties_batch[i] if uncertainties_batch is not None else None
+        covariance_i = covariance_batch[i] if covariance_batch is not None else None
+
+        result = transform_predictions_to_original_space(
+            pred_joints_normalized_batch[i],
+            transforms_batch[i],
+            scale_x,
+            scale_y,
+            uncertainties=uncertainties_i,
+            covariance=covariance_i
+        )
+
+        keypoints_list.append(result['keypoints'])
+        if 'uncertainties' in result:
+            uncertainties_list.append(result['uncertainties'])
+        if 'covariance' in result:
+            covariance_list.append(result['covariance'])
+
+    # Stack results back into batch format
+    result_batch = {'keypoints': np.stack(keypoints_list, axis=0)}
+
+    if uncertainties_list:
+        result_batch['uncertainties'] = np.stack(uncertainties_list, axis=0)
+    if covariance_list:
+        result_batch['covariance'] = np.stack(covariance_list, axis=0)
+
+    return result_batch
+
+
+def match_bboxes_across_frames(batch_bboxes):
+    """
+    Match bounding boxes across two frames based on proximity of bbox centers.
+
+    When batch_size = 2 (e.g., left and right camera), this ensures that the same person
+    is consistently assigned to the same index across both frames.
+
+    Args:
+        batch_bboxes: List of bboxes for each frame. Each element can be:
+                     - A list of bboxes [[x1, y1, x2, y2], ...]
+                     - A single bbox [x1, y1, x2, y2]
+                     - None if no detection
+                     Format: [bbox_or_list_frame0, bbox_or_list_frame1]
+
+    Returns:
+        matched_bboxes: List of two bboxes (one from each frame), matched by proximity.
+                       Returns None for frames where no match is found.
+                       Format: [bbox_frame0, bbox_frame1] where each is [x1, y1, x2, y2] or None
+    """
+    if len(batch_bboxes) != 2:
+        # If not exactly 2 frames, return the bboxes as-is
+        result = []
+        for item in batch_bboxes:
+            if item is None:
+                result.append(None)
+            elif isinstance(item, list) and len(item) > 0:
+                # Check if it's a list of bboxes or a single bbox
+                if isinstance(item[0], (list, np.ndarray)):
+                    result.append(item[0])  # Take first bbox
+                else:
+                    result.append(item)  # It's already a single bbox
+            else:
+                result.append(None)
+        return result
+
+    # Normalize inputs to lists of bboxes
+    bboxes_frame0 = batch_bboxes[0]
+    bboxes_frame1 = batch_bboxes[1]
+
+    # Convert single bboxes to lists
+    if bboxes_frame0 is not None and not isinstance(bboxes_frame0[0], (list, np.ndarray)):
+        bboxes_frame0 = [bboxes_frame0]
+    if bboxes_frame1 is not None and not isinstance(bboxes_frame1[0], (list, np.ndarray)):
+        bboxes_frame1 = [bboxes_frame1]
+
+    # Handle edge cases
+    if not bboxes_frame0 and not bboxes_frame1:
+        return [None, None]
+    if not bboxes_frame0:
+        return [None, bboxes_frame1[0] if bboxes_frame1 else None]
+    if not bboxes_frame1:
+        return [bboxes_frame0[0] if bboxes_frame0 else None, None]
+
+    # Compute bbox centers for frame 0
+    centers_frame0 = []
+    for bbox in bboxes_frame0:
+        x1, y1, x2, y2 = bbox
+        center_x = (x1 + x2) / 2.0
+        center_y = (y1 + y2) / 2.0
+        centers_frame0.append((center_x, center_y))
+
+    # Compute bbox centers for frame 1
+    centers_frame1 = []
+    for bbox in bboxes_frame1:
+        x1, y1, x2, y2 = bbox
+        center_x = (x1 + x2) / 2.0
+        center_y = (y1 + y2) / 2.0
+        centers_frame1.append((center_x, center_y))
+
+    # Find the best match using nearest neighbor based on Euclidean distance
+    best_match_idx0 = 0
+    best_match_idx1 = 0
+    min_distance = float('inf')
+
+    for i, center0 in enumerate(centers_frame0):
+        for j, center1 in enumerate(centers_frame1):
+            dx = center0[0] - center1[0]
+            dy = center0[1] - center1[1]
+            distance = np.sqrt(dx**2 + dy**2)
+
+            if distance < min_distance:
+                min_distance = distance
+                best_match_idx0 = i
+                best_match_idx1 = j
+
+    # Return matched bboxes
+    return [bboxes_frame0[best_match_idx0], bboxes_frame1[best_match_idx1]]
+
+
 def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                      mirror_map, score_fn=None,
                      human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
@@ -422,6 +670,181 @@ def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_d
         t1 = time()
         print(f"Total frame processing time (detection + pose estimation): {t1 - t0:.3f} seconds")
     return pose_estimations
+
+
+def process_frames_batch_2d(frames_np, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
+                            mirror_map, score_fn=None,
+                            human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
+                            num_output_joints=17, match_detected_bboxes=True, verbose=True):
+    """
+    Process multiple frames in batch using GPU-accelerated infrastructure.
+
+    This function is designed to handle batch processing of frames, particularly for stereo camera setups
+    where you have left and right camera images. When batch_size=2, it can match detected people across
+    both frames to ensure consistent tracking.
+
+    Args:
+        frames_np: List of numpy arrays (H, W, 3) in RGB format
+        pose_estimation_jit_fn: JIT-compiled pose estimation function
+        params: JAX model parameters
+        batch_stats: JAX model batch statistics
+        human_detector: YOLO human detector
+        device_torch: PyTorch device for YOLO
+        mirror_map: Joint mapping to correct left/right swapping
+        score_fn: OOD score function. If None -> No OOD scoring.
+        human_detection_threshold: Confidence threshold for human detection
+        ood_threshold: Threshold for OOD detection
+        num_output_joints: Number of joints the model outputs
+        match_detected_bboxes: Whether to match detected bboxes across frames (only for batch_size=2)
+        verbose: Whether to print timing information
+
+    Returns:
+        List of pose estimation results, one per frame. Each element contains:
+            - 'keypoints': Joint coordinates [[x1,y1], [x2,y2], ...]
+            - 'uncertainties': Standard deviations
+            - 'covariance': Covariance values
+            - 'covariance_matrix': Per-joint 2x2 covariance matrices
+            - 'bbox': Bounding box [x1, y1, x2, y2]
+            - 'center': Center of the bounding box [x, y]
+            - 'scale': Width and height of the bounding box [w, h]
+            - 'ood_score': OOD score (0 if no score_fn provided)
+            - 'is_ood': Boolean for OOD classification
+    """
+    device = 'cuda' if str(device_torch).startswith('cuda') else 'cpu'
+
+    t_start = time()
+
+    # Step 1 & 2: Resize frames to YOLO input size
+    batch_frames_resized, batch_scale_factors = resize_images_batched(
+        frames_np, target_size=YOLO_IMAGE_SIZE
+    )
+
+    # Step 3: Detect humans in batch
+    batch_bboxes = detect_humans_in_batch(
+        human_detector=human_detector,
+        batch_frames_resized=batch_frames_resized,
+        human_detection_threshold=human_detection_threshold,
+        verbose=verbose
+    )
+
+    # Step 4: Match bounding boxes across frames if requested and batch_size=2
+    if match_detected_bboxes and len(batch_bboxes) == 2:
+        matched_bboxes = match_bboxes_across_frames(batch_bboxes)
+        # Wrap in list to make it compatible with the rest of the pipeline
+        batch_bboxes = [[bbox] if bbox is not None else [] for bbox in matched_bboxes]
+
+    # Filter out frames with no detections
+    valid_frame_indices = []
+    valid_bboxes = []
+    valid_frames_resized = []
+    valid_scale_factors = []
+
+    for i, bboxes_for_frame in enumerate(batch_bboxes):
+        if bboxes_for_frame:  # If at least one bbox detected
+            # For now, take only the first detection per frame
+            valid_frame_indices.append(i)
+            valid_bboxes.append(bboxes_for_frame[0])
+            valid_frames_resized.append(np.array(batch_frames_resized[i]))
+            valid_scale_factors.append(batch_scale_factors[i])
+
+    if not valid_bboxes:
+        if verbose:
+            print("No humans detected in any frame.")
+        # Return empty results for each frame
+        return [[] for _ in range(len(frames_np))]
+
+    # Step 5: Convert to torch tensors and compute transforms
+    frames_tensor = frames_np_to_torch_tensor(valid_frames_resized, device=device)  # (B, 3, H, W)
+    bboxes_tensor = bboxes_np_to_torch_tensor(valid_bboxes, device=device)  # (B, 4)
+    output_image_size = (TRANSFORM_IMAGE_SIZE[0], TRANSFORM_IMAGE_SIZE[1])  # (W, H)
+
+    centers, scales, transforms = compute_transforms_from_bboxes(
+        bboxes_tensor, output_image_size, device=device)  # (B, 2), (B, 2), (B, 2, 3)
+
+    images_preprocessed = crop_and_normalize_frames_gpu(
+        frames_tensor, transforms, output_image_size)  # (B, 3, H, W)
+
+    # Convert to numpy for JAX model (JAX expects numpy/jax arrays, not torch tensors)
+    images_preprocessed_np = images_preprocessed.cpu().numpy()
+
+    # Step 6: Run pose prediction and OOD detection on the batch of preprocessed images
+    pred_joints_13_batch, uncertainties_13_batch, covariance_13_batch, ood_scores_batch = predict_pose_batch(
+        images_preprocessed_np, pose_estimation_jit_fn, params, batch_stats, num_output_joints, score_fn
+    )
+
+    # Step 7: Transform predictions back to original image space
+    transforms_np = transforms.cpu().numpy()
+    scale_factors_np = np.array(valid_scale_factors)
+
+    results_batch = transform_predictions_to_original_space_batch(
+        pred_joints_13_batch, transforms_np, scale_factors_np,
+        uncertainties_13_batch, covariance_13_batch
+    )
+
+    # Step 8: Apply mirror mapping to correct left/right swapping
+    keypoints_batch = results_batch['keypoints']
+    uncertainties_batch = results_batch.get('uncertainties')
+    covariance_batch = results_batch.get('covariance')
+
+    for i in range(len(valid_bboxes)):
+        keypoints_batch[i] = joint_mapping(keypoints_batch[i], mirror_map)
+        if uncertainties_batch is not None:
+            uncertainties_batch[i] = joint_mapping(uncertainties_batch[i], mirror_map)
+        if covariance_batch is not None:
+            covariance_batch[i] = joint_mapping(covariance_batch[i], mirror_map)
+
+    # Step 9: Construct per-joint 2x2 covariance matrices and format results
+    pose_estimations_valid = []
+    centers_np = centers.cpu().numpy()
+    scales_np = scales.cpu().numpy()
+
+    for i in range(len(valid_bboxes)):
+        # Fallback if no uncertainties are predicted
+        if uncertainties_batch is None:
+            uncertainties_i = np.ones_like(keypoints_batch[i]) * 10.0  # 10 pixel std dev
+        else:
+            uncertainties_i = uncertainties_batch[i]
+
+        if covariance_batch is None:
+            covariance_i = np.ones(13) * 0.1  # Small covariance
+        else:
+            covariance_i = covariance_batch[i]
+
+        # Construct per-joint 2x2 covariance matrices
+        joint_covariances = np.zeros((13, 2, 2))
+        for j in range(13):
+            joint_covariances[j] = [
+                [float(uncertainties_i[j, 0])**2, float(covariance_i[j])],
+                [float(covariance_i[j]), float(uncertainties_i[j, 1])**2]
+            ]
+
+        # Get OOD score for this sample (already computed in step 6)
+        ood_score = ood_scores_batch[i]
+        is_ood = ood_score > ood_threshold
+
+        pose = {
+            'keypoints': keypoints_batch[i].tolist(),
+            'uncertainties': uncertainties_i.tolist(),
+            'covariance': covariance_i.tolist(),
+            'covariance_matrix': joint_covariances.tolist(),
+            'bbox': valid_bboxes[i],
+            'center': centers_np[i].tolist(),
+            'scale': scales_np[i].tolist(),
+            'ood_score': ood_score,
+            'is_ood': is_ood
+        }
+        pose_estimations_valid.append(pose)
+
+    # Step 11: Organize results per original frame
+    results_per_frame = [[] for _ in range(len(frames_np))]
+    for i, frame_idx in enumerate(valid_frame_indices):
+        results_per_frame[frame_idx] = [pose_estimations_valid[i]]
+
+    if verbose:
+        t_end = time()
+        print(f"Batch processing time ({len(frames_np)} frames): {t_end - t_start:.3f} seconds")
+
+    return results_per_frame 
 
 
 def initialize_human_detector(device_torch=None):

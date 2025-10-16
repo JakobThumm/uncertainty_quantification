@@ -304,6 +304,102 @@ def normalize_images_regressflow(images: torch.Tensor) -> torch.Tensor:
     return images + offset
 
 
+def detect_humans_in_batch(
+    human_detector,
+    batch_frames_resized: torch.Tensor,
+    human_detection_threshold: float,
+    verbose: bool = False
+) -> List[Optional[List[float]]]:
+    """Detect humans in a batch of resized frames using YOLOv11.
+
+    Args:
+        human_detector: Initialized YOLOv11 model
+        batch_frames_resized: (B, H, W, 3) numpy array of resized frames
+        human_detection_threshold: Confidence threshold for detection
+        verbose: Whether to print debug information
+    Returns:
+        List of bounding boxes [xmin, ymin, xmax, ymax] or None for each frame
+    """
+    results = human_detector.predict(batch_frames_resized, conf=human_detection_threshold, verbose=verbose)
+    batch_bboxes = []
+    for result in results:
+        person_boxes = []
+        if result.boxes is not None:
+            boxes = result.boxes.xyxy.cpu().numpy()
+            confidences = result.boxes.conf.cpu().numpy()
+            classes = result.boxes.cls.cpu().numpy()
+
+            for i, cls in enumerate(classes):
+                if int(cls) == 0 and confidences[i] >= human_detection_threshold:
+                    person_boxes.append(boxes[i].tolist())
+
+        batch_bboxes.append(person_boxes[0] if person_boxes else None)
+    return batch_bboxes
+
+
+def frames_np_to_torch_tensor(
+    frames_np: List[np.ndarray],
+    device: str = 'cuda'
+) -> torch.Tensor:
+    """Convert frames to torch tensor.
+
+    Args:
+        frames_np: List of B numpy arrays (H, W, 3) in range [0, 255] or [0, 1]
+        device: Device to move tensor to ('cuda' or 'cpu')
+    Returns:
+        frames_tensor: (B, 3, H, W) torch tensor in range [0, 1]
+    """
+    # Convert frames to torch tensor (B, H, W, 3) -> (B, 3, H, W)
+    frames_np = np.stack(frames_np, axis=0)  # (B, H, W, 3)
+
+    # Normalize to [0, 1] if needed
+    if frames_np.max() > 1.0:
+        frames_tensor = torch.from_numpy(frames_np).to(device).float() / 255.0
+    else:
+        frames_tensor = torch.from_numpy(frames_np).to(device).float()
+
+    frames_tensor = frames_tensor.permute(0, 3, 1, 2)  # (B, 3, H, W)
+    return frames_tensor
+
+
+def bboxes_np_to_torch_tensor(
+    bboxes_np: List[List[float]],
+    device: str = 'cuda'
+) -> torch.Tensor:
+    """Convert bounding boxes to torch tensor."""
+    return torch.tensor(bboxes_np, device=device, dtype=torch.float32)  # (B, 4)
+
+
+def compute_transforms_from_bboxes(
+    bboxes_tensor: torch.Tensor,
+    output_image_size: Tuple[int, int] = (192, 256),
+    device: str = 'cuda'
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute centers, scales, and affine transforms from bounding boxes (batched)."""
+    # Compute centers and scales from bboxes
+    aspect_ratio = output_image_size[0] / output_image_size[1]  # width / height
+    centers, scales = box_to_center_scale_batch(bboxes_tensor, aspect_ratio)
+    scales = scales * 1.0  # Additional scale multiplier (same as SimpleTransform)
+
+    # Get affine transformation matrices (for pose transformation)
+    transforms = get_affine_transform_batch(centers, scales, output_image_size, rot=0, device=device)
+    return centers, scales, transforms
+
+
+def crop_and_normalize_frames_gpu(
+    frames_tensor: torch.Tensor,
+    transforms: torch.Tensor,
+    output_image_size: Tuple[int, int] = (192, 256)
+) -> torch.Tensor:
+    """Crop and normalize frames using PyTorch (batched)."""
+    # Crop and resize images (simplified approach for rotation=0)
+    images_preprocessed = batched_affine_transform_images(frames_tensor, transforms, output_image_size)
+    # images_preprocessed = batched_crop_and_resize(frames_tensor, centers, scales, output_image_size)
+    # Apply RegressFlow normalization
+    images_preprocessed = normalize_images_regressflow(images_preprocessed)
+    return images_preprocessed
+
+
 def batched_preprocess_frames_gpu(
     frames: List[np.ndarray],
     bboxes: List[Optional[List[float]]],
@@ -343,36 +439,13 @@ def batched_preprocess_frames_gpu(
     valid_poses = poses[valid_indices]
     valid_scale_factors = [scale_factors[i] for i in valid_indices]
 
-    # Convert frames to torch tensor (B, H, W, 3) -> (B, 3, H, W)
-    frames_np = np.stack(valid_frames, axis=0)  # (B, H, W, 3)
-
-    # Normalize to [0, 1] if needed
-    if frames_np.max() > 1.0:
-        frames_tensor = torch.from_numpy(frames_np).to(device).float() / 255.0
-    else:
-        frames_tensor = torch.from_numpy(frames_np).to(device).float()
-
-    frames_tensor = frames_tensor.permute(0, 3, 1, 2)  # (B, 3, H, W)
-
-    # Convert bboxes to tensor
-    bboxes_tensor = torch.tensor(valid_bboxes, device=device, dtype=torch.float32)  # (B, 4)
-
-    # Convert poses to tensor and apply resize scaling
-    poses_tensor = torch.from_numpy(valid_poses).to(device).float()  # (B, 13, 2)
-    scale_factors_tensor = torch.tensor(valid_scale_factors, device=device, dtype=torch.float32)  # (B, 2)
-    poses_resized = poses_tensor / scale_factors_tensor.unsqueeze(1)  # (B, 13, 2)
-
-    # Compute centers and scales from bboxes
-    aspect_ratio = output_image_size[0] / output_image_size[1]  # width / height
-    centers, scales = box_to_center_scale_batch(bboxes_tensor, aspect_ratio)
-    scales = scales * 1.0  # Additional scale multiplier (same as SimpleTransform)
-
-    # Get affine transformation matrices (for pose transformation)
-    transforms = get_affine_transform_batch(centers, scales, output_image_size, rot=0, device=device)
-
-    # Crop and resize images (simplified approach for rotation=0)
-    images_preprocessed = batched_affine_transform_images(frames_tensor, transforms, output_image_size)
-    # images_preprocessed = batched_crop_and_resize(frames_tensor, centers, scales, output_image_size)
+    # Convert frames and bboxes to torch tensors
+    frames_tensor = frames_np_to_torch_tensor(valid_frames, device=device)  # (B, 3, H, W)
+    bboxes_tensor = bboxes_np_to_torch_tensor(valid_bboxes, device=device)  # (B, 4)
+    centers, scales, transforms = compute_transforms_from_bboxes(
+        bboxes_tensor, output_image_size, device=device)  # (B, 2), (B, 2), (B, 2, 3)
+    images_preprocessed = crop_and_normalize_frames_gpu(
+        frames_tensor, transforms, output_image_size)  # (B, 3, H, W)
 
     # DEBUG: Visualize first preprocessed image (after affine transform, before normalization)
     # import matplotlib.pyplot as plt
@@ -394,8 +467,10 @@ def batched_preprocess_frames_gpu(
     # plt.close()
     # print(f"[DEBUG] Saved preprocessed images to visualizations/debug_preprocessed_img_0_before.png and visualizations/debug_preprocessed_img_0_after.png")
 
-    # Apply RegressFlow normalization
-    images_preprocessed = normalize_images_regressflow(images_preprocessed)
+    # Convert poses to tensor and apply resize scaling
+    poses_tensor = torch.from_numpy(valid_poses).to(device).float()  # (B, 13, 2)
+    scale_factors_tensor = torch.tensor(valid_scale_factors, device=device, dtype=torch.float32)  # (B, 2)
+    poses_resized = poses_tensor / scale_factors_tensor.unsqueeze(1)  # (B, 13, 2)
 
     # Apply affine transformations to poses
     poses_transformed = batched_affine_transform_points(poses_resized, transforms)

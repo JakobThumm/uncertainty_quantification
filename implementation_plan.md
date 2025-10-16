@@ -71,6 +71,7 @@ We have two things:
     - Use the pre-trained models with converted weights into JAX.
     - First, perform pose prediction on a few H3.6M examples.
     - Then, perform "Experiment 3" from Marians folder -> Evaluation of the 3D human pose prediction with uncertainty quantification (step 7 from above.)
+    - [ ] Investigate why the batched 3D pipeline takes longer than predicting each frame individually
  5. Perform OOD detection for motion prediction
     - Run the OOD detection with sketching lanczos on the 3D pose prediction model. ID data would be the human 3.6m dataset. OOD is the close interactions dataset.
  6. Implement the training pipeline in JAX

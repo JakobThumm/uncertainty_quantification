@@ -21,8 +21,8 @@ from spacepy.pycdf import CDF
 from tqdm import tqdm
 from PIL import Image
 
-from human_pose_pipeline.pose_estimation.inference_helper import initialize_human_detector
-from human_pose_pipeline.utils.batched_transform_torch import batched_preprocess_frames_gpu
+from human_pose_pipeline.pose_estimation.inference_helper import initialize_human_detector, resize_images_batched
+from human_pose_pipeline.utils.batched_transform_torch import batched_preprocess_frames_gpu, detect_humans_in_batch
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_IDX_17,
@@ -96,37 +96,6 @@ def read_video_frames_opencv(video_path, frame_indices):
 
     cap.release()
     return frames
-
-
-def resize_frames_batch(frames, target_size=YOLO_IMAGE_SIZE):
-    """
-    Resize a batch of frames using OpenCV
-
-    Args:
-        frames: List or array of numpy arrays (H, W, 3)
-        target_size: (width, height) for output
-
-    Returns:
-        resized_frames: List of PIL Images
-        scale_factors: List of (scale_x, scale_y) tuples
-    """
-    resized_frames = []
-    scale_factors = []
-
-    for frame in frames:
-        h, w = frame.shape[:2]
-        target_w, target_h = target_size
-
-        resized = cv2.resize(frame, target_size, interpolation=cv2.INTER_LINEAR)
-        pil_image = Image.fromarray(resized)
-
-        scale_x = w / target_w
-        scale_y = h / target_h
-
-        resized_frames.append(pil_image)
-        scale_factors.append((scale_x, scale_y))
-
-    return resized_frames, scale_factors
 
 
 def preprocess_h36m_dataset_gpu(
@@ -257,7 +226,7 @@ def preprocess_h36m_dataset_gpu(
 
                         # ==================== STEP 2: Resize frames ====================
                         t0 = time.time()
-                        batch_frames_resized, batch_scale_factors = resize_frames_batch(
+                        batch_frames_resized, batch_scale_factors = resize_images_batched(
                             batch_frames_raw, target_size=YOLO_IMAGE_SIZE
                         )
                         t1 = time.time()
@@ -265,21 +234,12 @@ def preprocess_h36m_dataset_gpu(
 
                         # ==================== STEP 3: YOLO detection ====================
                         t0 = time.time()
-                        results = human_detector.predict(batch_frames_resized, conf=YOLO_CONFIDENCE_THRESHOLD, verbose=False)
-
-                        batch_bboxes = []
-                        for result in results:
-                            person_boxes = []
-                            if result.boxes is not None:
-                                boxes = result.boxes.xyxy.cpu().numpy()
-                                confidences = result.boxes.conf.cpu().numpy()
-                                classes = result.boxes.cls.cpu().numpy()
-
-                                for i, cls in enumerate(classes):
-                                    if int(cls) == 0 and confidences[i] >= YOLO_CONFIDENCE_THRESHOLD:
-                                        person_boxes.append(boxes[i].tolist())
-
-                            batch_bboxes.append(person_boxes[0] if person_boxes else None)
+                        batch_bboxes = detect_humans_in_batch(
+                            human_detector=human_detector,
+                            batch_frames_resized=batch_frames_resized,
+                            human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
+                            verbose=False
+                        )
 
                         t1 = time.time()
                         time_yolo += t1 - t0

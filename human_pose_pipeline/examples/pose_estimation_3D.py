@@ -26,7 +26,8 @@ from src.ood_scores.lm_lanczos import load_score_functions
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
-    process_frame_2d
+    process_frame_2d,
+    process_frames_batch_2d
 )
 from human_pose_pipeline.pose_estimation.triangulation_helper import (
     load_camera_parameters,
@@ -404,7 +405,29 @@ def main():
             # Store frame pair for video creation
             all_frame_pairs.append(frames.copy())
 
-            # Process frames from both cameras
+            # Convert frames to RGB format (OpenCV uses BGR)
+            frames_rgb = [cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) for frame in frames]
+
+            # Process both frames together as a batch
+            # Enable OOD detection only for left camera (first frame)
+            current_score_fn = score_fn if args.enable_ood else None
+
+            pose_predictions_batch = process_frames_batch_2d(
+                frames_np=frames_rgb,
+                pose_estimation_jit_fn=pose_estimation_jit_fn,
+                params=params,
+                batch_stats=batch_stats,
+                human_detector=human_detector,
+                device_torch=device_torch,
+                mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+                score_fn=current_score_fn,
+                human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
+                ood_threshold=args.ood_threshold,
+                match_detected_bboxes=True,  # Match people across left/right cameras
+                verbose=False
+            )
+
+            # Extract results for each camera
             poses_cam1 = None
             poses_cam2 = None
             uncertainties_cam1 = None
@@ -414,44 +437,22 @@ def main():
             ood_score_left = 0.0
             is_ood_left = False
 
-            for cam_idx, frame in enumerate(frames):
-                # Enable OOD detection only for left camera (cam_idx == 0)
-                current_score_fn = score_fn if (args.enable_ood and cam_idx == 0) else None
+            # Camera 1 (left) results
+            if pose_predictions_batch[0]:
+                pose_cam1 = pose_predictions_batch[0][0]
+                poses_cam1 = np.array(pose_cam1['keypoints'])
+                uncertainties_cam1 = np.array(pose_cam1['uncertainties'])
+                cov_cam1 = np.array(pose_cam1['covariance_matrix'])
+                if args.enable_ood and current_score_fn is not None:
+                    ood_score_left = pose_cam1['ood_score']
+                    is_ood_left = pose_cam1['is_ood']
 
-                # Get pose estimations using JAX model
-                pose_predictions = process_frame_2d(
-                    frame=frame.copy(),
-                    pose_estimation_jit_fn=pose_estimation_jit_fn,
-                    params=params,
-                    batch_stats=batch_stats,
-                    human_detector=human_detector,
-                    device_torch=device_torch,
-                    mirror_map=MIRROR_13_JOINT_MODEL_MAP,
-                    score_fn=current_score_fn,
-                    human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
-                    ood_threshold=args.ood_threshold
-                )
-
-                if not pose_predictions:
-                    continue
-
-                # Take the first detected person
-                pose = pose_predictions[0]['keypoints']
-                uncertainty = pose_predictions[0]['uncertainties']
-                covariance_matrix = pose_predictions[0]['covariance_matrix']
-
-                # Store OOD results from left camera
-                if cam_idx == 0:
-                    poses_cam1 = pose
-                    uncertainties_cam1 = uncertainty
-                    cov_cam1 = covariance_matrix
-                    if args.enable_ood and current_score_fn is not None:
-                        ood_score_left = pose_predictions[0]['ood_score']
-                        is_ood_left = pose_predictions[0]['is_ood']
-                elif cam_idx == 1:
-                    poses_cam2 = pose
-                    uncertainties_cam2 = uncertainty
-                    cov_cam2 = covariance_matrix
+            # Camera 2 (right) results
+            if pose_predictions_batch[1]:
+                pose_cam2 = pose_predictions_batch[1][0]
+                poses_cam2 = np.array(pose_cam2['keypoints'])
+                uncertainties_cam2 = np.array(pose_cam2['uncertainties'])
+                cov_cam2 = np.array(pose_cam2['covariance_matrix'])
 
             # Store OOD information
             all_ood_scores.append(ood_score_left)
