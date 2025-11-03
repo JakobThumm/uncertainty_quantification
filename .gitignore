@@ -42,6 +42,7 @@ yolo11n.pt
 # Large model files to exclude from tracking
 jax_hmp_files/dct_pose_transformer_flax.pickle
 jax_hmp_files/transformer_model.pth
+src/ViTPose/vitpose_full_h36m_S1_S9.pth
 
 *.code-workspace
 
