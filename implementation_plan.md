@@ -72,7 +72,12 @@ We have two things:
     - First, perform pose prediction on a few H3.6M examples.
     - Then, perform "Experiment 3" from Marians folder -> Evaluation of the 3D human pose prediction with uncertainty quantification (step 7 from above.)
  5. Perform OOD detection for motion prediction
-    - Run the OOD detection with sketching lanczos on the 3D pose prediction model. ID data would be the human 3.6m dataset. OOD is the close interactions dataset.
+    - Run the OOD detection with sketching lanczos on the 3D pose prediction model. ID data would be the human 3.6m dataset. OOD is the close interactions dataset or shuffled H36M dataset.
+    - [ ] Single motion prediction from Marians model
+    - [ ] Create motion prediction dataset
+    - [ ] Create OOD dataset(s)
+    - [ ] Train and evaluate OOD scores
+    - [ ] Write eval script ID/OOD
  6. Implement the training pipeline in JAX
     - The training pipeline is based on Marians code in the Experiment 1 folder. 
     - We want to have the training pipeline, so that we could do fine tuning and adaptions if needed.
