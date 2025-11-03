@@ -465,11 +465,11 @@ def initialize_jax_models(checkpoint_path_jax, use_uncertainty=False):
     print(f'Loading JAX pose estimation model from {checkpoint_path_jax}...')
 
     # Parse the model path to extract components
-    # Expected format: models_tianle/H36M/RegressFlow/seed_420/finetuned_h36m_regressflow_pred_*
+    # Expected format: human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/finetuned_h36m_regressflow_pred_*
     path_parts = checkpoint_path_jax.split('/')
 
     # Find the directory containing the model files
-    if 'models_tianle' in checkpoint_path_jax:
+    if 'human_pose_pipeline/models/pose_estimation' in checkpoint_path_jax:
         base_dir = '/'.join(path_parts[:-1])  # Remove filename
         run_name = path_parts[-1].replace('_args.json', '').replace('_params.pickle', '')
 

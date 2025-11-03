@@ -11,7 +11,7 @@ Key differences from pose_estimation_2D.py:
 - Loads preprocessed bounding box images directly
 - Still applies reverse transformations to compare predictions with GT in original image space
 
-Run with: python human_pose_pipeline/examples/evaluate_preprocessed_h36m.py --preprocessed_dir datasets/H36M/pre_processed --checkpoint models_tianle/H36M/RegressFlow/seed_420 --split validation --visualize --save_dir results/visualizations
+Run with: python human_pose_pipeline/examples/evaluate_preprocessed_h36m.py --preprocessed_dir datasets/H36M/pre_processed --checkpoint human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420 --split validation --visualize --save_dir results/visualizations
 """
 
 import os

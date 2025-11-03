@@ -188,17 +188,19 @@ def main():
         print("Initializing models...")
 
         # Initialize JAX pose estimation model with uncertainty estimation
-        models_dir = os.path.join(root_dir, "models_tianle", "H36M", "RegressFlow", "seed_420")
+        
 
         # Use 3-joint reduced model for faster OOD detection
         # Change to "finetuned_h36m_regressflow_with_unc" for full 17-joint model
-        use_3joint_model = True  # Set to False to use full 17-joint model
+        use_3joint_model = False  # Set to False to use full 17-joint model
 
         if use_3joint_model:
+            models_dir = os.path.join(root_dir, "human_pose_pipeline/models/pose_estimation", "H36M", "RegressFlow_3joints", "seed_420")
             checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_pred_3joints")
             num_output_joints = 3
             print("Using 3-joint reduced model (nose, left wrist, right wrist) for faster inference")
         else:
+            models_dir = os.path.join(root_dir, "human_pose_pipeline/models/pose_estimation", "H36M", "RegressFlow", "seed_420")
             checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
             num_output_joints = 17
             print("Using full RegressFlowWithAleatoric model for uncertainty estimation")

@@ -33,7 +33,7 @@ visualizations/
 
 models_tianle/
 marian_code/
-datasets/
+./datasets/
 cache/
 
 *.pth

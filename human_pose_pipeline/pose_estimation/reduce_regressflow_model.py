@@ -11,7 +11,7 @@ Joint indices in H36M 17-joint format:
 - Index 10: Right Wrist (right hand)
 
 Usage:
-    python reduce_regressflow_model.py --model_save_path models_tianle \
+    python reduce_regressflow_model.py --model_save_path human_pose_pipeline/models/pose_estimation \
                                        --run_name finetuned_h36m_regressflow_pred \
                                        --seed 420 \
                                        --output_run_name finetuned_h36m_regressflow_pred_3joints
@@ -135,7 +135,7 @@ def extract_joint_weights(original_params, joint_indices):
 
 def main():
     parser = argparse.ArgumentParser(description='Reduce RegressFlow model from 17 to 3 joints')
-    parser.add_argument('--model_save_path', type=str, default='models_tianle',
+    parser.add_argument('--model_save_path', type=str, default='human_pose_pipeline/models/pose_estimation',
                         help='Path to saved models directory')
     parser.add_argument('--run_name', type=str, default='finetuned_h36m_regressflow_pred',
                         help='Original model run name')

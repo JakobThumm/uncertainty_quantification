@@ -27,6 +27,7 @@ dependencies = [
     "easydict>=1.10",
     "spacepy>=0.5.0",
     "ultralytics>=8.0.0",
+    "spacepy>=0.7.0"
 ]
 
 [project.optional-dependencies]

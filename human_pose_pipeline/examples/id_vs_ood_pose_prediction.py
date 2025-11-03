@@ -607,7 +607,7 @@ def main():
         print("Initializing models...")
 
         # Use uncertainty-enabled model
-        models_dir = os.path.join(root_dir, "models_tianle", "H36M", "RegressFlow", "seed_420")
+        models_dir = os.path.join(root_dir, "human_pose_pipeline/models/pose_estimation", "H36M", "RegressFlow", "seed_420")
         checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
         pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
         print("JAX RegressFlow model with uncertainty loaded successfully!")

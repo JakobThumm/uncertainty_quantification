@@ -235,7 +235,7 @@ def get_dct_matrix(N):
     return dct_m, idct_m
 
 
-class DCTPoseTransformerFlax(nn.Module):
+class DCTPoseTransformer(nn.Module):
     """
     Main model for pose prediction with uncertainty estimation.
     Combines frequency-aware transformer with uncertainty prediction.

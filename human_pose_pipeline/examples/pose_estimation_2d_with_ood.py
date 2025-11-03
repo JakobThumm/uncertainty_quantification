@@ -382,7 +382,7 @@ def main():
     parser.add_argument('--cache_dir', type=str, default='cache/', help='Cache directory with score functions')
     parser.add_argument('--base_key', type=str, default='H36M_RegressFlow_n9000_f3c4d885', help='Base key for loading the score functions')
     parser.add_argument('--data_path', type=str, default='datasets/', help='Path to datasets')
-    parser.add_argument('--model_save_path', type=str, default='models_tianle', help='Path to saved models')
+    parser.add_argument('--model_save_path', type=str, default='human_pose_pipeline/models/pose_estimation', help='Path to saved models')
     parser.add_argument('--run_name', type=str, default='finetuned_h36m_regressflow_pred', help='Model run name')
     parser.add_argument('--ood_threshold', type=float, default=0.3, help='OOD threshold')
     parser.add_argument('--max_samples', type=int, default=None, help='Max samples from H36M')

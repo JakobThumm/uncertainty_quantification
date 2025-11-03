@@ -274,7 +274,7 @@ def main():
     parser.add_argument('--cache_dir', type=str, default='cache/', help='Cache directory with score functions')
     parser.add_argument('--base_key', type=str, default=None, help='Base key for loading the OOD score functions')
     parser.add_argument('--data_path', type=str, default='datasets/', help='Path to datasets')
-    parser.add_argument('--model_save_path', type=str, default='models_tianle', help='Path to saved models')
+    parser.add_argument('--model_save_path', type=str, default='human_pose_pipeline/models/pose_estimation', help='Path to saved models')
     parser.add_argument('--run_name', type=str, default='finetuned_h36m_regressflow_with_unc', help='Model run name')
     parser.add_argument('--ood_threshold', type=float, default=OOD_THRESHOLD, help='OOD threshold')
     parser.add_argument('--subject', type=str, default='S1', help='Subject ID (e.g., S1, S6)')

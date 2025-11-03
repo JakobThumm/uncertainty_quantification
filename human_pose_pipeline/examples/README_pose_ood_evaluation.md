@@ -22,7 +22,7 @@ python score_model.py \
   --ID_dataset H36M \
   --OOD_dataset tiger-pose \
   --data_path datasets/ \
-  --model_save_path models_tianle \
+  --model_save_path human_pose_pipeline/models/pose_estimation \
   --model RegressFlow \
   --run_name finetuned_h36m_regressflow_pred \
   --subsample_trainset 10000 \
@@ -64,7 +64,7 @@ This will:
 python human_pose_pipeline/examples/pose_estimation_2d_with_ood.py \
   --cache_dir cache/ \
   --data_path datasets/ \
-  --model_save_path models_tianle \
+  --model_save_path human_pose_pipeline/models/pose_estimation \
   --run_name finetuned_h36m_regressflow_with_unc \
   --ood_threshold 0.5 \
   --max_samples_h36m 100 \
@@ -76,7 +76,7 @@ python human_pose_pipeline/examples/pose_estimation_2d_with_ood.py \
 
 - `--cache_dir`: Directory containing cached score functions (default: `cache/`)
 - `--data_path`: Path to datasets directory (default: `datasets/`)
-- `--model_save_path`: Path to saved models (default: `models_tianle`)
+- `--model_save_path`: Path to saved models (default: `human_pose_pipeline/models/pose_estimation`)
 - `--run_name`: Model run name (default: `finetuned_h36m_regressflow_with_unc`)
 - `--ood_threshold`: OOD classification threshold (default: auto-determined from eigenvalues)
 - `--max_samples_h36m`: Maximum samples to evaluate from H36M (default: 50)
@@ -169,7 +169,7 @@ ls -lh cache/H36M_RegressFlow_*_score_functions.cloudpickle
 ### Model Loading Issues
 
 If the model fails to load, verify that:
-1. The model directory exists: `models_tianle/H36M/RegressFlow/seed_420/`
+1. The model directory exists: `human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/`
 2. The checkpoint files exist: `finetuned_h36m_regressflow_with_unc_params.pickle` and `_args.json`
 
 ### CUDA/GPU Issues

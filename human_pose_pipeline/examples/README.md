@@ -8,7 +8,7 @@ This directory contains example scripts and tests for the human pose pipeline im
 - **Purpose**: Test script for loading and validating the pre-trained RegressFlow pose estimation model
 - **Status**: ✅ Working
 - **What it tests**:
-  - Model loading from `models_tianle/H36M/RegressFlow/seed_420/`
+  - Model loading from `human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/`
   - JAX model initialization and parameter loading
   - Forward pass with dummy input (1, 3, 256, 192) → (1, 34)
   - Dataset loader instantiation (H36M)
