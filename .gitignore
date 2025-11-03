@@ -39,6 +39,10 @@ cache/
 *.pth
 yolo11n.pt
 
+# Large model files to exclude from tracking
+jax_hmp_files/dct_pose_transformer_flax.pickle
+jax_hmp_files/transformer_model.pth
+
 *.code-workspace
 
 runs/
