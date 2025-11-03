@@ -6,7 +6,10 @@ import jax
 import flax
 from src.models import RegressFlowFlax, MLP, LeNet, LeNet_h, GoogleNet, ConvNeXt, ResNet, ResNetBlock, PreActResNetBlock, VAN, SwinTransformer
 from src.models.regressflow_with_aleatoric import RegressFlowFlax as RegressFlowFlaxWithAleatoric
+from src.models.dct_pose_transformer import DCTPoseTransformer
 from src.models import ViT
+from human_pose_pipeline.motion_prediction.h36m_settings import N_JOINTS, INPUT_HORIZON_LENGTH, PREDICTION_HORIZON_LENGTH
+
 
 @dataclasses.dataclass
 class Model:
@@ -313,6 +316,13 @@ def model_from_string(
                     accept_nchw=True
                 )
         wrapped_model = wrap_model_with_batchstats(model)
+    elif model_name == "DCTPoseTransformer":
+        model = DCTPoseTransformer(
+            input_dim=(3 * N_JOINTS),  # 3D coordinates per joint
+            seq_len=INPUT_HORIZON_LENGTH,
+            seq_len_output=PREDICTION_HORIZON_LENGTH
+        )
+        wrapped_model = wrap_model(model)
     elif model_name == "ResNet50PreAct":
         model = ResNet(
             output_dim = output_dim,

@@ -249,10 +249,9 @@ class DCTPoseTransformer(nn.Module):
     seq_len_output: int = 10
     unit_conversion: float = 1000.0
 
-    def __init__(self, **kwargs):
-        """Initialize the DCT matrices."""
-        super().__init__(**kwargs)
+    def __post_init__(self) -> None:
         self.dct_mat, self.idct_mat = get_dct_matrix(self.seq_len)
+        return super().__post_init__()
 
     @nn.compact
     def __call__(self, x, input_uncertainty=None):
@@ -268,9 +267,8 @@ class DCTPoseTransformer(nn.Module):
         """
         batch_size = x.shape[0]
         offset = x[:, -1:, :]
-        
         # Apply DCT to input poses
-        x = jnp.matmul(x.transpose(1, 2), self.dct_mat.transpose(0, 1)).transpose(1, 2)
+        x = jnp.transpose(jnp.matmul(jnp.transpose(x, axes=(0, 2, 1)), jnp.transpose(self.dct_mat)), (0, 2, 1))
         # Convert to meters
         x = x / self.unit_conversion
 
@@ -327,10 +325,11 @@ class DCTPoseTransformer(nn.Module):
         freq_poses = freq_poses * self.unit_conversion
 
         # Apply IDCT
-        pred_poses = jnp.matmul(
-            jnp.transpose(freq_poses, (0, 2, 1)),
-            jnp.transpose(self.idct_mat, (1, 0))
-        ).transpose(2, 1)
+        pred_poses = jnp.transpose(
+            jnp.matmul(
+                jnp.transpose(freq_poses, (0, 2, 1)),
+                jnp.transpose(self.idct_mat, (1, 0))
+            ), (0, 2, 1))
 
         # Add offset
         pred_poses = pred_poses[:, :self.seq_len_output, :] + offset

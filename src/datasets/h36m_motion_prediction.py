@@ -4,6 +4,7 @@ import os
 from torch.utils.data import Dataset
 from spacepy import pycdf
 import torch
+import jax.numpy as jnp
 
 from human_pose_pipeline.pose_estimation.h36m_settings import JOINT_IDX_17, JOINT_IDX_13
 
@@ -14,16 +15,17 @@ SPLIT = {"train": ["S1", "S6", "S7", "S8"], "validation": ["S9"], "test": ["S11"
 class Human36mMotionDataset3D(Dataset):
     """Dataset class for Human3.6M motion data."""
 
-    def __init__(self, base_directory, split="train", input_frames=50, predict_frames=10):
+    def __init__(self, base_directory, split="train", input_frames=50, predict_frames=10, jax_format=False):
         self.input_frames = input_frames
         self.predict_frames = predict_frames
+        self.jax_format = jax_format
         self.data = []
         self.data = self.load_data(base_directory, split)
 
     def load_data(self, base_directory, split):
         all_data = []
         for subject in SPLIT[split]:
-            directory = os.path.join(base_directory, subject, "D3_Positions")
+            directory = os.path.join(base_directory, subject, "Poses_D3_Positions")
             if not os.path.exists(directory):
                 print(f"Warning: Directory {directory} not found, skipping...")
                 continue
@@ -53,7 +55,15 @@ class Human36mMotionDataset3D(Dataset):
         sequence = self.data[idx]
         input_pose = sequence[: self.input_frames]
         target_pose = sequence[self.input_frames :]
+        if self.jax_format:
+            # Convert to JAX arrays
+            input_pose = jnp.array(input_pose, dtype=jnp.float32)
+            target_pose = jnp.array(target_pose, dtype=jnp.float32)
+        else:
+            # Convert to PyTorch tensors
+            input_pose = torch.FloatTensor(input_pose)
+            target_pose = torch.FloatTensor(target_pose)
         return {
-            "input_pose": torch.FloatTensor(input_pose),
-            "target_pose": torch.FloatTensor(target_pose),
+            "input_pose": input_pose,
+            "target_pose": target_pose,
         }

@@ -1,53 +1,92 @@
 """This script evaluates a motion prediction model on the Human3.6M dataset."""
 
 import os
+from time import time
+import argparse
 import numpy as np
+from sympy import per
 import torch
 from torch.utils.data import DataLoader
+import jax.numpy as jnp
+from tqdm import tqdm
+from human_pose_pipeline.pose_estimation.inference_helper import initialize_jax_models
 
 from src.models.dct_pose_transformer import DCTPoseTransformer
 from src.datasets.h36m_motion_prediction import Human36mMotionDataset3D
 
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
 N_JOINTS = 13
 INPUT_HORIZON_LENGTH = 50
 PREDICTION_HORIZON_LENGTH = 10
+BATCH_SIZE = 32
 
 
-def evaluate_model(model, dataloader, eval_fn, max_batches=50, device="cuda"):
+def predict_poses(motion_prediction_jit_fn, params, batch_stats, dataset, max_batches=50, device="cuda"):
     """Evaluate the motion prediction model."""
-    # Warm up
-    model.eval()
-
-    all_predictions = []
-    all_targets = []
+    predictions = []
+    targets = []
 
     print("\nRunning model inference...")
 
-    with torch.no_grad():
-        for i, batch in enumerate(dataloader):
-            if i >= max_batches:
-                break
+    for i, batch in tqdm(enumerate(dataset)):
+        if i >= max_batches:
+            break
 
-            input_pose = batch["input_pose"].to(device)
-            target_pose = batch["target_pose"].to(device)
+        input_pose = batch["input_pose"]
+        target_pose = batch["target_pose"]
 
-            # Model inference
-            pred_poses, (var_params, cov_params) = model(input_pose)
+        # To batch dimension
+        input_pose = jnp.expand_dims(input_pose, axis=0)
+        target_pose = jnp.expand_dims(target_pose, axis=0)
 
-            all_predictions.append(pred_poses.cpu().numpy())
-            all_targets.append(target_pose.cpu().numpy())
+        # Model inference
+        t0 = time()
+        if batch_stats is not None:
+            pred_poses, (var_params, cov_params) = motion_prediction_jit_fn(
+                params, batch_stats, input_pose
+            )
+        else:
+            pred_poses, (var_params, cov_params) = motion_prediction_jit_fn(
+                params, input_pose
+            )
+        t1 = time()
+        print(f"  Processed batch {i + 1} in {(t1 - t0) * 1000:.2f} ms")
+        predictions.append(pred_poses)
+        targets.append(target_pose)
 
-            if (i + 1) % 10 == 0:
-                print(f"  Processed {i + 1}/{min(max_batches, len(dataloader))} batches")
-
-    predictions = np.concatenate(all_predictions, axis=0)
-    targets = np.concatenate(all_targets, axis=0)
-
+    predictions = jnp.concatenate(predictions, axis=0)
+    targets = jnp.concatenate(targets, axis=0)
     return predictions, targets
 
 
+def evaluate_scores(predictions, targets):
+    """Evaluate MPJPE scores."""
+    errors = np.linalg.norm(predictions - targets, axis=2)
+    mpjpe = np.mean(errors)
+    std = np.std(errors)
+    per_joint_errors = np.mean(errors, axis=0)
+    per_joint_std = np.std(errors, axis=0)
+    return mpjpe, std, per_joint_errors, per_joint_std
+
+
 def main():
+    parser = argparse.ArgumentParser(description='3D Pose Estimation with OOD Detection')
+    # parser.add_argument('--cache_dir', type=str, default='cache/', help='Cache directory with score functions')
+    # parser.add_argument('--base_key', type=str, default=None, help='Base key for loading the OOD score functions')
+    parser.add_argument('--data_path', type=str, default='datasets/', help='Path to datasets')
+    parser.add_argument('--model_save_path', type=str, default='human_pose_pipeline/models/motion_prediction', help='Path to saved models')
+    # parser.add_argument('--run_name', type=str, default='finetuned_h36m_regressflow_with_unc', help='Model run name')
+    # parser.add_argument('--ood_threshold', type=float, default=OOD_THRESHOLD, help='OOD threshold')
+    # parser.add_argument('--subject', type=str, default='S1', help='Subject ID (e.g., S1, S6)')
+    # parser.add_argument('--action', type=str, default='WalkingDog', help='Action to visualize')
+    # parser.add_argument('--camera_ids', type=str, nargs=2, default=['55011271', '60457274'], help='Camera IDs')
+    # parser.add_argument('--max_frames', type=int, default=100, help='Maximum number of frames to process')
+    # parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection on left camera')
+    parser.add_argument('--output_dir', type=str, default='results/motion_prediction', help='Output directory for results')
+
+    args = parser.parse_args()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print("=" * 10)
@@ -56,65 +95,40 @@ def main():
     print(f"Device: {device}")
 
     # Load model
-    model_path = "transformer_model.pth"
-    model = DCTPoseTransformer(
-        input_dim=(3 * N_JOINTS),  # 3D coordinates per joint
-        seq_len=INPUT_HORIZON_LENGTH,
-        seq_len_output=PREDICTION_HORIZON_LENGTH
+    model_path = os.path.join(root_dir, args.model_save_path)
+    motion_prediction_jit_fn, params, batch_stats = initialize_jax_models(
+        checkpoint_path_jax=model_path
     )
-
-    if os.path.exists(model_path):
-        state_dict = torch.load(model_path, map_location=device)
-        model.load_state_dict(state_dict)
-        print(f"✓ Loaded model from {model_path}")
-    else:
-        print(f"✗ Model not found")
-        return
-
-    model.to(device)
-    model.eval()
 
     # Load dataset
     print("\nLoading H36M dataset...")
-    data_path = "/home/skyle/datasets/H36M_FREI"
-    dataset = Human36mDataset3D(data_path, split="test", input_frames=50, predict_frames=10)
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=False)
-    print(f"✓ Loaded {len(dataset)} sequences")
+    data_path = os.path.join(root_dir, args.data_path, "H36M", "extracted")
+    dataset = Human36mMotionDataset3D(
+        base_directory=data_path,
+        split="test",
+        input_frames=INPUT_HORIZON_LENGTH,
+        predict_frames=PREDICTION_HORIZON_LENGTH,
+        jax_format=True
+    )
+    print(f"Loaded {len(dataset)} sequences.")
 
-    # Get DCT matrices
-    N = 50
-    dct_m, idct_m = get_dct_matrix(N)
-    dct_m_torch = torch.from_numpy(dct_m).float().to(device)
-    idct_m_torch = torch.from_numpy(idct_m).float().to(device)
-
-    # Evaluate with CORRECT postprocessing
-    predictions, targets = evaluate_model_corrected(
-        model, dataloader, dct_m_torch, idct_m_torch, device, max_batches=50
+    # Evaluate the model
+    predictions, targets = predict_poses(
+        motion_prediction_jit_fn=motion_prediction_jit_fn,
+        params=params,
+        batch_stats=batch_stats,
+        dataset=dataset,
+        max_batches=50,
+        device=device
     )
 
-    print(f"\nEvaluated on {predictions.shape[0]} sequences")
+    mpjpe, std_score, per_joint_score, per_joint_std = evaluate_scores(predictions, targets)
 
-    # Calculate MPJPE
+    # Debug outputs
     print("\n" + "=" * 60)
-    print("RESULTS (with CORRECT postprocessing)")
+    print("EVALUATION RESULTS")
     print("=" * 60)
-
-    pred_reshaped = predictions.reshape(-1, 13, 3)
-    targ_reshaped = targets.reshape(-1, 13, 3)
-
-    # Per-joint errors
-    errors = np.linalg.norm(pred_reshaped - targ_reshaped, axis=2)
-    mpjpe = np.mean(errors)
-    per_joint = np.mean(errors, axis=0)
-
-    print(f"\nOverall MPJPE: {mpjpe:.2f} mm")
-
-    if mpjpe < 1500:
-        print("✓ MPJPE looks much better!")
-    elif mpjpe < 2000:
-        print("⚠ MPJPE is acceptable")
-    else:
-        print("✗ MPJPE still high")
+    print(f"\nOverall MPJPE: {mpjpe:.2f} mm, Std: {std_score:.2f} mm")
 
     # Per-joint errors
     print("\nPer-Joint Errors:")
@@ -134,41 +148,8 @@ def main():
         "LWrist",
     ]
 
-    for name, error in zip(joint_names, per_joint):
+    for name, error in zip(joint_names, per_joint_score):
         print(f"  {name:12s}: {error:7.2f} mm")
-
-    # Check bone lengths
-    print("\n" + "=" * 60)
-    print("BONE LENGTH CHECK")
-    print("=" * 60)
-
-    # Sample a few predictions
-    sample_poses = pred_reshaped[:100]
-
-    # Hip-Spine
-    hip_spine = np.linalg.norm(sample_poses[:, 0] - sample_poses[:, 7], axis=1)
-    print(f"Hip-Spine: {np.mean(hip_spine):.1f} ± {np.std(hip_spine):.1f} mm (expected: 100-300)")
-
-    # RHip-RKnee
-    rhip_rknee = np.linalg.norm(sample_poses[:, 1] - sample_poses[:, 2], axis=1)
-    print(f"RHip-RKnee: {np.mean(rhip_rknee):.1f} ± {np.std(rhip_rknee):.1f} mm (expected: 350-550)")
-
-    # RKnee-RFoot
-    rknee_rfoot = np.linalg.norm(sample_poses[:, 2] - sample_poses[:, 3], axis=1)
-    print(f"RKnee-RFoot: {np.mean(rknee_rfoot):.1f} ± {np.std(rknee_rfoot):.1f} mm (expected: 350-550)")
-
-    # Check statistics
-    print("\n" + "=" * 60)
-    print("STATISTICS COMPARISON")
-    print("=" * 60)
-
-    pred_mean = np.mean(pred_reshaped)
-    targ_mean = np.mean(targ_reshaped)
-    pred_std = np.std(pred_reshaped)
-    targ_std = np.std(targ_reshaped)
-
-    print(f"Predictions: mean={pred_mean:.2f}, std={pred_std:.2f}")
-    print(f"Targets:     mean={targ_mean:.2f}, std={targ_std:.2f}")
 
     # Visualize a few samples
     print("\n" + "=" * 60)
@@ -178,7 +159,8 @@ def main():
     os.makedirs("eval_fixed", exist_ok=True)
 
     # Visualize best and worst predictions
-    per_sample_errors = np.mean(errors.reshape(predictions.shape[0], predictions.shape[1], -1), axis=(1, 2))
+    all_scores = np.linalg.norm(predictions - targets, axis=2)
+    per_sample_errors = np.mean(all_scores.reshape(predictions.shape[0], predictions.shape[1], -1), axis=(1, 2))
 
     best_idx = np.argmin(per_sample_errors)
     worst_idx = np.argmax(per_sample_errors)
