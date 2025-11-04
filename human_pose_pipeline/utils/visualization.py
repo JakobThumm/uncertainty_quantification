@@ -5,6 +5,7 @@ This module contains functions for visualizing poses, uncertainties, and creatin
 Extracted and organized from the examples to provide reusable visualization functionality.
 """
 
+import os
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -14,17 +15,31 @@ from typing import List, Optional, Tuple, Union
 
 # Skeleton connections for 13-joint pose visualization
 CONNECTIONS_13 = [
-    (0, 1), (0, 2),  # Nose to shoulders
-    (1, 3), (3, 5),  # Left arm
-    (2, 4), (4, 6),  # Right arm
-    (1, 2), (1, 7), (2, 8),  # Shoulders to hips
+    (0, 1),
+    (0, 2),  # Nose to shoulders
+    (1, 3),
+    (3, 5),  # Left arm
+    (2, 4),
+    (4, 6),  # Right arm
+    (1, 2),
+    (1, 7),
+    (2, 8),  # Shoulders to hips
     (7, 8),  # Connect hips
-    (7, 9), (9, 11),  # Left leg
-    (8, 10), (10, 12)  # Right leg
+    (7, 9),
+    (9, 11),  # Left leg
+    (8, 10),
+    (10, 12),  # Right leg
 ]
 
-def draw_uncertainty_ellipse(ax, center: Tuple[float, float], uncertainties: Tuple[float, float],
-                           covariance: float = None, n_std: float = 2, **kwargs):
+
+def draw_uncertainty_ellipse(
+    ax,
+    center: Tuple[float, float],
+    uncertainties: Tuple[float, float],
+    covariance: float = None,
+    n_std: float = 2,
+    **kwargs,
+):
     """
     Draw uncertainty ellipse for a joint using matplotlib
 
@@ -40,8 +55,7 @@ def draw_uncertainty_ellipse(ax, center: Tuple[float, float], uncertainties: Tup
         covariance = 0.0
 
     # Create covariance matrix
-    cov_matrix = np.array([[uncertainties[0]**2, covariance],
-                          [covariance, uncertainties[1]**2]])
+    cov_matrix = np.array([[uncertainties[0] ** 2, covariance], [covariance, uncertainties[1] ** 2]])
 
     # Compute eigenvalues and eigenvectors
     eigenvals, eigenvecs = np.linalg.eigh(cov_matrix)
@@ -57,10 +71,16 @@ def draw_uncertainty_ellipse(ax, center: Tuple[float, float], uncertainties: Tup
 
     return ellipse
 
-def draw_uncertainty_ellipse_cv2(image: np.ndarray, center: Tuple[int, int],
-                                uncertainties: Tuple[float, float], covariance: float = None,
-                                n_std: float = 2, color: Tuple[int, int, int] = (0, 255, 255),
-                                thickness: int = 1):
+
+def draw_uncertainty_ellipse_cv2(
+    image: np.ndarray,
+    center: Tuple[int, int],
+    uncertainties: Tuple[float, float],
+    covariance: float = None,
+    n_std: float = 2,
+    color: Tuple[int, int, int] = (0, 255, 255),
+    thickness: int = 1,
+):
     """
     Draw uncertainty ellipse for a joint using OpenCV
 
@@ -90,13 +110,93 @@ def draw_uncertainty_ellipse_cv2(image: np.ndarray, center: Tuple[int, int],
         if width > 0 and height > 0:
             cv2.ellipse(image, center, (width, height), angle, 0, 360, color, thickness)
 
-def visualize_single_pose_on_image(image: Union[np.ndarray, Image.Image],
-                                  gt_pose: Optional[np.ndarray] = None,
-                                  pred_pose: Optional[np.ndarray] = None,
-                                  pred_uncertainties: Optional[np.ndarray] = None,
-                                  pred_covariances: Optional[np.ndarray] = None,
-                                  show_uncertainty: bool = True,
-                                  uncertainty_n_std: float = 2) -> np.ndarray:
+
+def plot_3d_skeleton(ax, pose, connections, color='blue', alpha=0.8, linewidth=2, label=None):
+    """
+    Plot a 3D skeleton with auto-detection of joint format.
+    
+    Args:
+        ax: matplotlib 3D axis
+        pose: (N, 3) array of joint positions (N=13 or N=17)
+        connections: list of (i, j) tuples for skeleton edges (auto-detected if None)
+        color: color for the skeleton
+        alpha: transparency
+        linewidth: line width
+        label: legend label
+    """
+    # Plot joints
+    ax.scatter(pose[:, 0], pose[:, 1], pose[:, 2],
+               c=color, s=30, alpha=alpha, edgecolors='k', linewidth=0.5)
+    # Plot connections
+    for i, j in connections:
+        line = np.array([pose[i], pose[j]])
+        ax.plot(line[:, 0], line[:, 1], line[:, 2],
+                c=color, linewidth=linewidth, alpha=alpha, label=label if i == 0 and j == 1 else None)
+
+
+def visualize_motion_prediction(
+    pred_pose: np.ndarray,
+    target_pose: np.ndarray,
+    skeleton: List[Tuple[int, int]],
+    label: str,
+    idx: int,
+    output_path: Optional[str] = None
+) -> None:
+    """Plot 3D skeletons for predicted and target poses side by side.
+
+    Args:
+        pred_pose: Predicted pose (num_joints, 3)
+        target_pose: Target pose (num_joints, 3)
+        skeleton: List of joint connections
+        label: Label for the figure title
+        idx: Sample index for saving the figure
+        output_path: Directory to save the figure (if None, figure is not saved)
+    """
+    if output_path is None:
+        output_path = "."
+    fig = plt.figure(figsize=(12, 5))
+
+    error = np.mean(np.linalg.norm(pred_pose - target_pose, axis=1))
+
+    # Ground truth
+    ax1 = fig.add_subplot(121, projection="3d")
+    plot_3d_skeleton(ax1, target_pose, skeleton, color="green")
+    ax1.set_title("Ground Truth", fontsize=12, fontweight="bold")
+    ax1.view_init(elev=15, azim=45)
+
+    # Prediction
+    ax2 = fig.add_subplot(122, projection="3d")
+    plot_3d_skeleton(ax2, pred_pose, skeleton, color="blue")
+    ax2.set_title(f"Prediction (Error: {error:.1f}mm)", fontsize=12, fontweight="bold")
+    ax2.view_init(elev=15, azim=45)
+
+    # Match axes
+    all_poses = np.concatenate([target_pose, pred_pose], axis=0)
+    x_range = [all_poses[:, 0].min() - 100, all_poses[:, 0].max() + 100]
+    y_range = [all_poses[:, 1].min() - 100, all_poses[:, 1].max() + 100]
+    z_range = [all_poses[:, 2].min() - 100, all_poses[:, 2].max() + 100]
+
+    for ax in [ax1, ax2]:
+        ax.set_xlim(x_range)
+        ax.set_ylim(y_range)
+        ax.set_zlim(z_range)
+
+    fig.suptitle(f"{label.upper()} Prediction (Sample {idx})", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    os.makedirs(output_path, exist_ok=True)
+    plt.savefig(f"{output_path}/{label}_prediction.png", dpi=150)
+    plt.close()
+
+
+def visualize_single_pose_on_image(
+    image: Union[np.ndarray, Image.Image],
+    gt_pose: Optional[np.ndarray] = None,
+    pred_pose: Optional[np.ndarray] = None,
+    pred_uncertainties: Optional[np.ndarray] = None,
+    pred_covariances: Optional[np.ndarray] = None,
+    show_uncertainty: bool = True,
+    uncertainty_n_std: float = 2,
+) -> np.ndarray:
     """
     Visualize ground truth and/or predicted pose on a single image
 
@@ -113,7 +213,7 @@ def visualize_single_pose_on_image(image: Union[np.ndarray, Image.Image],
         np.ndarray: Image with poses overlaid
     """
     # Convert PIL to numpy if needed
-    if hasattr(image, 'mode'):
+    if hasattr(image, "mode"):
         image_array = np.array(image).copy()
     else:
         image_array = image.copy()
@@ -136,8 +236,16 @@ def visualize_single_pose_on_image(image: Union[np.ndarray, Image.Image],
         # Draw GT keypoints
         for idx, (x, y) in enumerate(gt_pose_clipped):
             cv2.circle(image_array, (int(x), int(y)), radius=4, color=(0, 255, 0), thickness=-1)  # Green for GT
-            cv2.putText(image_array, f"GT{idx}", (int(x)+5, int(y)+5), cv2.FONT_HERSHEY_SIMPLEX,
-                       0.3, (0, 0, 255), 1, cv2.LINE_AA)
+            cv2.putText(
+                image_array,
+                f"GT{idx}",
+                (int(x) + 5, int(y) + 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.3,
+                (0, 0, 255),
+                1,
+                cv2.LINE_AA,
+            )
 
     # Draw predicted pose
     if pred_pose is not None:
@@ -154,30 +262,45 @@ def visualize_single_pose_on_image(image: Union[np.ndarray, Image.Image],
         # Draw predicted keypoints and uncertainty ellipses
         for idx, (x, y) in enumerate(pred_pose_clipped):
             cv2.circle(image_array, (int(x), int(y)), radius=4, color=(255, 0, 0), thickness=-1)  # Blue for prediction
-            cv2.putText(image_array, f"P{idx}", (int(x)+5, int(y)+5), cv2.FONT_HERSHEY_SIMPLEX,
-                       0.3, (255, 0, 0), 1, cv2.LINE_AA)
+            cv2.putText(
+                image_array,
+                f"P{idx}",
+                (int(x) + 5, int(y) + 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.3,
+                (255, 0, 0),
+                1,
+                cv2.LINE_AA,
+            )
 
             # Draw uncertainty ellipse if available
-            if (show_uncertainty and pred_uncertainties is not None and
-                idx < len(pred_uncertainties)):
+            if show_uncertainty and pred_uncertainties is not None and idx < len(pred_uncertainties):
                 uncertainty = pred_uncertainties[idx]
                 covariance = pred_covariances[idx] if pred_covariances is not None else None
 
                 draw_uncertainty_ellipse_cv2(
-                    image_array, (int(x), int(y)), uncertainty, covariance,
-                    n_std=uncertainty_n_std, color=(0, 255, 255), thickness=1  # Cyan for uncertainty
+                    image_array,
+                    (int(x), int(y)),
+                    uncertainty,
+                    covariance,
+                    n_std=uncertainty_n_std,
+                    color=(0, 255, 255),
+                    thickness=1,  # Cyan for uncertainty
                 )
 
     return image_array
 
-def visualize_poses_matplotlib(image: Union[np.ndarray, Image.Image],
-                              gt_pose: Optional[np.ndarray] = None,
-                              pred_pose: Optional[np.ndarray] = None,
-                              pred_uncertainties: Optional[np.ndarray] = None,
-                              pred_covariances: Optional[np.ndarray] = None,
-                              save_path: Optional[str] = None,
-                              show_uncertainty: bool = True,
-                              uncertainty_n_std: float = 3) -> None:
+
+def visualize_poses_matplotlib(
+    image: Union[np.ndarray, Image.Image],
+    gt_pose: Optional[np.ndarray] = None,
+    pred_pose: Optional[np.ndarray] = None,
+    pred_uncertainties: Optional[np.ndarray] = None,
+    pred_covariances: Optional[np.ndarray] = None,
+    save_path: Optional[str] = None,
+    show_uncertainty: bool = True,
+    uncertainty_n_std: float = 3,
+) -> None:
     """
     Create matplotlib visualization with multiple panels showing poses and uncertainties
 
@@ -192,7 +315,7 @@ def visualize_poses_matplotlib(image: Union[np.ndarray, Image.Image],
         uncertainty_n_std: Number of standard deviations for uncertainty ellipses
     """
     # Convert PIL to numpy if needed
-    if hasattr(image, 'mode'):
+    if hasattr(image, "mode"):
         image_np = np.array(image)
     else:
         image_np = image
@@ -214,15 +337,15 @@ def visualize_poses_matplotlib(image: Union[np.ndarray, Image.Image],
 
     # Original image
     axes[panel_idx].imshow(image_np)
-    axes[panel_idx].set_title('Original Image')
-    axes[panel_idx].axis('off')
+    axes[panel_idx].set_title("Original Image")
+    axes[panel_idx].axis("off")
     panel_idx += 1
 
     # Ground truth pose
     if gt_pose is not None:
         axes[panel_idx].imshow(image_np)
-        axes[panel_idx].set_title('Ground Truth Pose')
-        axes[panel_idx].axis('off')
+        axes[panel_idx].set_title("Ground Truth Pose")
+        axes[panel_idx].axis("off")
 
         # Draw GT skeleton
         for connection in CONNECTIONS_13:
@@ -230,21 +353,26 @@ def visualize_poses_matplotlib(image: Union[np.ndarray, Image.Image],
             if start_idx < len(gt_pose) and end_idx < len(gt_pose):
                 start_point = gt_pose[start_idx]
                 end_point = gt_pose[end_idx]
-                axes[panel_idx].plot([start_point[0], end_point[0]],
-                                   [start_point[1], end_point[1]], 'g-', linewidth=2)
+                axes[panel_idx].plot([start_point[0], end_point[0]], [start_point[1], end_point[1]], "g-", linewidth=2)
 
         # Draw GT keypoints
         for i, point in enumerate(gt_pose):
-            axes[panel_idx].scatter(point[0], point[1], c='red', s=50, zorder=5)
-            axes[panel_idx].text(point[0]+5, point[1]-5, str(i), fontsize=8, color='white',
-                                bbox=dict(boxstyle="round,pad=0.2", facecolor='red', alpha=0.7))
+            axes[panel_idx].scatter(point[0], point[1], c="red", s=50, zorder=5)
+            axes[panel_idx].text(
+                point[0] + 5,
+                point[1] - 5,
+                str(i),
+                fontsize=8,
+                color="white",
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="red", alpha=0.7),
+            )
         panel_idx += 1
 
     # Predicted pose
     if pred_pose is not None:
         axes[panel_idx].imshow(image_np)
-        axes[panel_idx].set_title('Predicted Pose')
-        axes[panel_idx].axis('off')
+        axes[panel_idx].set_title("Predicted Pose")
+        axes[panel_idx].axis("off")
 
         # Draw predicted skeleton
         for connection in CONNECTIONS_13:
@@ -252,21 +380,26 @@ def visualize_poses_matplotlib(image: Union[np.ndarray, Image.Image],
             if start_idx < len(pred_pose) and end_idx < len(pred_pose):
                 start_point = pred_pose[start_idx]
                 end_point = pred_pose[end_idx]
-                axes[panel_idx].plot([start_point[0], end_point[0]],
-                                   [start_point[1], end_point[1]], 'b-', linewidth=2)
+                axes[panel_idx].plot([start_point[0], end_point[0]], [start_point[1], end_point[1]], "b-", linewidth=2)
 
         # Draw predicted keypoints
         for i, point in enumerate(pred_pose):
-            axes[panel_idx].scatter(point[0], point[1], c='yellow', s=50, zorder=5)
-            axes[panel_idx].text(point[0]+5, point[1]-5, str(i), fontsize=8, color='white',
-                                bbox=dict(boxstyle="round,pad=0.2", facecolor='blue', alpha=0.7))
+            axes[panel_idx].scatter(point[0], point[1], c="yellow", s=50, zorder=5)
+            axes[panel_idx].text(
+                point[0] + 5,
+                point[1] - 5,
+                str(i),
+                fontsize=8,
+                color="white",
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="blue", alpha=0.7),
+            )
         panel_idx += 1
 
         # Predicted pose with uncertainty ellipses
         if show_uncertainty and pred_uncertainties is not None:
             axes[panel_idx].imshow(image_np)
-            axes[panel_idx].set_title('Predicted Pose + Uncertainty')
-            axes[panel_idx].axis('off')
+            axes[panel_idx].set_title("Predicted Pose + Uncertainty")
+            axes[panel_idx].axis("off")
 
             # Draw predicted skeleton
             for connection in CONNECTIONS_13:
@@ -274,8 +407,9 @@ def visualize_poses_matplotlib(image: Union[np.ndarray, Image.Image],
                 if start_idx < len(pred_pose) and end_idx < len(pred_pose):
                     start_point = pred_pose[start_idx]
                     end_point = pred_pose[end_idx]
-                    axes[panel_idx].plot([start_point[0], end_point[0]],
-                                       [start_point[1], end_point[1]], 'b-', linewidth=2)
+                    axes[panel_idx].plot(
+                        [start_point[0], end_point[0]], [start_point[1], end_point[1]], "b-", linewidth=2
+                    )
 
             # Draw uncertainty ellipses and keypoints
             for i, (point, uncertainty) in enumerate(zip(pred_pose, pred_uncertainties)):
@@ -283,34 +417,49 @@ def visualize_poses_matplotlib(image: Union[np.ndarray, Image.Image],
 
                 # Draw uncertainty ellipse
                 draw_uncertainty_ellipse(
-                    axes[panel_idx], point, uncertainty, covariance,
-                    n_std=uncertainty_n_std, facecolor='cyan', alpha=0.3,
-                    edgecolor='blue', linewidth=1
+                    axes[panel_idx],
+                    point,
+                    uncertainty,
+                    covariance,
+                    n_std=uncertainty_n_std,
+                    facecolor="cyan",
+                    alpha=0.3,
+                    edgecolor="blue",
+                    linewidth=1,
                 )
 
                 # Draw keypoint
-                axes[panel_idx].scatter(point[0], point[1], c='yellow', s=50, zorder=5)
-                axes[panel_idx].text(point[0]+5, point[1]-5, str(i), fontsize=8, color='white',
-                                    bbox=dict(boxstyle="round,pad=0.2", facecolor='blue', alpha=0.7))
+                axes[panel_idx].scatter(point[0], point[1], c="yellow", s=50, zorder=5)
+                axes[panel_idx].text(
+                    point[0] + 5,
+                    point[1] - 5,
+                    str(i),
+                    fontsize=8,
+                    color="white",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="blue", alpha=0.7),
+                )
 
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"Visualization saved to: {save_path}")
 
     plt.show()
 
-def visualize_pose_sequence(pose_sequence: np.ndarray,
-                          images: List[Image.Image],
-                          output_file: str,
-                          num_frames: Optional[int] = None,
-                          estimated_poses: Optional[List[np.ndarray]] = None,
-                          estimated_uncertainties: Optional[List[np.ndarray]] = None,
-                          estimated_covariances: Optional[List[np.ndarray]] = None,
-                          show_uncertainty: bool = True,
-                          uncertainty_n_std: float = 2,
-                          duration: int = 100) -> None:
+
+def visualize_pose_sequence(
+    pose_sequence: np.ndarray,
+    images: List[Image.Image],
+    output_file: str,
+    num_frames: Optional[int] = None,
+    estimated_poses: Optional[List[np.ndarray]] = None,
+    estimated_uncertainties: Optional[List[np.ndarray]] = None,
+    estimated_covariances: Optional[List[np.ndarray]] = None,
+    show_uncertainty: bool = True,
+    uncertainty_n_std: float = 2,
+    duration: int = 100,
+) -> None:
     """
     Create an animated GIF visualization of pose sequences overlaid on image frames
 
@@ -341,13 +490,22 @@ def visualize_pose_sequence(pose_sequence: np.ndarray,
 
         # Get estimated pose data if available
         pred_pose = estimated_poses[frame] if estimated_poses and frame < len(estimated_poses) else None
-        pred_uncertainties = estimated_uncertainties[frame] if estimated_uncertainties and frame < len(estimated_uncertainties) else None
-        pred_covariances = estimated_covariances[frame] if estimated_covariances and frame < len(estimated_covariances) else None
+        pred_uncertainties = (
+            estimated_uncertainties[frame] if estimated_uncertainties and frame < len(estimated_uncertainties) else None
+        )
+        pred_covariances = (
+            estimated_covariances[frame] if estimated_covariances and frame < len(estimated_covariances) else None
+        )
 
         # Create visualization for this frame
         image_with_pose = visualize_single_pose_on_image(
-            image_pil, gt_pose, pred_pose, pred_uncertainties, pred_covariances,
-            show_uncertainty=show_uncertainty, uncertainty_n_std=uncertainty_n_std
+            image_pil,
+            gt_pose,
+            pred_pose,
+            pred_uncertainties,
+            pred_covariances,
+            show_uncertainty=show_uncertainty,
+            uncertainty_n_std=uncertainty_n_std,
         )
 
         # Convert back to PIL Image for GIF creation
@@ -356,13 +514,7 @@ def visualize_pose_sequence(pose_sequence: np.ndarray,
 
     # Create an animated GIF with the overlaid poses
     if frames_for_gif:
-        frames_for_gif[0].save(
-            output_file,
-            save_all=True,
-            append_images=frames_for_gif[1:],
-            duration=duration,
-            loop=0
-        )
+        frames_for_gif[0].save(output_file, save_all=True, append_images=frames_for_gif[1:], duration=duration, loop=0)
         print(f"Animated GIF saved to: {output_file}")
     else:
         print("No frames to save!")
@@ -377,12 +529,15 @@ def draw_3d_pose_with_covariance(ax, points_3d, covariances, connections, scale=
     # Draw skeleton connections
     for connection in connections:
         start, end = connection
-        ax.plot([points_3d[start, 0], points_3d[end, 0]],
-                [points_3d[start, 1], points_3d[end, 1]],
-                [points_3d[start, 2], points_3d[end, 2]], 'r-')
+        ax.plot(
+            [points_3d[start, 0], points_3d[end, 0]],
+            [points_3d[start, 1], points_3d[end, 1]],
+            [points_3d[start, 2], points_3d[end, 2]],
+            "r-",
+        )
 
     # Draw keypoints
-    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c='b', marker='o')
+    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c="b", marker="o")
 
     # Draw covariance ellipsoids (simplified version)
     for i in range(points_3d.shape[0]):
@@ -397,15 +552,14 @@ def draw_3d_pose_with_covariance(ax, points_3d, covariances, connections, scale=
         for j, (eigval, eigvec) in enumerate(zip(eigenvalues, eigenvectors.T)):
             start = points_3d[i] - radii[j] * eigvec
             end = points_3d[i] + radii[j] * eigvec
-            ax.plot([start[0], end[0]], [start[1], end[1]], [start[2], end[2]],
-                   'r-', alpha=0.5, linewidth=1)
+            ax.plot([start[0], end[0]], [start[1], end[1]], [start[2], end[2]], "r-", alpha=0.5, linewidth=1)
 
     # Set consistent axis limits
     ax.set_xlim(-2000, 0)
     ax.set_ylim(-2000, 0)
     ax.set_zlim(1000, 2000)
 
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_title('3D Pose with Uncertainty')
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.set_title("3D Pose with Uncertainty")

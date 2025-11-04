@@ -13,6 +13,8 @@ from human_pose_pipeline.pose_estimation.inference_helper import initialize_jax_
 
 from src.models.dct_pose_transformer import DCTPoseTransformer
 from src.datasets.h36m_motion_prediction import Human36mMotionDataset3D
+from human_pose_pipeline.utils.visualization import visualize_motion_prediction
+from human_pose_pipeline.pose_estimation.h36m_settings import CONNECTIONS_13
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
@@ -51,7 +53,7 @@ def predict_poses(motion_prediction_jit_fn, params, batch_stats, dataset, max_ba
                 params, input_pose
             )
         t1 = time()
-        print(f"  Processed batch {i + 1} in {(t1 - t0) * 1000:.2f} ms")
+        # print(f"  Processed batch {i + 1} in {(t1 - t0) * 1000:.2f} ms")
         predictions.append(pred_poses)
         targets.append(target_pose)
 
@@ -62,12 +64,14 @@ def predict_poses(motion_prediction_jit_fn, params, batch_stats, dataset, max_ba
 
 def evaluate_scores(predictions, targets):
     """Evaluate MPJPE scores."""
-    errors = np.linalg.norm(predictions - targets, axis=2)
+    errors = np.linalg.norm(predictions - targets, axis=-1)
     mpjpe = np.mean(errors)
     std = np.std(errors)
-    per_joint_errors = np.mean(errors, axis=0)
-    per_joint_std = np.std(errors, axis=0)
-    return mpjpe, std, per_joint_errors, per_joint_std
+    per_time_errors = np.mean(np.mean(errors, axis=-1), axis=0)
+    per_time_std = np.std(np.mean(errors, axis=-1), axis=0)
+    per_joint_errors = np.mean(np.mean(errors, axis=1), axis=0)
+    per_joint_std = np.std(np.mean(errors, axis=1), axis=0)
+    return mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std
 
 
 def main():
@@ -122,7 +126,10 @@ def main():
         device=device
     )
 
-    mpjpe, std_score, per_joint_score, per_joint_std = evaluate_scores(predictions, targets)
+    predictions = predictions.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
+    targets = targets.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
+
+    mpjpe, std_score, per_time_errors, per_time_stds, per_joint_errors, per_joint_std = evaluate_scores(predictions, targets)
 
     # Debug outputs
     print("\n" + "=" * 60)
@@ -131,25 +138,13 @@ def main():
     print(f"\nOverall MPJPE: {mpjpe:.2f} mm, Std: {std_score:.2f} mm")
 
     # Per-joint errors
-    print("\nPer-Joint Errors:")
-    joint_names = [
-        "Hip",
-        "RHip",
-        "RKnee",
-        "RFoot",
-        "LHip",
-        "LKnee",
-        "LFoot",
-        "Spine",
-        "Neck",
-        "Head",
-        "LShoulder",
-        "LElbow",
-        "LWrist",
-    ]
+    print("\nPer-Time Errors:")
+    for i, error in enumerate(per_time_errors):
+        print(f"Time point {i + 1} error = {error:7.2f} mm")
 
-    for name, error in zip(joint_names, per_joint_score):
-        print(f"  {name:12s}: {error:7.2f} mm")
+    print("\nPer-Joint Errors:")
+    for i, error in enumerate(per_joint_errors):
+        print(f"Joint {i + 1} error = {error:7.2f} mm")
 
     # Visualize a few samples
     print("\n" + "=" * 60)
@@ -159,66 +154,27 @@ def main():
     os.makedirs("eval_fixed", exist_ok=True)
 
     # Visualize best and worst predictions
-    all_scores = np.linalg.norm(predictions - targets, axis=2)
-    per_sample_errors = np.mean(all_scores.reshape(predictions.shape[0], predictions.shape[1], -1), axis=(1, 2))
+    all_scores = np.linalg.norm(predictions - targets, axis=-1)
+    per_sample_errors = np.mean(all_scores, axis=(1, 2))
 
     best_idx = np.argmin(per_sample_errors)
     worst_idx = np.argmax(per_sample_errors)
     median_idx = np.argsort(per_sample_errors)[len(per_sample_errors) // 2]
 
     for label, idx in [("best", best_idx), ("median", median_idx), ("worst", worst_idx)]:
-        fig = plt.figure(figsize=(12, 5))
-
         frame_idx = 4  # Middle frame
         pred_pose = predictions[idx, frame_idx].reshape(13, 3)
         targ_pose = targets[idx, frame_idx].reshape(13, 3)
-
-        error = np.mean(np.linalg.norm(pred_pose - targ_pose, axis=1))
-
-        # Ground truth
-        ax1 = fig.add_subplot(121, projection="3d")
-        plot_3d_skeleton(ax1, targ_pose, H36M_SKELETON_13, color="green")
-        ax1.set_title(f"Ground Truth", fontsize=12, fontweight="bold")
-        ax1.view_init(elev=15, azim=45)
-
-        # Prediction
-        ax2 = fig.add_subplot(122, projection="3d")
-        plot_3d_skeleton(ax2, pred_pose, H36M_SKELETON_13, color="blue")
-        ax2.set_title(f"Prediction (Error: {error:.1f}mm)", fontsize=12, fontweight="bold")
-        ax2.view_init(elev=15, azim=45)
-
-        # Match axes
-        all_poses = np.concatenate([targ_pose, pred_pose], axis=0)
-        x_range = [all_poses[:, 0].min() - 100, all_poses[:, 0].max() + 100]
-        y_range = [all_poses[:, 1].min() - 100, all_poses[:, 1].max() + 100]
-        z_range = [all_poses[:, 2].min() - 100, all_poses[:, 2].max() + 100]
-
-        for ax in [ax1, ax2]:
-            ax.set_xlim(x_range)
-            ax.set_ylim(y_range)
-            ax.set_zlim(z_range)
-
-        fig.suptitle(f"{label.upper()} Prediction (Sample {idx})", fontsize=14, fontweight="bold")
-        plt.tight_layout()
-        plt.savefig(f"eval_fixed/{label}_prediction.png", dpi=150)
-        plt.close()
+        visualize_motion_prediction(
+            pred_pose=np.array(pred_pose),
+            target_pose=np.array(targ_pose),
+            skeleton=CONNECTIONS_13,
+            label=label,
+            idx=idx,
+            output_path=args.output_dir
+        )
 
         print(f"  Saved {label} prediction visualization")
-
-    print("\n" + "=" * 60)
-    print("FINAL ASSESSMENT")
-    print("=" * 60)
-
-    if mpjpe < 1500 and np.mean(hip_spine) > 100 and np.mean(rhip_rknee) > 300:
-        print("✓ Model IS producing reasonable predictions!")
-        print("  The issue was MISSING postprocessing steps (IDCT + offset)")
-        print("  Your model is actually well-trained!")
-    else:
-        print("⚠ Model may still have some issues, but much better than before")
-
-    print("\n" + "=" * 60)
-    print("Results saved to eval_fixed/")
-    print("=" * 60)
 
 
 if __name__ == "__main__":
