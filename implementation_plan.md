@@ -73,17 +73,20 @@ We have two things:
     - Then, perform "Experiment 3" from Marians folder -> Evaluation of the 3D human pose prediction with uncertainty quantification (step 7 from above.)
  5. Perform OOD detection for motion prediction
     - Run the OOD detection with sketching lanczos on the 3D pose prediction model. ID data would be the human 3.6m dataset. OOD is the close interactions dataset or shuffled H36M dataset.
-    - [ ] Single motion prediction from Marians model
-    - [ ] Create motion prediction dataset
+    - [x] Single motion prediction from Marians model
+    - [x] Create motion prediction dataset
+    - [ ] Create small motion prediction model for OOD detection
     - [ ] Create OOD dataset(s)
     - [ ] Train and evaluate OOD scores
     - [ ] Write eval script ID/OOD
- 6. Implement the training pipeline in JAX
+ 6. (Implement the training pipeline in JAX)
     - The training pipeline is based on Marians code in the Experiment 1 folder. 
     - We want to have the training pipeline, so that we could do fine tuning and adaptions if needed.
  7. Full single-human pipeline
     - First, find out how the current bounding box algorithm works in Marians code. E.g., Experiment 4. There, he did real-world tests, so it should include some bounding box algorithm.
     - Implement the full pipeline based on the code of Experiment 4 plus the new OOD detection. Everything in JAX.
+    - [ ] Implement motion prediction model that takes uncertainty as input
+    - [ ] Write script that performs pose estimation with uncertainty + motion prediction with uncertainty with input from pose estimation
  8. Extend to multi-human
     - Write code to detect all humans in the scene.
     - We want to 
