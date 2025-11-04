@@ -10,6 +10,8 @@ from torch.utils.data import DataLoader
 import jax.numpy as jnp
 from tqdm import tqdm
 from human_pose_pipeline.pose_estimation.inference_helper import initialize_jax_models
+from human_pose_pipeline.motion_prediction.inference_helper import compute_covariance_matrices
+from human_pose_pipeline.utils.eval_utils import evaluate_uncertainty_coverage_with_covariance
 
 from src.models.dct_pose_transformer import DCTPoseTransformer
 from src.datasets.h36m_motion_prediction import Human36mMotionDataset3D
@@ -28,6 +30,7 @@ def predict_poses(motion_prediction_jit_fn, params, batch_stats, dataset, max_ba
     """Evaluate the motion prediction model."""
     predictions = []
     targets = []
+    covariance_matrices = []
 
     print("\nRunning model inference...")
 
@@ -56,10 +59,16 @@ def predict_poses(motion_prediction_jit_fn, params, batch_stats, dataset, max_ba
         # print(f"  Processed batch {i + 1} in {(t1 - t0) * 1000:.2f} ms")
         predictions.append(pred_poses)
         targets.append(target_pose)
+        covariance_matrices.append(
+            compute_covariance_matrices(
+                var_params, cov_params
+            )
+        )
 
     predictions = jnp.concatenate(predictions, axis=0)
     targets = jnp.concatenate(targets, axis=0)
-    return predictions, targets
+    covariance_matrices = jnp.concatenate(covariance_matrices, axis=0)
+    return predictions, targets, covariance_matrices
 
 
 def evaluate_scores(predictions, targets):
@@ -117,13 +126,20 @@ def main():
     print(f"Loaded {len(dataset)} sequences.")
 
     # Evaluate the model
-    predictions, targets = predict_poses(
+    predictions, targets, covariance_matrices = predict_poses(
         motion_prediction_jit_fn=motion_prediction_jit_fn,
         params=params,
         batch_stats=batch_stats,
         dataset=dataset,
         max_batches=50,
         device=device
+    )
+
+    coverage_stats = evaluate_uncertainty_coverage_with_covariance(
+        pred_poses=predictions,
+        true_poses=targets,
+        cov_matrices=covariance_matrices,
+        std_multipliers=[1, 2, 3, 4]
     )
 
     predictions = predictions.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
