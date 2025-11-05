@@ -35,6 +35,7 @@ models_tianle/
 marian_code/
 /datasets/
 cache/
+human_pose_pipeline/models/
 
 *.pth
 yolo11n.pt

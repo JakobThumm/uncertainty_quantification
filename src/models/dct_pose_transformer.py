@@ -3,8 +3,12 @@ The DCTPoseTransformer performs human motion prediction using a transformer arch
 It incorporates frequency-aware attention mechanisms and predicts pose uncertainties.
 """
 
+from typing import Union
 import jax.numpy as jnp
 from flax import linen as nn
+from numpy import ndarray
+
+from human_pose_pipeline.motion_prediction.h36m_settings import REDUCED_TIMESTEP, REDUCED_JOINT_INDICES
 
 
 class FrequencyAwareAttention(nn.Module):
@@ -248,9 +252,14 @@ class DCTPoseTransformer(nn.Module):
     seq_len: int = 50
     seq_len_output: int = 10
     unit_conversion: float = 1000.0
+    # Use a reduced output size for faster OOD evaluation
+    reduced_size: bool = False
+    reduced_timestep: int = REDUCED_TIMESTEP
+    reduced_joints: Union[list, jnp.ndarray] = REDUCED_JOINT_INDICES
 
     def __post_init__(self) -> None:
         self.dct_mat, self.idct_mat = get_dct_matrix(self.seq_len)
+        self.reduced_joints = jnp.array(self.reduced_joints)
         return super().__post_init__()
 
     @nn.compact
@@ -333,5 +342,16 @@ class DCTPoseTransformer(nn.Module):
 
         # Add offset
         pred_poses = pred_poses[:, :self.seq_len_output, :] + offset
+
+        if self.reduced_size:
+            # Extract only the specified timestep and joints
+            pred_poses_timestep = pred_poses[:, self.reduced_timestep, :]  # [batch_size, input_dim]
+            pred_poses_timestep = pred_poses_timestep.reshape(batch_size, -1, 3)  # [batch_size, num_joints, 3]
+            reduced_output = pred_poses_timestep[:, self.reduced_joints, :]  # [batch_size, len(reduced_joints), 3]
+            pred_poses = reduced_output.reshape(batch_size, -1)  # [batch_size, len(reduced_joints)*3]
+
+            # Similarly reduce uncertainty parameters
+            var_params = var_params[:, self.reduced_timestep, self.reduced_joints, :]
+            cov_params = cov_params[:, self.reduced_timestep, self.reduced_joints, :]
 
         return pred_poses, (var_params, cov_params)
