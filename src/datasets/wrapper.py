@@ -13,7 +13,12 @@ from src.datasets.food101 import FOOD101, get_food101_scaled
 from src.datasets.celeba import CelebA, get_celeba, get_celeba_augmented, get_celeba_ood
 from src.datasets.imagenet import get_imagenet_id, get_imagenet_ood
 from src.datasets.h36m_preprocessed import get_h36m_preprocessed
-from src.datasets.h36m_motion_prediction import get_h36m_motion_dataset
+from src.datasets.h36m_motion_prediction import (
+    get_h36m_motion_dataset,
+    get_h36m_motion_reduced_output_dataset,
+    get_h36m_motion_ood_dataset,
+    get_h36m_motion_reduced_output_ood_dataset
+)
 from src.datasets.tiger_pose import get_tiger_pose_preprocessed
 from src.datasets.utils import get_subset_loader
 
@@ -174,6 +179,30 @@ def dataloader_from_string(
         )
     elif dataset_name == "Human36mMotionDataset3D":
         train_loader, valid_loader, test_loader = get_h36m_motion_dataset(
+            base_directory=os.path.join(data_path, "H36M", "extracted"),
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            n_samples=n_samples,
+        )
+    elif dataset_name == "Human36mMotionReducedOutputDataset3D":
+        train_loader, valid_loader, test_loader = get_h36m_motion_reduced_output_dataset(
+            base_directory=os.path.join(data_path, "H36M", "extracted"),
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            n_samples=n_samples,
+        )
+    elif dataset_name == "Human36mMotionOODDataset3D":
+        train_loader, valid_loader, test_loader = get_h36m_motion_ood_dataset(
+            base_directory=os.path.join(data_path, "H36M", "extracted"),
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            n_samples=n_samples,
+        )
+    elif dataset_name == "Human36mMotionReducedOutputOODDataset3D":
+        train_loader, valid_loader, test_loader = get_h36m_motion_reduced_output_ood_dataset(
             base_directory=os.path.join(data_path, "H36M", "extracted"),
             batch_size=batch_size,
             shuffle=shuffle,
