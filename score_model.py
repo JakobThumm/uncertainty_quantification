@@ -187,7 +187,7 @@ if __name__ == "__main__":
     os.environ["PYTHONHASHSEED"] = str(args.model_seed)
 
     ################
-    ### datasets ###
+    # >>> datasets <<<
     train_loader, _, _ = dataloader_from_string(
         args.ID_dataset,
         n_samples=args.subsample_trainset,
@@ -266,7 +266,7 @@ if __name__ == "__main__":
         args_dict["output_dim"] = args.output_dim
 
     #############
-    ### model ###
+    # >>> model <<<
     model, params_dict, model_arg_dict = pretrained_model_from_string(
         dataset_name=args.ID_dataset,
         model_name=args.model,

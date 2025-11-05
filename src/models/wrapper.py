@@ -8,7 +8,13 @@ from src.models import RegressFlowFlax, MLP, LeNet, LeNet_h, GoogleNet, ConvNeXt
 from src.models.regressflow_with_aleatoric import RegressFlowFlax as RegressFlowFlaxWithAleatoric
 from src.models.dct_pose_transformer import DCTPoseTransformer
 from src.models import ViT
-from human_pose_pipeline.motion_prediction.h36m_settings import N_JOINTS, INPUT_HORIZON_LENGTH, PREDICTION_HORIZON_LENGTH
+from human_pose_pipeline.motion_prediction.h36m_settings import (
+    N_JOINTS,
+    INPUT_HORIZON_LENGTH,
+    PREDICTION_HORIZON_LENGTH,
+    REDUCED_JOINT_INDICES,
+    REDUCED_TIMESTEP
+)
 
 
 @dataclasses.dataclass
@@ -320,7 +326,20 @@ def model_from_string(
         model = DCTPoseTransformer(
             input_dim=(3 * N_JOINTS),  # 3D coordinates per joint
             seq_len=INPUT_HORIZON_LENGTH,
-            seq_len_output=PREDICTION_HORIZON_LENGTH
+            seq_len_output=PREDICTION_HORIZON_LENGTH,
+            reduced_size=False,
+            reduced_joints=[0],
+            reduced_timestep=0
+        )
+        wrapped_model = wrap_model(model)
+    elif model_name == "DCTPoseTransformerReducedOutput":
+        model = DCTPoseTransformer(
+            input_dim=(3 * N_JOINTS),  # 3D coordinates per joint
+            seq_len=INPUT_HORIZON_LENGTH,
+            seq_len_output=PREDICTION_HORIZON_LENGTH,
+            reduced_size=True,
+            reduced_joints=REDUCED_JOINT_INDICES,
+            reduced_timestep=REDUCED_TIMESTEP
         )
         wrapped_model = wrap_model(model)
     elif model_name == "ResNet50PreAct":
