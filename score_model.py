@@ -35,7 +35,20 @@ parser.add_argument("--data_path", type=str, default="../datasets/", help="root 
 parser.add_argument(
     "--ID_dataset",
     type=str,
-    choices=["Sinusoidal", "H36M", "UCI", "MNIST", "FMNIST", "SVHN", "CIFAR-10", "CIFAR-100", "CelebA", "ImageNet"],
+    choices=[
+        "Sinusoidal",
+        "H36M",
+        "Human36mMotionDataset3D",
+        "Human36mMotionReducedOutputDataset3D",
+        "UCI",
+        "MNIST",
+        "FMNIST",
+        "SVHN",
+        "CIFAR-10",
+        "CIFAR-100",
+        "CelebA",
+        "ImageNet"
+    ],
     default="MNIST",
     required=True,
 )
@@ -275,7 +288,7 @@ if __name__ == "__main__":
         n_samples=args.n_samples,
         save_path=args.model_save_path,
     )
-    args_dict["likelihood"] = model_arg_dict["likelihood"]  # where it use?
+    args_dict["likelihood"] = model_arg_dict.get("likelihood", "regression")
     print(
         f"Loaded {args.model} with {compute_num_params(params_dict['params'])} parameters of norm {compute_norm_params(params_dict['params']):.2f}"
     )
@@ -490,7 +503,7 @@ if __name__ == "__main__":
         print(f"Eigenvalues: {eigenval}")
 
     ######################
-    ### compute scores ###
+    # >>> compute scores <<<
     approx_quadratic_form = None  # skip computation of approx quadratic form
     compute_true_quadratic_form = False  # skip computation of true quadratic form
     scores_dict = {"eigenvals": jnp.array(eigenval), "args_dict": args_dict, "score_fun": score_fun}

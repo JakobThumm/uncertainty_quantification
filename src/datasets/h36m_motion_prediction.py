@@ -97,10 +97,7 @@ class Human36mMotionDataset3D(Dataset):
             # Convert to PyTorch tensors
             input_pose = torch.FloatTensor(input_pose)
             target_pose = torch.FloatTensor(target_pose)
-        return {
-            "input_pose": input_pose,
-            "target_pose": target_pose,
-        }
+        return [input_pose, target_pose]
 
 
 def subsample_dataset(dataset, n_samples, seed=0):

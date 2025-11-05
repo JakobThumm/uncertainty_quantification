@@ -50,8 +50,8 @@ def predict_poses(motion_prediction_jit_fn, params, batch_stats, dataset_loader,
         if i >= max_batches:
             break
 
-        input_pose = batch["input_pose"]
-        target_pose = batch["target_pose"]
+        input_pose = batch[0]
+        target_pose = batch[1]
 
         # To JAX arrays
         input_pose = jnp.array(input_pose, dtype=jnp.float32)

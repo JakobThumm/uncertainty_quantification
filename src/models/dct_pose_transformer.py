@@ -254,22 +254,22 @@ class DCTPoseTransformer(nn.Module):
     unit_conversion: float = 1000.0
     # Use a reduced output size for faster OOD evaluation
     reduced_size: bool = False
-    reduced_timestep: int = REDUCED_TIMESTEP
-    reduced_joints: Union[list, jnp.ndarray] = REDUCED_JOINT_INDICES
 
     def __post_init__(self) -> None:
         self.dct_mat, self.idct_mat = get_dct_matrix(self.seq_len)
-        self.reduced_joints = jnp.array(self.reduced_joints)
+        self.reduced_timestep = REDUCED_TIMESTEP
+        self.reduced_joints = jnp.array(REDUCED_JOINT_INDICES)
         return super().__post_init__()
 
     @nn.compact
-    def __call__(self, x, input_uncertainty=None):
+    def __call__(self, x, input_uncertainty=None, train: bool = True):
         """
         Forward pass through the model.
 
         Args:
             x: Input pose sequence [batch_size, seq_len, input_dim]
-            input_uncertainty: Optional external uncertainty information
+            input_uncertainty: Optional external uncertainty information (currently unused)
+            train: Whether in training mode (currently unused)
 
         Returns:
             tuple: (predicted poses, (variance parameters, covariance parameters))
@@ -349,9 +349,11 @@ class DCTPoseTransformer(nn.Module):
             pred_poses_timestep = pred_poses_timestep.reshape(batch_size, -1, 3)  # [batch_size, num_joints, 3]
             reduced_output = pred_poses_timestep[:, self.reduced_joints, :]  # [batch_size, len(reduced_joints), 3]
             pred_poses = reduced_output.reshape(batch_size, -1)  # [batch_size, len(reduced_joints)*3]
-
             # Similarly reduce uncertainty parameters
-            var_params = var_params[:, self.reduced_timestep, self.reduced_joints, :]
-            cov_params = cov_params[:, self.reduced_timestep, self.reduced_joints, :]
+            # var_params = var_params[:, self.reduced_timestep, self.reduced_joints, :]
+            # cov_params = cov_params[:, self.reduced_timestep, self.reduced_joints, :]
 
-        return pred_poses, (var_params, cov_params)
+            # The OOD detection only works for a single output tensor
+            return pred_poses
+        else:
+            return pred_poses, (var_params, cov_params)

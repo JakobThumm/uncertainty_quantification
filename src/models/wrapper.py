@@ -11,9 +11,7 @@ from src.models import ViT
 from human_pose_pipeline.motion_prediction.h36m_settings import (
     N_JOINTS,
     INPUT_HORIZON_LENGTH,
-    PREDICTION_HORIZON_LENGTH,
-    REDUCED_JOINT_INDICES,
-    REDUCED_TIMESTEP
+    PREDICTION_HORIZON_LENGTH
 )
 
 
@@ -29,17 +27,19 @@ class Model:
 def wrap_model(model) -> Model:
 
     def init(key, x):
-        params_dict = {
-            'params' : model.init(key, x),
-            'batch_stats' : None,
-        }
+        params_dict = model.init(key, x, train=True)
+        params_dict["batch_stats"] = None
         return params_dict
 
     def apply_train(params, x):
-        return model.apply(params, x)
+        return model.apply({'params': params},
+                x,
+                train=True)
     
     def apply_test(params, x):
-        return model.apply(params, x)
+        return model.apply({'params': params},
+                x,
+                train=False)
     
     return Model(init=init, apply_train=apply_train, apply_test=apply_test, has_batch_stats=False, has_dropout=False, has_attentionmask=False)
 
@@ -327,9 +327,7 @@ def model_from_string(
             input_dim=(3 * N_JOINTS),  # 3D coordinates per joint
             seq_len=INPUT_HORIZON_LENGTH,
             seq_len_output=PREDICTION_HORIZON_LENGTH,
-            reduced_size=False,
-            reduced_joints=[0],
-            reduced_timestep=0
+            reduced_size=False
         )
         wrapped_model = wrap_model(model)
     elif model_name == "DCTPoseTransformerReducedOutput":
@@ -337,9 +335,7 @@ def model_from_string(
             input_dim=(3 * N_JOINTS),  # 3D coordinates per joint
             seq_len=INPUT_HORIZON_LENGTH,
             seq_len_output=PREDICTION_HORIZON_LENGTH,
-            reduced_size=True,
-            reduced_joints=REDUCED_JOINT_INDICES,
-            reduced_timestep=REDUCED_TIMESTEP
+            reduced_size=True
         )
         wrapped_model = wrap_model(model)
     elif model_name == "ResNet50PreAct":
@@ -455,7 +451,7 @@ def pretrained_model_from_string(
         seed = 0,
         n_samples = None,
         save_path = "../models"
-    ):
+):
 
     if n_samples is not None:
         dataset_name += f"_samples{n_samples}"
@@ -463,11 +459,11 @@ def pretrained_model_from_string(
     args_dict = json.load(open(args_file_path, 'r'))
 
     extra_args = {
-        "activation_fun" : args_dict["activation_fun"],
-        "mlp_num_layers" : args_dict["mlp_num_layers"],
-        "mlp_hidden_dim" : args_dict["mlp_hidden_dim"],
+        "activation_fun" : args_dict.get("activation_fun", "relu"),
+        "mlp_num_layers" : args_dict.get("mlp_num_layers", 1),
+        "mlp_hidden_dim" : args_dict.get("mlp_hidden_dim", 64),
     }
-   
+
     model = model_from_string(args_dict["model"], args_dict["output_dim"], **extra_args)
 
     params_file_path = f"{save_path}/{dataset_name}/{model_name}/seed_{seed}/{run_name}_params.pickle"
