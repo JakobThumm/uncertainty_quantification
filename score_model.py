@@ -260,7 +260,7 @@ if __name__ == "__main__":
     OOD_loaders = [
         dataloader_from_string(
             OOD_dataset,
-            n_samples=None,
+            n_samples=args.subsample_testset,
             batch_size=args.test_batch_size,
             shuffle=False,
             seed=0,
@@ -535,7 +535,7 @@ if __name__ == "__main__":
                         small_X = X[i * 4 : (i + 1) * 4]
                         real = quadratic_form(small_X)
                         scores_dict[f"{distribution}_QF"].append(real)
-            print(f"{distribution} - scores {batch_scores[0:5]}, computed in {time.time() - start:.3f}s")
+            # print(f"{distribution} - scores {batch_scores[0:5]}, computed in {time.time() - start:.3f}s")
             done += X.shape[0]
             if args.verbose:
                 print(f"{done}/{len(loader.dataset)} in {time.time() - start_batch:.3f}s")

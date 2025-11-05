@@ -75,10 +75,10 @@ We have two things:
     - Run the OOD detection with sketching lanczos on the 3D pose prediction model. ID data would be the human 3.6m dataset. OOD is the close interactions dataset or shuffled H36M dataset.
     - [x] Single motion prediction from Marians model
     - [x] Create motion prediction dataset
-    - [ ] Create small motion prediction model for OOD detection
-    - [ ] Create OOD dataset(s)
-    - [ ] Train and evaluate OOD scores
-    - [ ] Write eval script ID/OOD
+    - [x] Create small motion prediction model for OOD detection
+    - [x] Create OOD dataset(s)
+    - [x] Train and evaluate OOD scores
+    - [x] Write eval script ID/OOD
  6. (Implement the training pipeline in JAX)
     - The training pipeline is based on Marians code in the Experiment 1 folder. 
     - We want to have the training pipeline, so that we could do fine tuning and adaptions if needed.

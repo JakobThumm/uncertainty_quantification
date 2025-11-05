@@ -509,7 +509,7 @@ def initialize_jax_models(checkpoint_path_jax, use_uncertainty=False):
     if batch_stats is not None:
         pose_estimation_jit_fn = jax.jit(lambda p, bs, x: model.apply_test(p, bs, x))
     else:
-        pose_estimation_jit_fn = jax.jit(lambda p, x: model.apply_test({'params': p}, x))
+        pose_estimation_jit_fn = jax.jit(lambda p, x: model.apply_test(p, x))
     print("JIT compilation complete!")
 
     return pose_estimation_jit_fn, params, batch_stats
