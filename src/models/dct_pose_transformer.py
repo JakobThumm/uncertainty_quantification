@@ -3,12 +3,15 @@ The DCTPoseTransformer performs human motion prediction using a transformer arch
 It incorporates frequency-aware attention mechanisms and predicts pose uncertainties.
 """
 
-from typing import Union
+import jax
 import jax.numpy as jnp
 from flax import linen as nn
-from numpy import ndarray
 
-from human_pose_pipeline.motion_prediction.h36m_settings import REDUCED_TIMESTEP, REDUCED_JOINT_INDICES
+from human_pose_pipeline.motion_prediction.h36m_settings import (
+    N_JOINTS,
+    REDUCED_TIMESTEP,
+    REDUCED_JOINT_INDICES
+)
 
 
 class FrequencyAwareAttention(nn.Module):
@@ -106,34 +109,64 @@ class DCTPoseTransformerBlock(nn.Module):
 
 class UncertaintyEmbedding(nn.Module):
     """
+    Modified module to process input covariance matrices.
     Processes input uncertainties parallel to main network.
     Learns how much uncertainty information should influence the main prediction.
     """
 
-    uncertainty_dim: int
     d_model: int
+    seq_len: int = 50
+    num_joints: int = N_JOINTS
 
-    @nn.compact
+    def setup(self):
+        """Setup layers that should always exist."""
+        # Process each 3x3 covariance matrix first
+        # cov_encoder: 9 -> 32 -> d_model
+        self.cov_encoder_0 = nn.Dense(32)
+        self.cov_encoder_1 = nn.Dense(self.d_model)
+
+        # joint_encoder: num_joints * d_model -> d_model
+        self.joint_encoder_0 = nn.Dense(self.d_model)
+        self.joint_encoder_norm = nn.LayerNorm()
+
+        # Learnable scaling factor for uncertainty influence
+        self.uncertainty_scale = self.param("uncertainty_scale", nn.initializers.zeros, (1,))
+
     def __call__(self, uncertainty):
         """
         Embed and scale uncertainty features.
 
         Args:
-            uncertainty: Input uncertainty features
+            uncertainty: Input uncertainty covariance matrices [batch_size, seq_len, num_joints, 3, 3]
 
         Returns:
-            Scaled uncertainty embeddings
+            Scaled uncertainty embeddings [batch_size, seq_len, d_model]
         """
-        # Embedding network
-        x = nn.Dense(self.d_model, name="embed_0")(uncertainty)
-        x = nn.LayerNorm(name="embed_norm")(x)
-        x = nn.gelu(x)
+        batch_size, seq_len, num_joints, _, _ = uncertainty.shape
 
-        # Learnable scale (initialized to 0)
-        uncertainty_scale = self.param("uncertainty_scale", nn.initializers.zeros, (1,))
+        # Reshape to process each covariance matrix
+        flat_covs = uncertainty.reshape(-1, 9)  # Flatten each 3x3 matrix
 
-        scale = nn.sigmoid(uncertainty_scale)
-        return x * scale
+        # Process each 3x3 covariance matrix first
+        # cov_encoder: 9 -> 32 -> d_model
+        x = self.cov_encoder_0(flat_covs)
+        x = nn.relu(x)
+        encoded_covs = self.cov_encoder_1(x)
+
+        # Reshape back to [batch_size, seq_len, num_joints, d_model]
+        encoded_covs = encoded_covs.reshape(batch_size, seq_len, num_joints, -1)
+
+        # Process across joints
+        joint_features = encoded_covs.reshape(batch_size, seq_len, -1)  # [batch, seq, joints*d_model]
+
+        # joint_encoder: num_joints * d_model -> d_model
+        x = self.joint_encoder_0(joint_features)
+        x = self.joint_encoder_norm(x)
+        uncertainty_features = nn.gelu(x)
+
+        # Apply scaling
+        scale = nn.sigmoid(self.uncertainty_scale)
+        return uncertainty_features * scale
 
 
 class UncertaintyHead(nn.Module):
@@ -152,21 +185,25 @@ class UncertaintyHead(nn.Module):
         """Setup layers that should always exist."""
         params_per_joint = self.coords_per_joint * 2
 
+        # Initialize all layers with normal(std=0.01)
+        kernel_init = nn.initializers.normal(stddev=0.01)
+        bias_init = nn.initializers.zeros
+
         # MLP for processing pose features
-        self.mlp_0 = nn.Dense(1024)
-        self.mlp_1 = nn.Dense(512)
+        self.mlp_0 = nn.Dense(1024, kernel_init=kernel_init, bias_init=bias_init)
+        self.mlp_1 = nn.Dense(512, kernel_init=kernel_init, bias_init=bias_init)
         self.mlp_2 = nn.Dense(
             self.seq_len_output * self.num_joints * params_per_joint,
-            kernel_init=nn.initializers.normal(stddev=0.01),
-            bias_init=nn.initializers.zeros,
+            kernel_init=kernel_init,
+            bias_init=bias_init,
         )
 
         # Network for processing embedded uncertainties (always create)
-        self.unc_proc_0 = nn.Dense(512)
+        self.unc_proc_0 = nn.Dense(512, kernel_init=kernel_init, bias_init=bias_init)
         self.unc_proc_1 = nn.Dense(
             self.seq_len_output * self.num_joints * params_per_joint,
-            kernel_init=nn.initializers.normal(stddev=0.01),
-            bias_init=nn.initializers.zeros,
+            kernel_init=kernel_init,
+            bias_init=bias_init,
         )
 
         # Learnable weight for combining pose-based and explicit uncertainties
@@ -214,10 +251,10 @@ class UncertaintyHead(nn.Module):
             batch_size, self.seq_len_output, self.num_joints, params_per_joint
         )
 
-        var_params = uncertainty_params[..., : self.coords_per_joint]
-        cov_params = uncertainty_params[..., self.coords_per_joint :]
+        log_vars = uncertainty_params[..., : self.coords_per_joint]
+        raw_covs = uncertainty_params[..., self.coords_per_joint :]
 
-        return var_params, cov_params
+        return log_vars, raw_covs
 
 
 def get_dct_matrix(N):
@@ -262,20 +299,38 @@ class DCTPoseTransformer(nn.Module):
         return super().__post_init__()
 
     @nn.compact
-    def __call__(self, x, input_uncertainty=None, train: bool = True):
+    def __call__(self, x, train: bool = True):
         """
         Forward pass through the model.
 
         Args:
             x: Input pose sequence [batch_size, seq_len, input_dim]
-            input_uncertainty: Optional external uncertainty information (currently unused)
             train: Whether in training mode (currently unused)
 
         Returns:
-            tuple: (predicted poses, (variance parameters, covariance parameters))
+            If reduced_size=True: predicted poses [batch_size, reduced_output_dim]
+            If reduced_size=False: tuple (predicted poses, (log_vars, raw_covs))
+                - predicted poses: [batch_size, seq_len_output, input_dim]
+                - log_vars: log variance parameters [batch_size, seq_len_output, num_joints, 3]
+                - raw_covs: raw covariance factors [batch_size, seq_len_output, num_joints, 3]
         """
         batch_size = x.shape[0]
+        input_dim = x.shape[2]
+        if input_dim == N_JOINTS * 3:
+            input_uncertainty = None
+        else:
+            # Split input into poses and uncertainties
+            pose_dim = N_JOINTS * 3
+            input_pose = x[:, :, :pose_dim]
+            input_uncertainty = x[:, :, pose_dim:]
+            # Reshape uncertainty to [batch_size, seq_len, num_joints, 3, 3]
+            input_uncertainty = input_uncertainty.reshape(
+                batch_size, self.seq_len, N_JOINTS, 3, 3
+            )
+            x = input_pose
         offset = x[:, -1:, :]
+        # Subtract offset
+        x = x - offset
         # Apply DCT to input poses
         x = jnp.transpose(jnp.matmul(jnp.transpose(x, axes=(0, 2, 1)), jnp.transpose(self.dct_mat)), (0, 2, 1))
         # Convert to meters
@@ -294,6 +349,23 @@ class DCTPoseTransformer(nn.Module):
             "freq_pos_embed", nn.initializers.normal(stddev=1.0), (self.seq_len, 1, self.d_model)
         )
         x = x + freq_pos_embed
+
+        # Parallel uncertainty processing path
+        # Always create the module (Flax requires consistent parameter tree)
+        uncertainty_embedding = UncertaintyEmbedding(
+            self.d_model, seq_len=self.seq_len, num_joints=N_JOINTS, name="uncertainty_embedding"
+        )
+
+        uncertainty_features = None
+        if input_uncertainty is not None:
+            # Convert to meters squared
+            input_uncertainty = input_uncertainty / (self.unit_conversion**2)
+            # Process uncertainty -> [batch, seq, d_model]
+            uncertainty_features = uncertainty_embedding(input_uncertainty)
+            # Transpose to match x's shape: [seq_len, batch_size, d_model]
+            uncertainty_features = jnp.transpose(uncertainty_features, (1, 0, 2))
+            # Add to main features
+            x = x + uncertainty_features / self.unit_conversion
 
         # Pass through transformer blocks
         features = []
@@ -328,7 +400,14 @@ class DCTPoseTransformer(nn.Module):
             name="uncertainty_head",
         )
 
-        var_params, cov_params = uncertainty_head(features[-1], None)
+        # Process uncertainties with detached (stopped gradient) features
+        features_detached = jax.lax.stop_gradient(features[-1])
+        if uncertainty_features is not None:
+            uncertainty_features_detached = jax.lax.stop_gradient(uncertainty_features)
+        else:
+            uncertainty_features_detached = None
+
+        log_vars, raw_covs = uncertainty_head(features_detached, uncertainty_features_detached)
 
         # Convert to mm
         freq_poses = freq_poses * self.unit_conversion
@@ -350,10 +429,10 @@ class DCTPoseTransformer(nn.Module):
             reduced_output = pred_poses_timestep[:, self.reduced_joints, :]  # [batch_size, len(reduced_joints), 3]
             pred_poses = reduced_output.reshape(batch_size, -1)  # [batch_size, len(reduced_joints)*3]
             # Similarly reduce uncertainty parameters
-            # var_params = var_params[:, self.reduced_timestep, self.reduced_joints, :]
-            # cov_params = cov_params[:, self.reduced_timestep, self.reduced_joints, :]
+            # log_vars = log_vars[:, self.reduced_timestep, self.reduced_joints, :]
+            # raw_covs = raw_covs[:, self.reduced_timestep, self.reduced_joints, :]
 
             # The OOD detection only works for a single output tensor
             return pred_poses
         else:
-            return pred_poses, (var_params, cov_params)
+            return pred_poses, (log_vars, raw_covs)

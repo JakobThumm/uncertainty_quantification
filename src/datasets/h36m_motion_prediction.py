@@ -13,7 +13,8 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
     INPUT_HORIZON_LENGTH,
     PREDICTION_HORIZON_LENGTH,
     REDUCED_TIMESTEP,
-    REDUCED_JOINT_INDICES
+    REDUCED_JOINT_INDICES,
+    FAKE_INPUT_UNCERTAINTY
 )
 from src.datasets.utils import get_loader
 
@@ -34,7 +35,8 @@ class Human36mMotionDataset3D(Dataset):
         reduce_size=False,
         reduced_timestep=REDUCED_TIMESTEP,
         reduced_joints=REDUCED_JOINT_INDICES,
-        ood=False
+        ood=False,
+        input_uncertainty=None
     ):
         self.input_frames = input_frames
         self.predict_frames = predict_frames
@@ -45,6 +47,7 @@ class Human36mMotionDataset3D(Dataset):
         self.reduced_timestep = reduced_timestep
         self.reduced_joints = reduced_joints
         self.ood = ood
+        self.input_uncertainty = input_uncertainty
 
     def load_data(self, base_directory, split):
         all_data = []
@@ -89,6 +92,17 @@ class Human36mMotionDataset3D(Dataset):
             target_pose_timestep = target_pose_timestep.reshape(-1, 3)  # [num_joints, 3]
             reduced_target = target_pose_timestep[self.reduced_joints, :]  # [len(reduced_joints), 3]
             target_pose = reduced_target.reshape(-1)  # [len(reduced_joints)*3]
+        if self.input_uncertainty is not None:
+            # Create 3x3 identity covariance matrices for each joint in the input sequence with std deviation
+            num_joints = input_pose.shape[1] // 3
+            input_covariances = np.tile(
+                np.eye(3)[np.newaxis, np.newaxis, :, :] * (self.input_uncertainty ** 2),
+                (input_pose.shape[0], num_joints, 1, 1)
+            )  # [input_frames, num_joints, 3, 3]
+            # Reshape to [input_frames, num_joints*3*3]
+            input_covariances = input_covariances.reshape(input_pose.shape[0], -1)
+            # Append to input_pose
+            input_pose = np.concatenate([input_pose, input_covariances], axis=-1)
         if self.jax_format:
             # Convert to JAX arrays
             input_pose = jnp.array(input_pose, dtype=jnp.float32)
@@ -153,6 +167,71 @@ def get_h36m_motion_dataset(
         base_directory=base_directory,
         split='validation',
         jax_format=False
+    )
+
+    # Subsample if n_samples is specified
+    if n_samples is not None:
+        train_dataset = subsample_dataset(train_dataset, n_samples, seed)
+        test_dataset = subsample_dataset(test_dataset, n_samples, seed)
+
+    # Split train dataset into train/val
+    train_loader, valid_loader = get_loader(
+        train_dataset,
+        split_train_val_ratio=split_train_val_ratio,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=True,
+        seed=seed
+    )
+
+    # Create test loader
+    test_loader = get_loader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        drop_last=True,
+        seed=seed
+    )
+
+    return train_loader, valid_loader, test_loader
+
+
+def get_h36m_motion_dataset_with_uncertainty(
+    base_directory,
+    batch_size=128,
+    shuffle=False,
+    seed=0,
+    split_train_val_ratio=0.9,
+    n_samples=None
+):
+    """
+    Get data loaders for preprocessed H36M dataset
+
+    Args:
+        base_directory: Path to dataset directory
+        batch_size: Batch size for data loaders
+        shuffle: Whether to shuffle the data
+        seed: Random seed for reproducibility
+        split_train_val_ratio: Ratio for splitting train set into train/val
+        return_metadata: Whether to return metadata with samples
+        n_samples: Number of samples to use from dataset (None = use all)
+
+    Returns:
+        tuple: (train_loader, valid_loader, test_loader)
+    """
+    # Create datasets
+    train_dataset = Human36mMotionDataset3D(
+        base_directory=base_directory,
+        split='train',
+        jax_format=False,
+        input_uncertainty=FAKE_INPUT_UNCERTAINTY
+    )
+
+    test_dataset = Human36mMotionDataset3D(
+        base_directory=base_directory,
+        split='validation',
+        jax_format=False,
+        input_uncertainty=FAKE_INPUT_UNCERTAINTY
     )
 
     # Subsample if n_samples is specified

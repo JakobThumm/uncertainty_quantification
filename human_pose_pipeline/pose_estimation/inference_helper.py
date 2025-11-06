@@ -5,32 +5,15 @@ This module provides inference functions for human pose estimation using JAX mod
 Based on Marian's Inference_Helper.py but adapted for JAX instead of PyTorch.
 """
 
-from operator import is_
-import os
-import logging
 import json
 import pickle
 from time import time
 import numpy as np
 import jax
-import jax.numpy as jnp
 from PIL import Image
-import matplotlib.pyplot as plt
 import cv2
-import matplotlib.patches as patches
-import matplotlib.lines as mlines
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait, ALL_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 import threading
-
-# Global thread pool for parallel execution (reused across calls)
-_thread_pool = None
-
-def get_thread_pool():
-    """Get or create a global thread pool with 2 workers."""
-    global _thread_pool
-    if _thread_pool is None:
-        _thread_pool = ThreadPoolExecutor(max_workers=2)
-    return _thread_pool
 
 from src.models.wrapper import model_from_string
 from human_pose_pipeline.utils.transform_utils import (
@@ -48,6 +31,18 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
     YOLO_CONFIDENCE_THRESHOLD,
     OOD_THRESHOLD
 )
+
+
+# Global thread pool for parallel execution (reused across calls)
+_thread_pool = None
+
+
+def get_thread_pool():
+    """Get or create a global thread pool with 2 workers."""
+    global _thread_pool
+    if _thread_pool is None:
+        _thread_pool = ThreadPoolExecutor(max_workers=2)
+    return _thread_pool
 
 
 def joint_mapping(joints, mapping):
@@ -449,13 +444,12 @@ def initialize_human_detector(device_torch=None):
     return human_detector, device_torch
 
 
-def initialize_jax_models(checkpoint_path_jax, use_uncertainty=False):
+def initialize_jax_models(checkpoint_path_jax):
     """
     Initialize and load the JAX pose estimation model.
 
     Args:
         checkpoint_path_jax (str): Path to the JAX pose estimation model parameters
-        use_uncertainty (bool): Whether to use RegressFlowWithAleatoric for uncertainty estimation
 
     Returns:
         tuple: (pose_estimation_jit_fn, jax_params, jax_batch_stats)

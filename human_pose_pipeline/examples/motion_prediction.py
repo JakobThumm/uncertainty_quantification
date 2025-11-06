@@ -10,74 +10,22 @@ from torch.utils.data import DataLoader
 import jax.numpy as jnp
 from tqdm import tqdm
 from human_pose_pipeline.pose_estimation.inference_helper import initialize_jax_models
-from human_pose_pipeline.motion_prediction.inference_helper import compute_covariance_matrices
+from human_pose_pipeline.motion_prediction.inference_helper import predict_poses
 from human_pose_pipeline.utils.eval_utils import evaluate_uncertainty_coverage_with_covariance
 from src.datasets import dataloader_from_string
 from src.models.dct_pose_transformer import DCTPoseTransformer
 from src.datasets.h36m_motion_prediction import Human36mMotionDataset3D
 from human_pose_pipeline.utils.visualization import visualize_motion_prediction
 from human_pose_pipeline.pose_estimation.h36m_settings import CONNECTIONS_13
-from human_pose_pipeline.motion_prediction.h36m_settings import INPUT_HORIZON_LENGTH, PREDICTION_HORIZON_LENGTH
+from human_pose_pipeline.motion_prediction.h36m_settings import (
+    INPUT_HORIZON_LENGTH,
+    PREDICTION_HORIZON_LENGTH,
+    N_JOINTS
+)
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
-N_JOINTS = 13
 BATCH_SIZE = 128
-
-
-def predict_poses(motion_prediction_jit_fn, params, batch_stats, dataset_loader, max_batches=np.inf, device="cuda"):
-    """Evaluate the motion prediction model.
-
-    Args:
-        motion_prediction_jit_fn: JIT-compiled JAX function for motion prediction.
-        params: Model parameters.
-        batch_stats: Batch statistics for the model (if any).
-        dataset_loader: DataLoader for the dataset.
-        max_batches: Maximum number of batches to process.
-        device: Device to run the computations on.
-    Returns:
-        predictions: Predicted poses. Shape: (num_samples, pred_horizon, n_joints * 3)
-        targets: Ground truth poses. Shape: (num_samples, pred_horizon, n_joints * 3)
-        covariance_matrices: Covariance matrices of the predictions. Shape: (num_samples, pred_horizon, n_joints * 3, n_joints * 3)
-    """
-    predictions = []
-    targets = []
-    covariance_matrices = []
-
-    print("\nRunning model inference...")
-
-    for i, batch in tqdm(enumerate(dataset_loader)):
-        if i >= max_batches:
-            break
-
-        input_pose = batch[0]
-        target_pose = batch[1]
-
-        # To JAX arrays
-        input_pose = jnp.array(input_pose, dtype=jnp.float32)
-        target_pose = jnp.array(target_pose, dtype=jnp.float32)
-
-        # To batch dimension
-        if len(input_pose.shape) == 2:
-            input_pose = jnp.expand_dims(input_pose, axis=0)
-            target_pose = jnp.expand_dims(target_pose, axis=0)
-
-        # Model inference
-        t0 = time()
-        if batch_stats is not None:
-            pred_poses, (var_params, cov_params) = motion_prediction_jit_fn(params, batch_stats, input_pose)
-        else:
-            pred_poses, (var_params, cov_params) = motion_prediction_jit_fn(params, input_pose)
-        t1 = time()
-        # print(f"  Processed batch {i + 1} in {(t1 - t0) * 1000:.2f} ms")
-        predictions.append(pred_poses)
-        targets.append(target_pose)
-        covariance_matrices.append(compute_covariance_matrices(var_params, cov_params))
-
-    predictions = jnp.concatenate(predictions, axis=0)
-    targets = jnp.concatenate(targets, axis=0)
-    covariance_matrices = jnp.concatenate(covariance_matrices, axis=0)
-    return predictions, targets, covariance_matrices
 
 
 def evaluate_scores(predictions, targets):
@@ -130,14 +78,8 @@ def main():
     # Load dataset
     print("\nLoading H36M dataset...")
     data_path = os.path.join(root_dir, args.data_path)  # , "H36M", "extracted")
-    # dataset = Human36mMotionDataset3D(
-    #     base_directory=data_path,
-    #     split="test",
-    #     input_frames=INPUT_HORIZON_LENGTH,
-    #     predict_frames=PREDICTION_HORIZON_LENGTH,
-    #     jax_format=True
-    # )
-    dataset_name = "Human36mMotionDataset3D"
+    # dataset_name = "Human36mMotionDataset3D"
+    dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
     _, _, test_set_loader = dataloader_from_string(
         dataset_name,
         batch_size=BATCH_SIZE,

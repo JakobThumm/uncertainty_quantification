@@ -1,5 +1,70 @@
 """Helper functions for motion prediction inference."""
+from tqdm import tqdm
+from time import time
 import jax.numpy as jnp
+import numpy as np
+
+
+def predict_poses(
+    motion_prediction_jit_fn,
+    params,
+    batch_stats,
+    dataset_loader,
+    max_batches=np.inf,
+    device="cuda"
+):
+    """Evaluate the motion prediction model.
+
+    Args:
+        motion_prediction_jit_fn: JIT-compiled JAX function for motion prediction.
+        params: Model parameters.
+        batch_stats: Batch statistics for the model (if any).
+        dataset_loader: DataLoader for the dataset.
+        max_batches: Maximum number of batches to process.
+        device: Device to run the computations on.
+    Returns:
+        predictions: Predicted poses. Shape: (num_samples, pred_horizon, n_joints * 3)
+        targets: Ground truth poses. Shape: (num_samples, pred_horizon, n_joints * 3)
+        covariance_matrices: Covariance matrices of the predictions. Shape: (num_samples, pred_horizon, n_joints * 3, n_joints * 3)
+    """
+    predictions = []
+    targets = []
+    covariance_matrices = []
+
+    print("\nRunning model inference...")
+
+    for i, batch in tqdm(enumerate(dataset_loader)):
+        if i >= max_batches:
+            break
+
+        input_pose = batch[0]
+        target_pose = batch[1]
+
+        # To JAX arrays
+        input_pose = jnp.array(input_pose, dtype=jnp.float32)
+        target_pose = jnp.array(target_pose, dtype=jnp.float32)
+
+        # To batch dimension
+        if len(input_pose.shape) == 2:
+            input_pose = jnp.expand_dims(input_pose, axis=0)
+            target_pose = jnp.expand_dims(target_pose, axis=0)
+
+        # Model inference
+        t0 = time()
+        if batch_stats is not None:
+            pred_poses, (var_params, cov_params) = motion_prediction_jit_fn(params, batch_stats, input_pose)
+        else:
+            pred_poses, (var_params, cov_params) = motion_prediction_jit_fn(params, input_pose)
+        t1 = time()
+        # print(f"  Processed batch {i + 1} in {(t1 - t0) * 1000:.2f} ms")
+        predictions.append(pred_poses)
+        targets.append(target_pose)
+        covariance_matrices.append(compute_covariance_matrices(var_params, cov_params))
+
+    predictions = jnp.concatenate(predictions, axis=0)
+    targets = jnp.concatenate(targets, axis=0)
+    covariance_matrices = jnp.concatenate(covariance_matrices, axis=0)
+    return predictions, targets, covariance_matrices
 
 
 def compute_covariance_matrices(log_var, raw_cov):
