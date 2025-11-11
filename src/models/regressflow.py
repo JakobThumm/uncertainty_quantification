@@ -152,7 +152,7 @@ class Bottleneck(nn.Module):
 
 
 # Corresponds to make_layer call in Marian's PyTorch ResNet implementation
-class ResNetStage(nn.Module):
+class BottleneckStage(nn.Module):
     blockClass: Union[Type[BasicBlock], Type[Bottleneck]]
     planes: int
     blocks: int
@@ -212,7 +212,7 @@ class ResNet50Backbone(nn.Module):
         )
 
         for planes, blocks, stride in RESNET_ARCHITECTURES[self.architecture_str]:
-            x = ResNetStage(
+            x = BottleneckStage(
                 blockClass=self.blockClass,
                 planes=planes,
                 blocks=blocks,
@@ -223,12 +223,12 @@ class ResNet50Backbone(nn.Module):
         return x  # [B, H/32, W/32, 2048]
 
 
-class RegressflowBackbone(nn.Module):
-    fc_filters: Sequence[int] = [-1]  # e.g., [-1] (identity)
+class RegressFlowFlax(nn.Module):
+    num_joints: int
+    fc_filters: Sequence[int]  # e.g., [-1] (identity)
     architecture_str: str = "resnet50"
-    bn_momentum: float = 0.9  # 1-torch
-    bn_epsilon: float = 1e-5
     accept_nchw: bool = True
+    predict_aleatoric_uncertainty: bool = False
 
     @nn.compact
     def __call__(self, x, train: bool = True):
@@ -261,28 +261,15 @@ class RegressflowBackbone(nn.Module):
                 pass
 
         out_ch = h.shape[-1]
-        return out_ch, h, feat
-
-
-class RegressFlowFlaxWithAleatoric(nn.Module):
-    num_joints: int
-    fc_filters: Sequence[int]  # e.g., [-1] (identity)
-    architecture_str: str = "resnet50"
-    accept_nchw: bool = True
-
-    @nn.compact
-    def __call__(self, x, train: bool = True):
-        out_ch, h, feat = RegressflowBackbone(
-            fc_filters=self.fc_filters,
-            architecture_str=self.architecture_str,
-            accept_nchw=self.accept_nchw
-        )(x, train=train)
 
         # --- coordinate head (identical semantics) ---
         coord = LinearNorm(out_ch, self.num_joints * 2, use_bias=True, divide_by_input_norm=True)(h)
+        if not self.predict_aleatoric_uncertainty:
+            # coord = coord.reshape((coord.shape[0], self.num_joints, 2))
+            return coord
+
         coord = coord.reshape((coord.shape[0], self.num_joints, 2))
 
-        #
         # --- log-variance head (Torch-compatible) ---
         # Torch: fc_sigma outputs log-variance directly
         log_variance = LinearNorm(out_ch, self.num_joints * 2, use_bias=True, divide_by_input_norm=False)(
@@ -314,24 +301,3 @@ class RegressFlowFlaxWithAleatoric(nn.Module):
             "nf_loss": None,
             "pure_sigma": log_variance,
         }
-
-
-class RegressFlowFlax(nn.Module):
-    num_joints: int
-    fc_filters: Sequence[int]  # e.g., [-1] (identity)
-    architecture_str: str = "resnet50"
-    accept_nchw: bool = True
-
-    @nn.compact
-    def __call__(self, x, train: bool = True):
-        out_ch, h, feat = RegressflowBackbone(
-            fc_filters=self.fc_filters,
-            architecture_str=self.architecture_str,
-            accept_nchw=self.accept_nchw
-        )(x, train=train)
-
-        # --- coordinate head (identical semantics) ---
-        coord = LinearNorm(out_ch, self.num_joints * 2, use_bias=True, divide_by_input_norm=True)(h)
-        # coord = coord.reshape((coord.shape[0], self.num_joints, 2))
-
-        return coord

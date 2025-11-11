@@ -6,7 +6,6 @@ import jax
 import flax
 from src.models import (
     RegressFlowFlax,
-    RegressFlowFlaxWithAleatoric,
     MLP,
     LeNet,
     LeNet_h,
@@ -239,17 +238,22 @@ def model_from_string(
     elif model_name == "RegressFlow":
         num_joints = output_dim // 2
         model = RegressFlowFlax(
-            num_joints=num_joints, fc_filters=[-1], accept_nchw=True
+            num_joints=num_joints,
+            fc_filters=[-1],
+            architecture_str=architecture_str,
+            accept_nchw=True,
+            predict_aleatoric_uncertainty=False,
         )
         wrapped_model = wrap_model_with_batchstats(model)
     elif model_name == "RegressFlowWithAleatoric":
         # Calculate number of joints from output_dim (output_dim = num_joints * 2)
         num_joints = output_dim // 2
-        model = RegressFlowFlaxWithAleatoric(
+        model = RegressFlowFlax(
             num_joints=num_joints,
             fc_filters=[-1],
             architecture_str=architecture_str,
-            accept_nchw=True
+            accept_nchw=True,
+            predict_aleatoric_uncertainty=True,
         )
         wrapped_model = wrap_model_with_batchstats(model)
     elif model_name == "DCTPoseTransformer":
