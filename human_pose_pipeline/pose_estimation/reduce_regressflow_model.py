@@ -23,50 +23,8 @@ import json
 from pathlib import Path
 import jax
 import jax.numpy as jnp
-from flax import linen as nn
-from easydict import EasyDict
 
-# Import the original model
-from src.models.regressflow import RegressFlowFlax
-from src.models.wrapper import wrap_model_with_batchstats
-
-
-def create_reduced_model(num_joints=3):
-    """Create a RegressFlow model with reduced output joints."""
-    CONFIG = EasyDict({
-        'DATA_PRESET': {
-            'TYPE': 'simple',
-            'SIGMA': 2,
-            'NUM_JOINTS': num_joints,  # Reduced to 3
-            'IMAGE_SIZE': [2910, 192],
-            'HEATMAP_SIZE': [104, 48]
-        },
-        'MODEL': {
-            'TYPE': 'RegressFlow',
-            'NUM_LAYERS': 90,
-            'NUM_FC_FILTERS': [-1],
-            'HIDDEN_LIST': [-1],
-            'PRETRAINED': '',
-            'TRY_LOAD': ''
-        }
-    })
-
-    cfg = {
-        'PRESET': CONFIG.DATA_PRESET,
-        'NUM_LAYERS': CONFIG.MODEL.NUM_LAYERS,
-        'NUM_FC_FILTERS': CONFIG.MODEL.NUM_FC_FILTERS,
-        'HIDDEN_LIST': CONFIG.MODEL.HIDDEN_LIST,
-        'PRETRAINED': CONFIG.MODEL.PRETRAINED,
-        'TRY_LOAD': CONFIG.MODEL.TRY_LOAD
-    }
-
-    model = RegressFlowFlax(
-        preset_cfg=cfg['PRESET'],
-        fc_filters=cfg['NUM_FC_FILTERS'],
-        accept_nchw=True
-    )
-
-    return wrap_model_with_batchstats(model)
+from src.models.wrapper import model_from_string
 
 
 def load_original_model(model_save_path, run_name, seed):
@@ -76,12 +34,12 @@ def load_original_model(model_save_path, run_name, seed):
 
     # Load args
     args_file = Path(model_save_path) / dataset_name / model_name / f"seed_{seed}" / f"{run_name}_args.json"
-    with open(args_file, 'r') as f:
+    with open(args_file, "r") as f:
         args_dict = json.load(f)
 
     # Load params
     params_file = Path(model_save_path) / dataset_name / model_name / f"seed_{seed}" / f"{run_name}_params.pickle"
-    with open(params_file, 'rb') as f:
+    with open(params_file, "rb") as f:
         params_dict = pickle.load(f)
 
     # Remove 'model' key if present
@@ -113,38 +71,51 @@ def extract_joint_weights(original_params, joint_indices):
 
     # Create a copy of the parameters
     new_params = {
-        'params': {},
-        'batch_stats': original_params.get('batch_stats', None),
-        'model': 'regressflow'  # Add model identifier (required by pretrained_model_from_string)
+        "params": {},
+        "batch_stats": original_params.get("batch_stats", None),
+        "model": "regressflow",  # Add model identifier (required by pretrained_model_from_string)
     }
 
     # Copy all parameters except the final coordinate head
-    for key, value in original_params['params'].items():
-        if key == 'LinearNorm_0':
+    for key, value in original_params["params"].items():
+        if key == "LinearNorm_0":
             # This is the coordinate head - we need to slice it
-            new_params['params'][key] = {
-                'kernel': value['kernel'][coord_indices, :],  # Shape: (num_joints*2, feature_dim)
-                'bias': value['bias'][coord_indices]  # Shape: (num_joints*2,)
+            new_params["params"][key] = {
+                "kernel": value["kernel"][coord_indices, :],  # Shape: (num_joints*2, feature_dim)
+                "bias": value["bias"][coord_indices],  # Shape: (num_joints*2,)
             }
         else:
             # Copy all other parameters unchanged
-            new_params['params'][key] = value
+            new_params["params"][key] = value
 
     return new_params
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Reduce RegressFlow model from 17 to 3 joints')
-    parser.add_argument('--model_save_path', type=str, default='human_pose_pipeline/models/pose_estimation',
-                        help='Path to saved models directory')
-    parser.add_argument('--run_name', type=str, default='finetuned_h36m_regressflow_pred',
-                        help='Original model run name')
-    parser.add_argument('--seed', type=int, default=420,
-                        help='Random seed used for training')
-    parser.add_argument('--output_run_name', type=str, default='finetuned_h36m_regressflow_pred_3joints',
-                        help='Output run name for reduced model')
-    parser.add_argument('--joint_indices', type=int, nargs='+', default=[0, 9, 10],
-                        help='Joint indices to keep (default: [0, 9, 10] for head, left hand, right hand)')
+    parser = argparse.ArgumentParser(description="Reduce RegressFlow model from 17 to 3 joints")
+    parser.add_argument(
+        "--model_save_path",
+        type=str,
+        default="human_pose_pipeline/models/pose_estimation",
+        help="Path to saved models directory",
+    )
+    parser.add_argument(
+        "--run_name", type=str, default="finetuned_h36m_regressflow_pred", help="Original model run name"
+    )
+    parser.add_argument("--seed", type=int, default=420, help="Random seed used for training")
+    parser.add_argument(
+        "--output_run_name",
+        type=str,
+        default="finetuned_h36m_regressflow_pred_3joints",
+        help="Output run name for reduced model",
+    )
+    parser.add_argument(
+        "--joint_indices",
+        type=int,
+        nargs="+",
+        default=[0, 9, 10],
+        help="Joint indices to keep (default: [0, 9, 10] for head, left hand, right hand)",
+    )
 
     args = parser.parse_args()
 
@@ -158,9 +129,7 @@ def main():
     print(f"  Keeping joints: {args.joint_indices}")
 
     # Load original model
-    original_params, original_args = load_original_model(
-        args.model_save_path, args.run_name, args.seed
-    )
+    original_params, original_args = load_original_model(args.model_save_path, args.run_name, args.seed)
 
     print(f"\nOriginal model:")
     print(f"  Output dimension: {original_args['output_dim']}")
@@ -172,10 +141,10 @@ def main():
 
     # Update args for reduced model
     reduced_args = original_args.copy()
-    reduced_args['output_dim'] = len(args.joint_indices) * 2
-    reduced_args['run_name'] = args.output_run_name
-    reduced_args['reduced_from'] = args.run_name
-    reduced_args['joint_indices'] = args.joint_indices
+    reduced_args["output_dim"] = len(args.joint_indices) * 2
+    reduced_args["run_name"] = args.output_run_name
+    reduced_args["reduced_from"] = args.run_name
+    reduced_args["joint_indices"] = args.joint_indices
 
     print(f"\nReduced model:")
     print(f"  Output dimension: {reduced_args['output_dim']}")
@@ -195,28 +164,26 @@ def main():
     print(f"  Args: {args_output_file}")
     print(f"  Params: {params_output_file}")
 
-    with open(args_output_file, 'w') as f:
+    with open(args_output_file, "w") as f:
         json.dump(reduced_args, f, indent=2)
 
-    with open(params_output_file, 'wb') as f:
+    with open(params_output_file, "wb") as f:
         pickle.dump(reduced_params, f)
 
     print("\nDone! Reduced model saved successfully.")
 
     # Verify the model can be loaded
     print("\nVerifying reduced model...")
-    reduced_model = create_reduced_model(num_joints=len(args.joint_indices))
+    reduced_model = model_from_string(
+        model_name="RegressFlow", output_dim=reduced_args["output_dim"], architecture_str="resnet18"
+    )
 
     # Test with a dummy input
     key = jax.random.PRNGKey(0)
     dummy_input = jax.random.normal(key, (1, 3, 2910, 192))  # NCHW format
 
     try:
-        output = reduced_model.apply_test(
-            reduced_params['params'],
-            reduced_params['batch_stats'],
-            dummy_input
-        )
+        output = reduced_model.apply_test(reduced_params["params"], reduced_params["batch_stats"], dummy_input)
         print(f"  Model output shape: {output.shape}")
         print(f"  Expected shape: (1, {len(args.joint_indices) * 2})")
 
@@ -227,13 +194,13 @@ def main():
     except Exception as e:
         print(f"  ✗ Model verification failed: {e}")
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("Summary:")
     print(f"  Original: 17 joints (34 outputs)")
-    print(f"  Reduced:  {len(args.joint_indices)} joints ({len(args.joint_indices)*2} outputs)")
-    print(f"  Speed improvement factor: ~{17/len(args.joint_indices):.1f}x")
+    print(f"  Reduced:  {len(args.joint_indices)} joints ({len(args.joint_indices) * 2} outputs)")
+    print(f"  Speed improvement factor: ~{17 / len(args.joint_indices):.1f}x")
     print(f"  (Deployment time scales as O(tp), reduced from t=17 to t={len(args.joint_indices)})")
-    print("="*80)
+    print("=" * 80)
 
 
 if __name__ == "__main__":
