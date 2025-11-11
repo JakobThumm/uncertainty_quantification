@@ -100,13 +100,13 @@ def main():
         help="Path to saved models directory",
     )
     parser.add_argument(
-        "--run_name", type=str, default="finetuned_h36m_regressflow_pred", help="Original model run name"
+        "--run_name", type=str, default="jax_resnet18_regressflow", help="Original model run name"
     )
     parser.add_argument("--seed", type=int, default=420, help="Random seed used for training")
     parser.add_argument(
         "--output_run_name",
         type=str,
-        default="finetuned_h36m_regressflow_pred_3joints",
+        default="jax_resnet18_regressflow_3joints",
         help="Output run name for reduced model",
     )
     parser.add_argument(

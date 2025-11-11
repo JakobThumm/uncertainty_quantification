@@ -389,6 +389,7 @@ def pretrained_model_from_string(
         "activation_fun": args_dict.get("activation_fun", "relu"),
         "mlp_num_layers": args_dict.get("mlp_num_layers", 1),
         "mlp_hidden_dim": args_dict.get("mlp_hidden_dim", 64),
+        "architecture_str": args_dict.get("architecture_str", "resnet50"),
     }
 
     model = model_from_string(args_dict["model"], args_dict["output_dim"], **extra_args)
