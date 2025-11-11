@@ -219,10 +219,7 @@ class ResNet50Backbone(nn.Module):
 
 
 class RegressFlowFlax(nn.Module):
-    preset_cfg: dict
-    # NUM_FC_FILTERS: int
-    # num_joints: int
-    # image_size: Tuple[int, int]             # (H, W), not used directly here
+    num_joints: int
     fc_filters: Sequence[int]  # e.g., [-1] (identity)
     architecture_str: str = "resnet50"
     accept_nchw: bool = True  # keep your PyTorch input layout
@@ -260,23 +257,23 @@ class RegressFlowFlax(nn.Module):
         out_ch = h.shape[-1]
 
         # --- coordinate head (identical semantics) ---
-        coord = LinearNorm(out_ch, self.preset_cfg["NUM_JOINTS"] * 2, use_bias=True, divide_by_input_norm=True)(h)
-        coord = coord.reshape((coord.shape[0], self.preset_cfg["NUM_JOINTS"], 2))
+        coord = LinearNorm(out_ch, self.num_joints * 2, use_bias=True, divide_by_input_norm=True)(h)
+        coord = coord.reshape((coord.shape[0], self.num_joints, 2))
 
         #
         # --- log-variance head (Torch-compatible) ---
         # Torch: fc_sigma outputs log-variance directly
-        log_variance = LinearNorm(out_ch, self.preset_cfg["NUM_JOINTS"] * 2, use_bias=True, divide_by_input_norm=False)(
+        log_variance = LinearNorm(out_ch, self.num_joints * 2, use_bias=True, divide_by_input_norm=False)(
             h
         )
-        log_variance = log_variance.reshape((log_variance.shape[0], self.preset_cfg["NUM_JOINTS"], 2))
+        log_variance = log_variance.reshape((log_variance.shape[0], self.num_joints, 2))
         var_x = jnp.exp(log_variance[:, :, 0])
         var_y = jnp.exp(log_variance[:, :, 1])
         sigma = jnp.exp(0.5 * log_variance)  # (B,K,2)
 
         # --- raw covariance head (Torch-compatible) ---
         # Torch: fc_sigma2 outputs raw_cov_xy, then cov_xy = tanh(raw) * sqrt(var_x * var_y)
-        raw_cov = LinearNorm(out_ch, self.preset_cfg["NUM_JOINTS"], use_bias=True, divide_by_input_norm=False)(
+        raw_cov = LinearNorm(out_ch, self.num_joints, use_bias=True, divide_by_input_norm=False)(
             h
         )  # (B,K)
         cov_xy = jnp.tanh(raw_cov) * jnp.sqrt(var_x * var_y)
