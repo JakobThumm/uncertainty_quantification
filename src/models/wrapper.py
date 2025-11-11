@@ -173,6 +173,7 @@ def model_from_string(
     activation_fun: str = "relu",
     mlp_num_layers: int = 1,
     mlp_hidden_dim: int = 20,
+    architecture_str: str = "resnet50"
 ):
     act_fn = getattr(flax.linen, activation_fun)
 
@@ -245,7 +246,10 @@ def model_from_string(
         # Calculate number of joints from output_dim (output_dim = num_joints * 2)
         num_joints = output_dim // 2
         model = RegressFlowFlaxWithAleatoric(
-            num_joints=num_joints, fc_filters=[-1], accept_nchw=True
+            num_joints=num_joints,
+            fc_filters=[-1],
+            architecture_str=architecture_str,
+            accept_nchw=True
         )
         wrapped_model = wrap_model_with_batchstats(model)
     elif model_name == "DCTPoseTransformer":

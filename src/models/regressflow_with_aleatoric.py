@@ -108,15 +108,20 @@ class Bottleneck(nn.Module):
         residual = x
 
         # Conv 1
-        y = nn.Conv(self.planes, (1, 1), use_bias=False, kernel_init=he_init)(x)
+        y = nn.Conv(
+            features=self.planes,
+            kernel_size=(1, 1),
+            use_bias=False,
+            kernel_init=he_init
+        )(x)
         # Batch Norm 1
         y = nn.BatchNorm(momentum=self.bn_momentum, epsilon=self.bn_epsilon)(y, use_running_average=not train)
         # ReLu
         y = nn.relu(y)
         # Conv 2
         y = nn.Conv(
-            self.planes,
-            (3, 3),
+            features=self.planes,
+            kernel_size=(3, 3),
             strides=(self.stride, self.stride),
             padding=((1, 1), (1, 1)),
             use_bias=False,
@@ -147,7 +152,7 @@ class Bottleneck(nn.Module):
 
 
 # Corresponds to make_layer call in Marian's PyTorch ResNet implementation
-class ResNetStage(nn.Module):
+class BottleneckStage(nn.Module):
     blockClass: Union[Type[BasicBlock], Type[Bottleneck]]
     planes: int
     blocks: int
@@ -179,15 +184,15 @@ class ResNetStage(nn.Module):
 
 class ResNet50Backbone(nn.Module):
     blockClass: Union[Type[BasicBlock], Type[Bottleneck]] = Bottleneck
-    architecture: List[Tuple[int, int, int]] = RESNET_ARCHITECTURES["resnet50"]
-    bn_momentum: float = 0.1
+    architecture_str: str = "resnet50"
+    bn_momentum: float = 0.9  # 1-torch
     bn_epsilon: float = 1e-5
 
     @nn.compact
     def __call__(self, x, train: bool = True):
         # Conv 1
         x = nn.Conv(
-            features=64, 
+            features=64,
             kernel_size=(7, 7),
             strides=(2, 2),
             padding=((3, 3), (3, 3)),
@@ -206,8 +211,8 @@ class ResNet50Backbone(nn.Module):
             padding=((1, 1), (1, 1))
         )
 
-        for planes, blocks, stride in self.architecture:
-            x = ResNetStage(
+        for planes, blocks, stride in RESNET_ARCHITECTURES[self.architecture_str]:
+            x = BottleneckStage(
                 blockClass=self.blockClass,
                 planes=planes,
                 blocks=blocks,
@@ -240,7 +245,7 @@ class RegressFlowFlax(nn.Module):
 
         feat = ResNet50Backbone(
             blockClass=RESNET_BLOCKS[self.architecture_str],
-            architecture=RESNET_ARCHITECTURES[self.architecture_str]
+            architecture_str=self.architecture_str
         )(x, train=train)  # [B, H/32, W/32, 2048]
         feat = global_avg_pool_2d(feat).reshape((feat.shape[0], -1))  # [B, 2048]
 
