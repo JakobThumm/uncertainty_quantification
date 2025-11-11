@@ -6,6 +6,7 @@ import jax
 import flax
 from src.models import (
     RegressFlowFlax,
+    RegressFlowFlaxWithAleatoric,
     MLP,
     LeNet,
     LeNet_h,
@@ -17,7 +18,6 @@ from src.models import (
     VAN,
     SwinTransformer,
 )
-from src.models.regressflow_with_aleatoric import RegressFlowFlax as RegressFlowFlaxWithAleatoric
 from src.models.dct_pose_transformer import DCTPoseTransformer
 from src.models import ViT
 from human_pose_pipeline.motion_prediction.h36m_settings import (
