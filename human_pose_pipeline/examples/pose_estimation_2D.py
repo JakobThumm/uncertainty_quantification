@@ -114,7 +114,9 @@ def main():
 
     # Initialize JAX pose estimation model with uncertainty estimation
     models_dir = os.path.join(root_dir, "human_pose_pipeline/models/pose_estimation", "H36M", "RegressFlow", "seed_420")
-    checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
+    checkpoint_path_jax = os.path.join(models_dir, "jax_resnet18_regressflow")
+    # checkpoint_path_jax = os.path.join(models_dir, "jax_resnet50_regressflow")
+    # checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
     pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
     print("Using RegressFlowWithAleatoric model for uncertainty estimation")
 

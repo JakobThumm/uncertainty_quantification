@@ -293,7 +293,8 @@ def main():
     print("="*70)
     import os
     # Configuration
-    pytorch_model_path = os.path.join(root_dir, "marian_code/Experiment4/model_checkpoint_prediction_transformer.pth")
+    # pytorch_model_path = os.path.join(root_dir, "marian_code/Experiment4/model_checkpoint_prediction_transformer.pth")
+    pytorch_model_path = os.path.join(root_dir, "jax_hmp_files/transformer_model.pth")
     output_path = os.path.join(root_dir, "human_pose_pipeline/models/motion_prediction/dct_pose_transformer.pickle")
 
     # Model parameters
