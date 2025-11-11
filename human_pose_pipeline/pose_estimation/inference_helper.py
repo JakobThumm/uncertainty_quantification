@@ -486,7 +486,8 @@ def initialize_jax_models(checkpoint_path_jax):
     # Create JAX model instance
     model = model_from_string(
         model_name=args_dict["model"],
-        output_dim=args_dict["output_dim"]
+        output_dim=args_dict["output_dim"],
+        architecture_str=args_dict.get("architecture_str", "resnet50")
     )
 
     # Extract parameters and batch statistics
