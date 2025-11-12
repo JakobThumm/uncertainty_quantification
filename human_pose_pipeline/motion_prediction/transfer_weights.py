@@ -135,23 +135,38 @@ def transfer_uncertainty_embedding(flax_params, torch_state_dict):
     """Transfer UncertaintyEmbedding module weights (Experiment3 simple architecture)."""
     print("\n  Transferring UncertaintyEmbedding...")
 
-    # Simple architecture: Linear -> LayerNorm -> GELU
-    # uncertainty_embed.0: Linear(78, 128)
+    # Covariance encoder layers
     transfer_linear(
         flax_params,
-        ["uncertainty_embedding", "uncertainty_embed_0"],
-        torch_state_dict["uncertainty_embedding.uncertainty_embed.0.weight"],
-        torch_state_dict["uncertainty_embedding.uncertainty_embed.0.bias"],
-        "uncertainty_embedding.uncertainty_embed.0",
+        ["uncertainty_embedding", "cov_encoder_0"],
+        torch_state_dict["uncertainty_embedding.cov_encoder.0.weight"],
+        torch_state_dict["uncertainty_embedding.cov_encoder.0.bias"],
+        "uncertainty_embedding.cov_encoder.0",
     )
 
-    # uncertainty_embed.1: LayerNorm(128)
+    transfer_linear(
+        flax_params,
+        ["uncertainty_embedding", "cov_encoder_1"],
+        torch_state_dict["uncertainty_embedding.cov_encoder.2.weight"],
+        torch_state_dict["uncertainty_embedding.cov_encoder.2.bias"],
+        "uncertainty_embedding.cov_encoder.2",
+    )
+
+    # joint_encoder layers
+    transfer_linear(
+        flax_params,
+        ["uncertainty_embedding", "joint_encoder_0"],
+        torch_state_dict["uncertainty_embedding.joint_encoder.0.weight"],
+        torch_state_dict["uncertainty_embedding.joint_encoder.0.bias"],
+        "uncertainty_embedding.joint_encoder.0",
+    )
+
     transfer_layernorm(
         flax_params,
-        ["uncertainty_embedding", "uncertainty_embed_1"],
-        torch_state_dict["uncertainty_embedding.uncertainty_embed.1.weight"],
-        torch_state_dict["uncertainty_embedding.uncertainty_embed.1.bias"],
-        "uncertainty_embedding.uncertainty_embed.1",
+        ["uncertainty_embedding", "joint_encoder_norm"],
+        torch_state_dict["uncertainty_embedding.joint_encoder.1.weight"],
+        torch_state_dict["uncertainty_embedding.joint_encoder.1.bias"],
+        "uncertainty_embedding.joint_encoder.1",
     )
 
     # uncertainty_scale parameter
@@ -334,8 +349,8 @@ def main():
     import os
 
     # Configuration
-    # pytorch_model_path = os.path.join(root_dir, "marian_code/Experiment4/model_checkpoint_prediction_transformer.pth")
-    pytorch_model_path = os.path.join(root_dir, "jax_hmp_files/transformer_model.pth")
+    pytorch_model_path = os.path.join(root_dir, "marian_code/Experiment4/model_checkpoint_prediction_transformer_end_to_end.pth")
+    # pytorch_model_path = os.path.join(root_dir, "jax_hmp_files/transformer_model.pth")
     output_path = os.path.join(root_dir, "human_pose_pipeline/models/motion_prediction/dct_pose_transformer.pickle")
 
     # Model parameters
