@@ -64,18 +64,14 @@ def transfer_linear(flax_params, path, torch_weight, torch_bias, desc):
     and ensure optimal XLA compilation performance.
     """
     # PyTorch: (out, in), Flax: (in, out)
-    _assign(flax_params, path + ['kernel'],
-            _to_jax(torch_weight.t()), f"{desc}.weight")
-    _assign(flax_params, path + ['bias'],
-            _to_jax(torch_bias), f"{desc}.bias")
+    _assign(flax_params, path + ["kernel"], _to_jax(torch_weight.t()), f"{desc}.weight")
+    _assign(flax_params, path + ["bias"], _to_jax(torch_bias), f"{desc}.bias")
 
 
 def transfer_layernorm(flax_params, path, torch_weight, torch_bias, desc):
     """Transfer PyTorch LayerNorm to Flax LayerNorm."""
-    _assign(flax_params, path + ['scale'],
-            _to_jax(torch_weight), f"{desc}.weight")
-    _assign(flax_params, path + ['bias'],
-            _to_jax(torch_bias), f"{desc}.bias")
+    _assign(flax_params, path + ["scale"], _to_jax(torch_weight), f"{desc}.weight")
+    _assign(flax_params, path + ["bias"], _to_jax(torch_bias), f"{desc}.bias")
 
 
 def transfer_multihead_attention(flax_params, path, torch_mha_state_dict, desc, num_heads):
@@ -87,8 +83,8 @@ def transfer_multihead_attention(flax_params, path, torch_mha_state_dict, desc, 
     """
     # PyTorch in_proj combines Q, K, V projections
     # Shape: (3 * embed_dim, embed_dim)
-    in_proj_weight = torch_mha_state_dict['in_proj_weight']
-    in_proj_bias = torch_mha_state_dict['in_proj_bias']
+    in_proj_weight = torch_mha_state_dict["in_proj_weight"]
+    in_proj_bias = torch_mha_state_dict["in_proj_bias"]
 
     embed_dim = in_proj_weight.shape[1]
     head_dim = embed_dim // num_heads
@@ -114,25 +110,25 @@ def transfer_multihead_attention(flax_params, path, torch_mha_state_dict, desc, 
     v_bias_jax = jnp.array(_to_cpu_np(v_bias).reshape(num_heads, head_dim))
 
     # Transfer Q, K, V
-    _assign(flax_params, path + ['query', 'kernel'], q_weight_jax, f"{desc}.query")
-    _assign(flax_params, path + ['query', 'bias'], q_bias_jax, f"{desc}.query.bias")
+    _assign(flax_params, path + ["query", "kernel"], q_weight_jax, f"{desc}.query")
+    _assign(flax_params, path + ["query", "bias"], q_bias_jax, f"{desc}.query.bias")
 
-    _assign(flax_params, path + ['key', 'kernel'], k_weight_jax, f"{desc}.key")
-    _assign(flax_params, path + ['key', 'bias'], k_bias_jax, f"{desc}.key.bias")
+    _assign(flax_params, path + ["key", "kernel"], k_weight_jax, f"{desc}.key")
+    _assign(flax_params, path + ["key", "bias"], k_bias_jax, f"{desc}.key.bias")
 
-    _assign(flax_params, path + ['value', 'kernel'], v_weight_jax, f"{desc}.value")
-    _assign(flax_params, path + ['value', 'bias'], v_bias_jax, f"{desc}.value.bias")
+    _assign(flax_params, path + ["value", "kernel"], v_weight_jax, f"{desc}.value")
+    _assign(flax_params, path + ["value", "bias"], v_bias_jax, f"{desc}.value.bias")
 
     # Transfer output projection
     # PyTorch: (embed_dim, embed_dim) -> Flax: (num_heads, head_dim, embed_dim)
-    out_proj_weight = torch_mha_state_dict['out_proj.weight']
-    out_proj_bias = torch_mha_state_dict['out_proj.bias']
+    out_proj_weight = torch_mha_state_dict["out_proj.weight"]
+    out_proj_bias = torch_mha_state_dict["out_proj.bias"]
 
     out_weight_np = _to_cpu_np(out_proj_weight.t())  # (embed_dim, embed_dim)
     out_weight_jax = jnp.array(out_weight_np.reshape(num_heads, head_dim, embed_dim))
 
-    _assign(flax_params, path + ['out', 'kernel'], out_weight_jax, f"{desc}.out")
-    _assign(flax_params, path + ['out', 'bias'], _to_jax(out_proj_bias), f"{desc}.out.bias")
+    _assign(flax_params, path + ["out", "kernel"], out_weight_jax, f"{desc}.out")
+    _assign(flax_params, path + ["out", "bias"], _to_jax(out_proj_bias), f"{desc}.out.bias")
 
 
 def transfer_uncertainty_embedding(flax_params, torch_state_dict):
@@ -141,21 +137,30 @@ def transfer_uncertainty_embedding(flax_params, torch_state_dict):
 
     # Simple architecture: Linear -> LayerNorm -> GELU
     # uncertainty_embed.0: Linear(78, 128)
-    transfer_linear(flax_params, ['uncertainty_embedding', 'uncertainty_embed_0'],
-                    torch_state_dict['uncertainty_embedding.uncertainty_embed.0.weight'],
-                    torch_state_dict['uncertainty_embedding.uncertainty_embed.0.bias'],
-                    'uncertainty_embedding.uncertainty_embed.0')
+    transfer_linear(
+        flax_params,
+        ["uncertainty_embedding", "uncertainty_embed_0"],
+        torch_state_dict["uncertainty_embedding.uncertainty_embed.0.weight"],
+        torch_state_dict["uncertainty_embedding.uncertainty_embed.0.bias"],
+        "uncertainty_embedding.uncertainty_embed.0",
+    )
 
     # uncertainty_embed.1: LayerNorm(128)
-    transfer_layernorm(flax_params, ['uncertainty_embedding', 'uncertainty_embed_1'],
-                      torch_state_dict['uncertainty_embedding.uncertainty_embed.1.weight'],
-                      torch_state_dict['uncertainty_embedding.uncertainty_embed.1.bias'],
-                      'uncertainty_embedding.uncertainty_embed.1')
+    transfer_layernorm(
+        flax_params,
+        ["uncertainty_embedding", "uncertainty_embed_1"],
+        torch_state_dict["uncertainty_embedding.uncertainty_embed.1.weight"],
+        torch_state_dict["uncertainty_embedding.uncertainty_embed.1.bias"],
+        "uncertainty_embedding.uncertainty_embed.1",
+    )
 
     # uncertainty_scale parameter
-    _assign(flax_params, ['uncertainty_embedding', 'uncertainty_scale'],
-            _to_jax(torch_state_dict['uncertainty_embedding.uncertainty_scale']),
-            'uncertainty_embedding.uncertainty_scale')
+    _assign(
+        flax_params,
+        ["uncertainty_embedding", "uncertainty_scale"],
+        _to_jax(torch_state_dict["uncertainty_embedding.uncertainty_scale"]),
+        "uncertainty_embedding.uncertainty_scale",
+    )
 
     print("    ✓ UncertaintyEmbedding transferred")
 
@@ -165,33 +170,51 @@ def transfer_uncertainty_head(flax_params, torch_state_dict):
     print("\n  Transferring UncertaintyHead...")
 
     # Main MLP path
-    transfer_linear(flax_params, ['uncertainty_head', 'mlp_0'],
-                   torch_state_dict['uncertainty_head.mlp.0.weight'],
-                   torch_state_dict['uncertainty_head.mlp.0.bias'],
-                   'uncertainty_head.mlp.0')
-    transfer_linear(flax_params, ['uncertainty_head', 'mlp_1'],
-                   torch_state_dict['uncertainty_head.mlp.2.weight'],
-                   torch_state_dict['uncertainty_head.mlp.2.bias'],
-                   'uncertainty_head.mlp.2')
-    transfer_linear(flax_params, ['uncertainty_head', 'mlp_2'],
-                   torch_state_dict['uncertainty_head.mlp.4.weight'],
-                   torch_state_dict['uncertainty_head.mlp.4.bias'],
-                   'uncertainty_head.mlp.4')
+    transfer_linear(
+        flax_params,
+        ["uncertainty_head", "mlp_0"],
+        torch_state_dict["uncertainty_head.mlp.0.weight"],
+        torch_state_dict["uncertainty_head.mlp.0.bias"],
+        "uncertainty_head.mlp.0",
+    )
+    transfer_linear(
+        flax_params,
+        ["uncertainty_head", "mlp_1"],
+        torch_state_dict["uncertainty_head.mlp.2.weight"],
+        torch_state_dict["uncertainty_head.mlp.2.bias"],
+        "uncertainty_head.mlp.2",
+    )
+    transfer_linear(
+        flax_params,
+        ["uncertainty_head", "mlp_2"],
+        torch_state_dict["uncertainty_head.mlp.4.weight"],
+        torch_state_dict["uncertainty_head.mlp.4.bias"],
+        "uncertainty_head.mlp.4",
+    )
 
     # Uncertainty processor path
-    transfer_linear(flax_params, ['uncertainty_head', 'unc_proc_0'],
-                   torch_state_dict['uncertainty_head.uncertainty_processor.0.weight'],
-                   torch_state_dict['uncertainty_head.uncertainty_processor.0.bias'],
-                   'uncertainty_head.uncertainty_processor.0')
-    transfer_linear(flax_params, ['uncertainty_head', 'unc_proc_1'],
-                   torch_state_dict['uncertainty_head.uncertainty_processor.2.weight'],
-                   torch_state_dict['uncertainty_head.uncertainty_processor.2.bias'],
-                   'uncertainty_head.uncertainty_processor.2')
+    transfer_linear(
+        flax_params,
+        ["uncertainty_head", "unc_proc_0"],
+        torch_state_dict["uncertainty_head.uncertainty_processor.0.weight"],
+        torch_state_dict["uncertainty_head.uncertainty_processor.0.bias"],
+        "uncertainty_head.uncertainty_processor.0",
+    )
+    transfer_linear(
+        flax_params,
+        ["uncertainty_head", "unc_proc_1"],
+        torch_state_dict["uncertainty_head.uncertainty_processor.2.weight"],
+        torch_state_dict["uncertainty_head.uncertainty_processor.2.bias"],
+        "uncertainty_head.uncertainty_processor.2",
+    )
 
     # Uncertainty weight parameter
-    _assign(flax_params, ['uncertainty_head', 'uncertainty_weight'],
-            _to_jax(torch_state_dict['uncertainty_head.uncertainty_weight']),
-            'uncertainty_head.uncertainty_weight')
+    _assign(
+        flax_params,
+        ["uncertainty_head", "uncertainty_weight"],
+        _to_jax(torch_state_dict["uncertainty_head.uncertainty_weight"]),
+        "uncertainty_head.uncertainty_weight",
+    )
 
     print("    ✓ UncertaintyHead transferred")
 
@@ -200,85 +223,102 @@ def transfer_dct_pose_transformer(torch_state_dict, flax_variables, nhead=4, num
     """
     Transfer all weights from PyTorch DCTPoseTransformer to Flax version.
     """
-    params = unfreeze(flax_variables['params'])
+    params = unfreeze(flax_variables["params"])
 
     sd = torch_state_dict
 
     print("\n  Transferring main model components...")
 
     # Input embedding (Sequential: Linear, LayerNorm, GELU)
-    transfer_linear(params, ['input_embed_0'],
-                   sd['input_embed.0.weight'], sd['input_embed.0.bias'],
-                   'input_embed.0')
-    transfer_layernorm(params, ['input_embed_norm'],
-                      sd['input_embed.1.weight'], sd['input_embed.1.bias'],
-                      'input_embed.1')
+    transfer_linear(params, ["input_embed_0"], sd["input_embed.0.weight"], sd["input_embed.0.bias"], "input_embed.0")
+    transfer_layernorm(
+        params, ["input_embed_norm"], sd["input_embed.1.weight"], sd["input_embed.1.bias"], "input_embed.1"
+    )
 
     # Frequency positional embedding
-    _assign(params, ['freq_pos_embed'],
-            _to_jax(sd['freq_pos_embed']), 'freq_pos_embed')
+    _assign(params, ["freq_pos_embed"], _to_jax(sd["freq_pos_embed"]), "freq_pos_embed")
 
     # Transformer blocks
     for i in range(num_layers):
-        block_prefix = f'transformer_blocks.{i}'
-        flax_block_prefix = f'transformer_block_{i}'
+        block_prefix = f"transformer_blocks.{i}"
+        flax_block_prefix = f"transformer_block_{i}"
 
         print(f"    Transferring transformer block {i}...")
 
         # Frequency attention - freq_weights
-        _assign(params, [flax_block_prefix, 'freq_attn', 'freq_weights'],
-                _to_jax(sd[f'{block_prefix}.freq_attn.freq_weights']),
-                f'{block_prefix}.freq_attn.freq_weights')
+        _assign(
+            params,
+            [flax_block_prefix, "freq_attn", "freq_weights"],
+            _to_jax(sd[f"{block_prefix}.freq_attn.freq_weights"]),
+            f"{block_prefix}.freq_attn.freq_weights",
+        )
 
         # Multi-head attention
         mha_state = {
-            'in_proj_weight': sd[f'{block_prefix}.freq_attn.mha.in_proj_weight'],
-            'in_proj_bias': sd[f'{block_prefix}.freq_attn.mha.in_proj_bias'],
-            'out_proj.weight': sd[f'{block_prefix}.freq_attn.mha.out_proj.weight'],
-            'out_proj.bias': sd[f'{block_prefix}.freq_attn.mha.out_proj.bias'],
+            "in_proj_weight": sd[f"{block_prefix}.freq_attn.mha.in_proj_weight"],
+            "in_proj_bias": sd[f"{block_prefix}.freq_attn.mha.in_proj_bias"],
+            "out_proj.weight": sd[f"{block_prefix}.freq_attn.mha.out_proj.weight"],
+            "out_proj.bias": sd[f"{block_prefix}.freq_attn.mha.out_proj.bias"],
         }
-        transfer_multihead_attention(params, [flax_block_prefix, 'freq_attn', 'mha'],
-                                     mha_state, f'{block_prefix}.freq_attn.mha', nhead)
+        transfer_multihead_attention(
+            params, [flax_block_prefix, "freq_attn", "mha"], mha_state, f"{block_prefix}.freq_attn.mha", nhead
+        )
 
         # Layer norms
-        transfer_layernorm(params, [flax_block_prefix, 'norm1'],
-                          sd[f'{block_prefix}.norm1.weight'],
-                          sd[f'{block_prefix}.norm1.bias'],
-                          f'{block_prefix}.norm1')
-        transfer_layernorm(params, [flax_block_prefix, 'norm2'],
-                          sd[f'{block_prefix}.norm2.weight'],
-                          sd[f'{block_prefix}.norm2.bias'],
-                          f'{block_prefix}.norm2')
+        transfer_layernorm(
+            params,
+            [flax_block_prefix, "norm1"],
+            sd[f"{block_prefix}.norm1.weight"],
+            sd[f"{block_prefix}.norm1.bias"],
+            f"{block_prefix}.norm1",
+        )
+        transfer_layernorm(
+            params,
+            [flax_block_prefix, "norm2"],
+            sd[f"{block_prefix}.norm2.weight"],
+            sd[f"{block_prefix}.norm2.bias"],
+            f"{block_prefix}.norm2",
+        )
 
         # Low freq network
-        transfer_linear(params, [flax_block_prefix, 'low_freq_0'],
-                       sd[f'{block_prefix}.low_freq_net.0.weight'],
-                       sd[f'{block_prefix}.low_freq_net.0.bias'],
-                       f'{block_prefix}.low_freq_net.0')
-        transfer_linear(params, [flax_block_prefix, 'low_freq_1'],
-                       sd[f'{block_prefix}.low_freq_net.2.weight'],
-                       sd[f'{block_prefix}.low_freq_net.2.bias'],
-                       f'{block_prefix}.low_freq_net.2')
+        transfer_linear(
+            params,
+            [flax_block_prefix, "low_freq_0"],
+            sd[f"{block_prefix}.low_freq_net.0.weight"],
+            sd[f"{block_prefix}.low_freq_net.0.bias"],
+            f"{block_prefix}.low_freq_net.0",
+        )
+        transfer_linear(
+            params,
+            [flax_block_prefix, "low_freq_1"],
+            sd[f"{block_prefix}.low_freq_net.2.weight"],
+            sd[f"{block_prefix}.low_freq_net.2.bias"],
+            f"{block_prefix}.low_freq_net.2",
+        )
 
         # High freq network
-        transfer_linear(params, [flax_block_prefix, 'high_freq_0'],
-                       sd[f'{block_prefix}.high_freq_net.0.weight'],
-                       sd[f'{block_prefix}.high_freq_net.0.bias'],
-                       f'{block_prefix}.high_freq_net.0')
-        transfer_linear(params, [flax_block_prefix, 'high_freq_1'],
-                       sd[f'{block_prefix}.high_freq_net.2.weight'],
-                       sd[f'{block_prefix}.high_freq_net.2.bias'],
-                       f'{block_prefix}.high_freq_net.2')
+        transfer_linear(
+            params,
+            [flax_block_prefix, "high_freq_0"],
+            sd[f"{block_prefix}.high_freq_net.0.weight"],
+            sd[f"{block_prefix}.high_freq_net.0.bias"],
+            f"{block_prefix}.high_freq_net.0",
+        )
+        transfer_linear(
+            params,
+            [flax_block_prefix, "high_freq_1"],
+            sd[f"{block_prefix}.high_freq_net.2.weight"],
+            sd[f"{block_prefix}.high_freq_net.2.bias"],
+            f"{block_prefix}.high_freq_net.2",
+        )
 
     # Frequency decoders
-    transfer_linear(params, ['low_freq_decoder'],
-                   sd['low_freq_decoder.weight'],
-                   sd['low_freq_decoder.bias'],
-                   'low_freq_decoder')
-    transfer_linear(params, ['high_freq_decoder'],
-                   sd['high_freq_decoder.weight'],
-                   sd['high_freq_decoder.bias'],
-                   'high_freq_decoder')
+    transfer_linear(
+        params, ["low_freq_decoder"], sd["low_freq_decoder.weight"], sd["low_freq_decoder.bias"], "low_freq_decoder"
+    )
+    transfer_linear(
+        params, ["high_freq_decoder"], sd["high_freq_decoder.weight"], sd["high_freq_decoder.bias"], "high_freq_decoder"
+    )
 
     # Transfer uncertainty components
     transfer_uncertainty_embedding(params, sd)
@@ -288,10 +328,11 @@ def transfer_dct_pose_transformer(torch_state_dict, flax_variables, nhead=4, num
 
 
 def main():
-    print("="*70)
+    print("=" * 70)
     print("DCTPoseTransformer Weight Transfer: PyTorch → JAX/Flax")
-    print("="*70)
+    print("=" * 70)
     import os
+
     # Configuration
     # pytorch_model_path = os.path.join(root_dir, "marian_code/Experiment4/model_checkpoint_prediction_transformer.pth")
     pytorch_model_path = os.path.join(root_dir, "jax_hmp_files/transformer_model.pth")
@@ -307,21 +348,21 @@ def main():
 
     # Load PyTorch checkpoint
     print(f"\n1. Loading PyTorch checkpoint from: {pytorch_model_path}")
-    checkpoint = torch.load(pytorch_model_path, map_location='cpu')
+    checkpoint = torch.load(pytorch_model_path, map_location="cpu")
 
     # Extract state_dict (handle both raw state_dict and checkpoint dict)
-    if 'model_state_dict' in checkpoint:
-        torch_state_dict = checkpoint['model_state_dict']
+    if "model_state_dict" in checkpoint:
+        torch_state_dict = checkpoint["model_state_dict"]
         print(f"   Found checkpoint with epoch {checkpoint.get('epoch', 'unknown')}")
-    elif 'state_dict' in checkpoint:
-        torch_state_dict = checkpoint['state_dict']
+    elif "state_dict" in checkpoint:
+        torch_state_dict = checkpoint["state_dict"]
     else:
         torch_state_dict = checkpoint
 
     print(f"   ✓ Loaded {len(torch_state_dict)} parameter tensors")
 
     # Verify uncertainty_embedding exists
-    unc_emb_keys = [k for k in torch_state_dict.keys() if 'uncertainty_embedding' in k]
+    unc_emb_keys = [k for k in torch_state_dict.keys() if "uncertainty_embedding" in k]
     print(f"   ✓ Found {len(unc_emb_keys)} uncertainty_embedding parameters")
 
     # Initialize Flax model
@@ -333,7 +374,7 @@ def main():
         num_layers=num_layers,
         seq_len=seq_len,
         seq_len_output=seq_len_output,
-        reduced_size=False  # Use full output for weight transfer
+        reduced_size=False,  # Use full output for weight transfer
     )
 
     rng = jax.random.PRNGKey(0)
@@ -353,15 +394,13 @@ def main():
     print(f"\n3. Transferring weights...")
     try:
         flax_params = transfer_dct_pose_transformer(
-            torch_state_dict,
-            flax_variables,
-            nhead=nhead,
-            num_layers=num_layers
+            torch_state_dict, flax_variables, nhead=nhead, num_layers=num_layers
         )
         print("\n   ✓ Weight transfer completed successfully!")
     except Exception as e:
         print(f"\n   ✗ Weight transfer failed: {e}")
         import traceback
+
         traceback.print_exc()
         return
 
@@ -377,21 +416,22 @@ def main():
             "nhead": nhead,
             "num_layers": num_layers,
             "seq_len": seq_len,
-            "seq_len_output": seq_len_output
-        }
+            "seq_len_output": seq_len_output,
+        },
     }
 
     import os
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    with open(output_path, 'wb') as f:
+    with open(output_path, "wb") as f:
         pickle.dump(model_dict, f)
 
     print(f"   ✓ Saved successfully!")
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("Weight transfer completed!")
-    print("="*70)
+    print("=" * 70)
 
 
 if __name__ == "__main__":

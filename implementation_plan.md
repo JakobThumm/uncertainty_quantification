@@ -70,7 +70,7 @@ We have two things:
         - [x] Use ResNet18 model from Marian
           - [x] Transfer weights
           - [x] Compute Lanczos
-          - [x] Test model
+          - [x] Test model -> OOD takes ~12ms. Total frame time with OOD: 25ms, without OOD: 13ms
  4. Test the pre-trained pose prediction models
     - Use the pre-trained models with converted weights into JAX.
     - First, perform pose prediction on a few H3.6M examples.
