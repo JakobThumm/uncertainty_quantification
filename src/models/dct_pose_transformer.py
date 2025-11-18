@@ -39,15 +39,12 @@ class FrequencyAwareAttention(nn.Module):
 
         weighted_x = x * freq_weights
 
-        # MultiheadAttention in Flax
-        # Note: Flax doesn't have direct MultiheadAttention, we need to implement it
-        # using nn.MultiHeadDotProductAttention or implement manually
         mha = nn.MultiHeadDotProductAttention(
             num_heads=self.nhead, qkv_features=self.d_model, out_features=self.d_model, name="mha"
         )
 
         # Self-attention: query = key = value
-        attn_output = mha(weighted_x, weighted_x)  # torch is three inputs, query,key,value, why here 2
+        attn_output = mha(weighted_x, weighted_x, weighted_x, deterministic=True)
 
         return attn_output
 
