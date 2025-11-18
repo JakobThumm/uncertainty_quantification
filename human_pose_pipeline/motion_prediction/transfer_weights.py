@@ -15,6 +15,8 @@ from flax.core import freeze, unfreeze
 from src.models.dct_pose_transformer import DCTPoseTransformer
 
 
+jax.config.update("jax_enable_x64", True)
+
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
 
@@ -399,7 +401,7 @@ def main():
     # - Uncertainty: [batch, seq_len, 117] where 117 = 13 joints * 9 (3x3 covariance)
     # Total input: [batch, seq_len, 156]
     uncertainty_dim = 13 * 3 * 3  # 117
-    dummy_x_with_unc = jnp.zeros((2, seq_len, input_dim + uncertainty_dim), dtype=jnp.float32)
+    dummy_x_with_unc = jnp.zeros((2, seq_len, input_dim + uncertainty_dim), dtype=jnp.float64)
     flax_variables = flax_model.init(rng, dummy_x_with_unc, train=False)
 
     print(f"   ✓ Initialized Flax model")
