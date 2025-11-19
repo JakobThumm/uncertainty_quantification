@@ -312,17 +312,25 @@ def update_optimizer_for_stage(
     return new_state, lr_fn
 
 
-@partial(jax.jit, static_argnames=['use_uncertainty_head', 'lambda_weight'])
+@partial(jax.jit, static_argnames=['use_uncertainty_head', 'lambda_weight', 'freeze_backbone'])
 def train_step(
     state: TrainState,
     batch: Tuple[jnp.ndarray, jnp.ndarray],
     use_uncertainty_head: bool,
     lambda_weight: float,
+    freeze_backbone: bool = False,
 ) -> Tuple[TrainState, Dict[str, float]]:
-    """Training step for Stage 2: Uncertainty head only.
+    """Training step with optional backbone freezing.
 
-    The transformer features are detached (stopped gradient) so only
-    the uncertainty head parameters are updated.
+    Args:
+        state: Training state
+        batch: Input and target batch
+        use_uncertainty_head: Whether to use uncertainty head in loss
+        lambda_weight: Weight for pose loss when using uncertainty head
+        freeze_backbone: If True, only train uncertainty_head parameters (Stage 2)
+
+    Returns:
+        Updated state and metrics
     """
     input_pose, target_pose = batch
 
@@ -351,6 +359,23 @@ def train_step(
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     (loss, metrics), grads = grad_fn(state.params)
+
+    # If freeze_backbone is True, zero out gradients for all parameters except uncertainty_head
+    if freeze_backbone:
+        def freeze_grads(path, grad):
+            # Only allow gradients for uncertainty_head parameters
+            if 'uncertainty_head' in path:
+                return grad
+            else:
+                # Zero out gradients for frozen parameters
+                return jax.tree.map(jnp.zeros_like, grad)
+
+        # Apply the freezing mask to gradients
+        grads = jax.tree_util.tree_map_with_path(
+            lambda path, grad: freeze_grads('/'.join(str(k.key) for k in path), grad),
+            grads
+        )
+
     state = state.apply_gradients(grads=grads)
 
     return state, metrics
@@ -409,27 +434,33 @@ def train_epoch(
 
         # Select training step based on stage
         if stage == 1:
+            # Stage 1: Train only pose prediction (no uncertainty head)
             state, metrics = train_step(
                 state=state,
                 batch=(input_pose, target_pose),
                 use_uncertainty_head=False,
-                lambda_weight=1.0  # Not used here
+                lambda_weight=1.0,  # Not used here
+                freeze_backbone=False
             )
         elif stage == 2:
+            # Stage 2: Train ONLY uncertainty head (freeze backbone)
             # Calculate lambda decay
             lambda_weight = min(1.0, epoch / config.stage2_lambda_decay_epochs)
             state, metrics = train_step(
                 state=state,
                 batch=(input_pose, target_pose),
                 use_uncertainty_head=True,
-                lambda_weight=lambda_weight
+                lambda_weight=lambda_weight,
+                freeze_backbone=True  # FREEZE all params except uncertainty_head
             )
         elif stage == 3:
+            # Stage 3: Train entire model end-to-end
             state, metrics = train_step(
                 state=state,
                 batch=(input_pose, target_pose),
                 use_uncertainty_head=True,
-                lambda_weight=1.0
+                lambda_weight=1.0,
+                freeze_backbone=False
             )
 
         epoch_metrics.append(metrics)
@@ -510,6 +541,36 @@ def load_checkpoint(
     return restored_state
 
 
+def verify_frozen_params(state_before: TrainState, state_after: TrainState, stage: int):
+    """Verify that frozen parameters didn't change during training.
+
+    Args:
+        state_before: Training state before update
+        state_after: Training state after update
+        stage: Current training stage
+    """
+    def check_params(path, before_val, after_val):
+        path_str = '/'.join(str(k.key) for k in path)
+        changed = not jnp.allclose(before_val, after_val, rtol=1e-6)
+
+        if stage == 2:  # Stage 2: only uncertainty_head should change
+            if 'uncertainty_head' in path_str:
+                if not changed:
+                    print(f"  ⚠️  WARNING: {path_str} didn't change (should be trainable)")
+            else:
+                if changed:
+                    print(f"  ❌ ERROR: {path_str} changed (should be frozen!)")
+
+        return changed
+
+    # Compare parameters
+    jax.tree_util.tree_map_with_path(
+        lambda path, before, after: check_params(path, before, after),
+        state_before.params,
+        state_after.params
+    )
+
+
 def train_stage(
     state: TrainState,
     train_loader,
@@ -520,11 +581,23 @@ def train_stage(
     checkpoint_dir: str,
     lr_fn,
     start_epoch: int = 0,
+    verify_freezing: bool = False,
 ) -> TrainState:
-    """Train a single stage."""
-    stage_names = {1: "Pose Only", 2: "Uncertainty Head", 3: "End-to-End"}
+    """Train a single stage.
+
+    Args:
+        verify_freezing: If True, verify parameter freezing after first batch (for debugging)
+    """
+    stage_names = {1: "Pose Only", 2: "Uncertainty Head (Frozen Backbone)", 3: "End-to-End"}
+    freeze_info = {
+        1: "Training: All parameters",
+        2: "Training: ONLY uncertainty_head | Frozen: transformer, decoders, embeddings",
+        3: "Training: All parameters"
+    }
+
     print(f"\n{'=' * 60}")
     print(f"Stage {stage}: {stage_names[stage]}")
+    print(f"{freeze_info[stage]}")
     print(f"{'=' * 60}\n")
 
     for epoch in range(start_epoch, n_epochs):
