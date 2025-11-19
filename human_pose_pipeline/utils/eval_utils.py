@@ -5,26 +5,50 @@ import jax.numpy as jnp
 
 
 def evaluate_pose_prediction_scores_np(predictions, targets):
-    """Evaluate MPJPE scores."""
-    errors = np.linalg.norm(predictions - targets, axis=-1)
-    mpjpe = np.mean(errors)
-    std = np.std(errors)
-    per_time_errors = np.mean(np.mean(errors, axis=-1), axis=0)
-    per_time_std = np.std(np.mean(errors, axis=-1), axis=0)
-    per_joint_errors = np.mean(np.mean(errors, axis=1), axis=0)
-    per_joint_std = np.std(np.mean(errors, axis=1), axis=0)
+    """Evaluate MPJPE scores using numpy.
+
+    Args:
+        predictions: predicted poses, shape = [B, T, J, 3]
+        targets: target poses, shape = [B, T, J, 3]
+    Returns:
+        MPJPE: Mean per joint position error
+        STD of MPJPE: Std per joint position error
+        Per time MPJPE: Mean per joint position error per time step, shape = [T]
+        STD of per time MPJPE, shape = [T]
+        Per joint MPJPE: Mean per joint position error per time step, shape = [J]
+        STD of per joint MPJPE, shape = [J]
+    """
+    errors = np.linalg.norm(predictions - targets, axis=-1)  # Shape = [B, T, J]
+    mpjpe = np.mean(errors)  # Shape = [1]
+    std = np.std(errors)  # Shape = [1]
+    per_time_errors = np.mean(errors, axis=(0, 2))  # Shape = [T]
+    per_time_std = np.std(errors, axis=(0, 2))  # Shape = [T]
+    per_joint_errors = np.mean(errors, axis=(0, 1))  # Shape = [J]
+    per_joint_std = np.std(errors, axis=(0, 1))  # Shape = [J]
     return mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std
 
 
 def evaluate_pose_prediction_scores_jax(predictions, targets):
-    """Evaluate MPJPE scores using JAX."""
-    errors = jnp.linalg.norm(predictions - targets, axis=-1)
-    mpjpe = jnp.mean(errors)
-    std = jnp.std(errors)
-    per_time_errors = jnp.mean(jnp.mean(errors, axis=-1), axis=0)
-    per_time_std = jnp.std(jnp.mean(errors, axis=-1), axis=0)
-    per_joint_errors = jnp.mean(jnp.mean(errors, axis=1), axis=0)
-    per_joint_std = jnp.std(jnp.mean(errors, axis=1), axis=0)
+    """Evaluate MPJPE scores using JAX.
+
+    Args:
+        predictions: predicted poses, shape = [B, T, J, 3]
+        targets: target poses, shape = [B, T, J, 3]
+    Returns:
+        MPJPE: Mean per joint position error
+        STD of MPJPE: Std per joint position error
+        Per time MPJPE: Mean per joint position error per time step, shape = [T]
+        STD of per time MPJPE, shape = [T]
+        Per joint MPJPE: Mean per joint position error per time step, shape = [J]
+        STD of per joint MPJPE, shape = [J]
+    """
+    errors = jnp.linalg.norm(predictions - targets, axis=-1)  # Shape = [B, T, J]
+    mpjpe = jnp.mean(errors)  # Shape = [1]
+    std = jnp.std(errors)  # Shape = [1]
+    per_time_errors = jnp.mean(errors, axis=(0, 2))  # Shape = [T]
+    per_time_std = jnp.std(errors, axis=(0, 2))  # Shape = [T]
+    per_joint_errors = jnp.mean(errors, axis=(0, 1))  # Shape = [J]
+    per_joint_std = jnp.std(errors, axis=(0, 1))  # Shape = [J]
     return mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std
 
 
