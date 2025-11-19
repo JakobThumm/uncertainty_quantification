@@ -20,3 +20,4 @@ filterpy
 Pillow
 spacepy
 ultralytics
+wandb
