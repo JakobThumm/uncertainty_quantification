@@ -46,6 +46,8 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
 )
 from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_jax
 
+# Much slower and does not make a difference (at least for stage 1)
+# jax.config.update("jax_enable_x64", True)
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
@@ -209,7 +211,7 @@ def train_step(
             batch_size = target_pose.shape[0]
             target_reshaped = target_pose.reshape(batch_size, -1, N_JOINTS, 3)
             pred_reshaped = pred_poses.reshape(batch_size, -1, N_JOINTS, 3)
-            nll_loss = gaussian_nll_from_cholesky(target_reshaped, pred_reshaped, L)
+            nll_loss = gaussian_nll_from_cholesky(pred_reshaped, target_reshaped, L)
             total_loss = nll_loss + lambda_weight * pose_loss
         else:
             nll_loss = 0.0
@@ -244,7 +246,7 @@ def eval_step(
     target_reshaped = target_pose.reshape(batch_size, -1, N_JOINTS, 3)
     pred_reshaped = pred_poses.reshape(batch_size, -1, N_JOINTS, 3)
 
-    nll_loss = gaussian_nll_from_cholesky(target_reshaped, pred_reshaped, L)
+    nll_loss = gaussian_nll_from_cholesky(pred_reshaped, target_reshaped, L)
     pose_loss = pose_prediction_loss(pred_poses, target_pose)
 
     # Compute MPJPE

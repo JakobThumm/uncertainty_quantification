@@ -67,9 +67,9 @@ def main():
     # Load dataset
     print("\nLoading H36M dataset...")
     data_path = os.path.join(root_dir, args.data_path)  # , "H36M", "extracted")
-    # dataset_name = "Human36mMotionDataset3D"
-    dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
-    _, _, test_set_loader = dataloader_from_string(
+    # dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
+    dataset_name = "Human36mMotionDataset3D"
+    train_loader, valid_loader, test_loader = dataloader_from_string(
         dataset_name,
         batch_size=BATCH_SIZE,
         shuffle=False,
@@ -84,7 +84,7 @@ def main():
         motion_prediction_jit_fn=motion_prediction_jit_fn,
         params=params,
         batch_stats=batch_stats,
-        dataset_loader=test_set_loader,
+        dataset_loader=test_loader,
         device=device,
     )
 

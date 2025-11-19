@@ -20,32 +20,62 @@ def pose_prediction_loss(pred_poses, target_poses):
     return jnp.mean(jnp.abs(pred_poses - target_poses))
 
 
-def gaussian_nll_from_cholesky(y_true, y_pred, L):
-    """Compute Gaussian Negative Log-Likelihood using Cholesky factor L of covariance.
-      Args:
-          y_true: Ground truth poses [B, T, J, 3]
-          y_pred: Predicted poses [B, T, J, 3]
-          L: Cholesky factors of covariance matrices [B, T, J, 3, 3]
-      Returns:
-          nll: Mean negative log-likelihood over all samples
+def gaussian_nll_from_cholesky(y_pred, y_true, L, include_const=True, lambda_var=0.001, lambda_cov=0.01):
+    """
+    Gaussian NLL using Cholesky factor L such that Sigma = L L^T.
+
+    Args:
+        y_pred: [B, T, J, 3]
+        y_true: [B, T, J, 3]
+        L:      [B, T, J, 3, 3] (lower triangular, positive diag)
+        include_const: whether to include k*log(2*pi)
+
+    Returns:
+        mean NLL (scalar)
     """
     diff = y_true - y_pred
     B, T, J, C = diff.shape
     N = B * T * J
 
-    diff = diff.reshape(N, C)[..., None]  # shape = N, C, 1
-    Lf = L.reshape(N, C, C)  # shape = N, C, C
+    diff = diff.reshape(N, C, 1)
+    Lf = L.reshape(N, C, C)
 
-    # Mahalanobis via triangular solve
-    m = jax.lax.linalg.triangular_solve(Lf, diff, lower=True, left_side=True)
+    # Stability (optional)
+    eps = 1e-6
+    Lf = Lf.at[..., jnp.arange(C), jnp.arange(C)].add(eps)
+
+    # Mahalanobis: solve L m = diff
+    m = jax.lax.linalg.triangular_solve(
+        Lf, diff, lower=True, left_side=True
+    )
     mahal = jnp.sum(m.squeeze(-1)**2, axis=-1)
 
-    # log det = 2 * sum log diag(L)
+    # log det
     diag_L = jnp.diagonal(Lf, axis1=-2, axis2=-1)
     log_det = 2.0 * jnp.sum(jnp.log(diag_L), axis=-1)
 
-    nll = 0.5 * (log_det + mahal)
-    return nll.reshape(B, T, J).mean()
+    if include_const:
+        k_log_2pi = C * jnp.log(2.0 * jnp.pi)
+    else:
+        k_log_2pi = 0.0
+
+    nll = 0.5 * (mahal + log_det + k_log_2pi)
+    nll.reshape(B, T, J).mean()
+
+    # Variances from Cholesky L
+    var_x = L[..., 0, 0]**2
+    var_y = L[..., 1, 0]**2 + L[..., 1, 1]**2
+    var_z = L[..., 2, 0]**2 + L[..., 2, 1]**2 + L[..., 2, 2]**2
+
+    # Variance regularization
+    inv_var = 1.0 / (var_x + var_y + var_z + 1e-6)
+    reg_var = lambda_var * jnp.mean(inv_var)
+
+    cov = L @ jnp.swapaxes(L, -1, -2)
+    off_diag = cov[..., jnp.tril_indices(3, k=-1)]
+    reg_cov = lambda_cov * jnp.mean(jnp.abs(off_diag))
+
+    return nll + reg_var + reg_cov
 
 
 class FrequencyAwareAttention(nn.Module):
@@ -370,12 +400,13 @@ class UncertaintyHeadCov(nn.Module):
         l11_raw, l21, l22_raw, l31, l32, l33_raw = jnp.split(unc_params, 6, axis=-1)
 
         # Ensure positive diagonals using softplus
-        l11 = nn.softplus(l11_raw) + 1e-4
-        l22 = nn.softplus(l22_raw) + 1e-4
-        l33 = nn.softplus(l33_raw) + 1e-4
+        eps = 1e-6
+        l11 = nn.softplus(l11_raw) + eps
+        l22 = nn.softplus(l22_raw) + eps
+        l33 = nn.softplus(l33_raw) + eps
 
         # Build Cholesky matrix L
-        L = jnp.zeros((*l11.shape[:-1], 3, 3))
+        L = jnp.zeros((*l11.shape[:-1], 3, 3), dtype=l11.dtype)
         L = L.at[..., 0, 0].set(l11[..., 0])
         L = L.at[..., 1, 0].set(l21[..., 0])
         L = L.at[..., 1, 1].set(l22[..., 0])
@@ -545,7 +576,8 @@ class DCTPoseTransformer(nn.Module):
         # Convert to mm
         freq_poses = freq_poses * self.unit_conversion
         cov = cov * (self.unit_conversion**2)
-        L = L * self.unit_conversion
+        # Don't use unit conversion for L as the loss is too large.
+        # L = L * self.unit_conversion
 
         # Apply IDCT
         pred_poses = jnp.transpose(
