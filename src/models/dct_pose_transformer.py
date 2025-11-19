@@ -577,7 +577,7 @@ class DCTPoseTransformer(nn.Module):
         freq_poses = freq_poses * self.unit_conversion
         cov = cov * (self.unit_conversion**2)
         # Don't use unit conversion for L as the loss is too large.
-        # L = L * self.unit_conversion
+        L = L * self.unit_conversion
 
         # Apply IDCT
         pred_poses = jnp.transpose(

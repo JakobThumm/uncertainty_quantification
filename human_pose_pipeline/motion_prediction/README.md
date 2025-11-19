@@ -6,9 +6,18 @@ This directory contains the training script for the DCT Pose Transformer model f
 
 The training script (`train_motion_prediction_model.py`) implements a three-stage training process:
 
-1. **Stage 1 (Pose Only)**: Train only the pose prediction transformer without uncertainty estimation
-2. **Stage 2 (Uncertainty Head)**: Train the uncertainty head with frozen transformer weights
+1. **Stage 1 (Pose Only)**: Train the full pose prediction transformer without uncertainty estimation
+   - **Trains**: All parameters (transformer, decoders, embeddings)
+   - **Loss**: `MAE(predicted_poses, target_poses)`
+
+2. **Stage 2 (Uncertainty Head Only)**: Train ONLY the uncertainty head with frozen backbone
+   - **Trains**: `uncertainty_head` parameters ONLY
+   - **Frozen**: Transformer blocks, pose decoders, frequency embeddings
+   - **Loss**: `GaussianNLL + λ * MAE` (λ decays 1→0 over first 5 epochs)
+
 3. **Stage 3 (End-to-End)**: Fine-tune the complete model end-to-end
+   - **Trains**: All parameters
+   - **Loss**: `GaussianNLL + MAE`
 
 ## Features
 
@@ -209,23 +218,88 @@ human_pose_pipeline/models/motion_prediction/<run_id>/
     └── checkpoint_100/               # End of Stage 3
 ```
 
+## Training Strategy & Parameter Freezing
+
+### Why Three Stages?
+
+The three-stage training approach ensures stable convergence:
+
+1. **Stage 1** first learns good pose predictions without worrying about uncertainty
+2. **Stage 2** learns uncertainty estimates based on fixed (frozen) pose features
+3. **Stage 3** fine-tunes everything together for optimal performance
+
+### Parameter Freezing in Stage 2
+
+**Critical:** In Stage 2, ALL parameters except `uncertainty_head` are frozen. This means:
+
+✅ **Trainable in Stage 2:**
+- `uncertainty_head.mlp_0`
+- `uncertainty_head.mlp_1`
+- `uncertainty_head.mlp_2`
+- `uncertainty_head.unc_proc_0`
+- `uncertainty_head.unc_proc_1`
+- `uncertainty_head.uncertainty_weight`
+
+❌ **Frozen in Stage 2:**
+- All transformer blocks (`transformer_block_*`)
+- Frequency decoders (`low_freq_decoder`, `high_freq_decoder`)
+- Input embeddings (`input_embed_*`)
+- Positional embeddings (`freq_pos_embed`)
+- Uncertainty embedding module (if using input uncertainty)
+
+This is implemented by zeroing out gradients for frozen parameters during the backward pass.
+
 ## Loss Functions
 
 ### Stage 1: Pose Only
-```
+```python
 Loss = MAE(predicted_poses, target_poses)
 ```
+**Trainable**: All parameters
 
-### Stage 2: Uncertainty Head
-```
+### Stage 2: Uncertainty Head Only
+```python
 Loss = GaussianNLL(predicted_poses, target_poses, cholesky_L) + λ * MAE(predicted_poses, target_poses)
 ```
-where λ decays from 1 to 0 over the first 5 epochs.
+- λ linearly decays from 1 to 0 over the first 5 epochs
+- **Trainable**: `uncertainty_head` ONLY
+- **Frozen**: Everything else
 
 ### Stage 3: End-to-End
-```
+```python
 Loss = GaussianNLL(predicted_poses, target_poses, cholesky_L) + MAE(predicted_poses, target_poses)
 ```
+**Trainable**: All parameters
+
+## Learning Rate Scheduling
+
+**Important:** Each stage gets its own independent learning rate schedule!
+
+- **Stage 1**: LR schedule over 50 epochs (default)
+- **Stage 2**: New LR schedule over 20 epochs (default)
+- **Stage 3**: New LR schedule over 30 epochs (default)
+
+This means:
+- Each stage starts with a fresh warmup period
+- Each stage decays from the initial LR to the minimum LR
+- The optimizer is recreated between stages with a new schedule
+
+### Default Behavior (Cosine Annealing)
+For each stage with N epochs:
+1. **Warmup (epochs 0-5)**: LR increases from 0 → initial_lr
+2. **Decay (epochs 5-N)**: LR decreases from initial_lr → (initial_lr × 0.01)
+
+### Example
+With `--learning_rate 1e-3`:
+- **Stage 1** (50 epochs):
+  - Epochs 0-5: Warmup 0 → 1e-3
+  - Epochs 5-50: Cosine decay 1e-3 → 1e-5
+- **Stage 2** (20 epochs):
+  - Epochs 0-5: Warmup 0 → 1e-3 (fresh start!)
+  - Epochs 5-20: Cosine decay 1e-3 → 1e-5
+- **Stage 3** (30 epochs):
+  - Epochs 0-5: Warmup 0 → 1e-3 (fresh start!)
+  - Epochs 5-30: Cosine decay 1e-3 → 1e-5
 
 ## Example Workflows
 

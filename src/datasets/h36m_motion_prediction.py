@@ -19,7 +19,7 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
 from src.datasets.utils import get_loader
 
 # Dataset splits matching original H36M
-SPLIT = {"train": ["S1", "S6", "S7", "S8"], "validation": ["S9"], "test": ["S11"]}
+SPLIT = {"train": ["S1", "S6", "S7", "S8", "S9"], "validation": ["S11"], "test": ["S5"]}
 
 
 class Human36mMotionDataset3D(Dataset):

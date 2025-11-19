@@ -44,7 +44,7 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
     INPUT_HORIZON_LENGTH,
     PREDICTION_HORIZON_LENGTH
 )
-from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_jax
+from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_jax, evaluate_uncertainty_coverage_jax
 
 # Much slower and does not make a difference (at least for stage 1)
 # jax.config.update("jax_enable_x64", True)
@@ -84,7 +84,6 @@ class TrainingConfig:
 
         # Stage 2: Uncertainty head training
         stage2_epochs: int = 20,
-        stage2_lambda_decay_epochs: int = 5,
 
         # Stage 3: End-to-end training
         stage3_epochs: int = 30,
@@ -124,7 +123,6 @@ class TrainingConfig:
         # Stage epochs
         self.stage1_epochs = stage1_epochs
         self.stage2_epochs = stage2_epochs
-        self.stage2_lambda_decay_epochs = stage2_lambda_decay_epochs
         self.stage3_epochs = stage3_epochs
 
         # Data settings
@@ -403,6 +401,13 @@ def eval_step(
     mpjpe, std, per_time_errors, _, _, _ = \
         evaluate_pose_prediction_scores_jax(pred_reshaped, target_reshaped)
 
+    uncertainty_coverage = evaluate_uncertainty_coverage_jax(
+        pred_poses=pred_reshaped,
+        true_poses=target_reshaped,
+        L=L,
+        std_multipliers=[1, 2, 3, 4]
+    )
+
     return {
         'nll_loss': nll_loss,
         'pose_loss': pose_loss,
@@ -413,6 +418,10 @@ def eval_step(
         'mpjpe_time_240ms': per_time_errors[5],
         'mpjpe_time_320ms': per_time_errors[7],
         'mpjpe_time_400ms': per_time_errors[9],
+        'uncertainty_coverage std=1': uncertainty_coverage[0],
+        'uncertainty_coverage std=2': uncertainty_coverage[1],
+        'uncertainty_coverage std=3': uncertainty_coverage[2],
+        'uncertainty_coverage std=4': uncertainty_coverage[3]
     }
 
 
@@ -445,7 +454,7 @@ def train_epoch(
         elif stage == 2:
             # Stage 2: Train ONLY uncertainty head (freeze backbone)
             # Calculate lambda decay
-            lambda_weight = min(1.0, epoch / config.stage2_lambda_decay_epochs)
+            lambda_weight = 0.0
             state, metrics = train_step(
                 state=state,
                 batch=(input_pose, target_pose),
@@ -506,13 +515,26 @@ def save_checkpoint(
     state: TrainState,
     checkpoint_dir: str,
     step: int,
+    stage: int,
     keep: int = 3,
 ):
-    """Save checkpoint using Orbax."""
+    """Save checkpoint using Orbax.
+
+    Args:
+        state: Training state to save
+        checkpoint_dir: Base checkpoint directory
+        step: Step number for checkpoint name
+        stage: Training stage (1, 2, or 3)
+        keep: Number of checkpoints to keep (not currently used)
+    """
     checkpointer = orbax.checkpoint.PyTreeCheckpointer()
     save_args = orbax_utils.save_args_from_target(state)
 
-    checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step}")
+    # Create stage-specific subdirectory
+    stage_dir = os.path.join(checkpoint_dir, f"stage_{stage}")
+    os.makedirs(stage_dir, exist_ok=True)
+
+    checkpoint_path = os.path.join(stage_dir, f"checkpoint_{step}")
     checkpointer.save(checkpoint_path, state, save_args=save_args, force=True)
 
     print(f"Saved checkpoint to {checkpoint_path}")
@@ -522,19 +544,60 @@ def load_checkpoint(
     state: TrainState,
     checkpoint_dir: str,
     step: Optional[int] = None,
+    stage: Optional[int] = None,
 ) -> TrainState:
-    """Load checkpoint using Orbax."""
+    """Load checkpoint using Orbax.
+
+    Args:
+        state: Training state template for restoration
+        checkpoint_dir: Base checkpoint directory
+        step: Specific step to load (if None, finds latest)
+        stage: Specific stage to load from (if None, searches all stages for latest)
+
+    Returns:
+        Restored training state
+    """
     checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
-    if step is None:
-        # Find latest checkpoint
-        checkpoints = [d for d in os.listdir(checkpoint_dir) if d.startswith("checkpoint_")]
-        if not checkpoints:
-            raise ValueError(f"No checkpoints found in {checkpoint_dir}")
-        steps = [int(c.split("_")[1]) for c in checkpoints]
-        step = max(steps)
+    if stage is None:
+        # Search all stage directories for the latest checkpoint
+        latest_step = -1
+        latest_stage = None
 
-    checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step}")
+        for s in [1, 2, 3]:
+            stage_dir = os.path.join(checkpoint_dir, f"stage_{s}")
+            if not os.path.exists(stage_dir):
+                continue
+
+            checkpoints = [d for d in os.listdir(stage_dir) if d.startswith("checkpoint_")]
+            if checkpoints:
+                steps = [int(c.split("_")[1]) for c in checkpoints]
+                max_step = max(steps)
+                if max_step > latest_step:
+                    latest_step = max_step
+                    latest_stage = s
+
+        if latest_stage is None:
+            raise ValueError(f"No checkpoints found in any stage subdirectory of {checkpoint_dir}")
+
+        stage = latest_stage
+        step = latest_step
+        print(f"Found latest checkpoint in stage {stage}, step {step}")
+    else:
+        # Load from specific stage
+        stage_dir = os.path.join(checkpoint_dir, f"stage_{stage}")
+        if not os.path.exists(stage_dir):
+            raise ValueError(f"Stage directory {stage_dir} does not exist")
+
+        if step is None:
+            # Find latest checkpoint in this stage
+            checkpoints = [d for d in os.listdir(stage_dir) if d.startswith("checkpoint_")]
+            if not checkpoints:
+                raise ValueError(f"No checkpoints found in {stage_dir}")
+            steps = [int(c.split("_")[1]) for c in checkpoints]
+            step = max(steps)
+
+    checkpoint_path = os.path.join(checkpoint_dir, f"stage_{stage}", f"checkpoint_{step}")
     restored_state = checkpointer.restore(checkpoint_path, item=state)
 
     print(f"Loaded checkpoint from {checkpoint_path}")
@@ -623,10 +686,10 @@ def train_stage(
 
         # Save checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
-            save_checkpoint(state, checkpoint_dir, epoch + 1)
+            save_checkpoint(state, checkpoint_dir, epoch + 1, stage)
 
     # Save final checkpoint for this stage
-    save_checkpoint(state, checkpoint_dir, n_epochs)
+    save_checkpoint(state, checkpoint_dir, n_epochs, stage)
 
     return state
 
@@ -638,15 +701,15 @@ def main(args):
         wandb_run = wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
-            name=args.run_id,  # Will be None if not provided, wandb will generate one
+            id=args.run_id,  # Will be None if not provided, wandb will generate one
             config=vars(args),
             resume="allow" if args.resume else False,
         )
         # Use wandb run id as the run_id
         run_id = wandb_run.id
         # Update the run name to match the id if it wasn't provided
-        if args.run_id is None:
-            wandb_run.name = run_id
+        # if args.run_id is None:
+        #     wandb_run.name = run_id
     else:
         # Generate a run_id if not provided and wandb is disabled
         if args.run_id is None:
@@ -686,7 +749,6 @@ def main(args):
             lr_min_factor=args.lr_min_factor,
             stage1_epochs=args.stage1_epochs,
             stage2_epochs=args.stage2_epochs,
-            stage2_lambda_decay_epochs=args.stage2_lambda_decay_epochs,
             stage3_epochs=args.stage3_epochs,
             data_path=args.data_path,
             seed=args.seed,
@@ -729,7 +791,8 @@ def main(args):
 
     if args.resume:
         try:
-            state = load_checkpoint(state, checkpoint_dir)
+            load_stage = args.stage - 1 if args.stage > 1 else None
+            state = load_checkpoint(state, checkpoint_dir, stage=load_stage)
             print("Resumed from checkpoint")
         except Exception as e:
             print(f"Could not load checkpoint: {e}")
@@ -833,7 +896,6 @@ if __name__ == "__main__":
     # Stage epochs
     parser.add_argument("--stage1_epochs", type=int, default=50)
     parser.add_argument("--stage2_epochs", type=int, default=20)
-    parser.add_argument("--stage2_lambda_decay_epochs", type=int, default=5)
     parser.add_argument("--stage3_epochs", type=int, default=30)
 
     # Data

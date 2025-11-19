@@ -1,7 +1,9 @@
 """Utilities for evaluating uncertainty estimates in human pose predictions."""
 
 import numpy as np
+import jax
 import jax.numpy as jnp
+from jax.scipy.stats import chi2
 
 
 def evaluate_pose_prediction_scores_np(predictions, targets):
@@ -50,6 +52,53 @@ def evaluate_pose_prediction_scores_jax(predictions, targets):
     per_joint_errors = jnp.mean(errors, axis=(0, 1))  # Shape = [J]
     per_joint_std = jnp.std(errors, axis=(0, 1))  # Shape = [J]
     return mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std
+
+
+def evaluate_uncertainty_coverage_jax(pred_poses, true_poses, L, std_multipliers=[1, 2, 3, 4]):
+    """
+    Evaluate how well predicted Gaussian covariances match empirical coverage.
+
+    Args:
+        pred_poses: [B, T, J, 3]
+        true_poses: [B, T, J, 3]
+        L: Cholesky decomposition of covariance, [B, T, J, 3, 3]
+        std_multipliers: list of std multipliers to evaluate
+
+    Returns:
+        List of coverage errors for each multiplier:
+        error = expected_coverage - empirical_coverage
+    """
+    # Diff
+    diff = true_poses - pred_poses             # [B, T, J, 3]
+    B, T, J, C = diff.shape
+    N = B * T * J
+    diff = diff.reshape(N, C, 1)               # [N, 3, 1]
+    L_flat = L.reshape(N, C, C)                # [N, 3, 3]
+
+    # Solve L m = diff  →  m = L^{-1} diff
+    m = jax.lax.linalg.triangular_solve(L_flat, diff, lower=True, left_side=True)
+    m = m[..., 0]                              # [N, 3]
+
+    # Mahalanobis distances: m^T m
+    mahal = jnp.sum(m**2, axis=-1)             # [N]
+
+    # Dimension = 3
+    df = 3
+    results = []
+
+    for k in std_multipliers:
+        # Expected Gaussian coverage for k std in 3D:
+        # Probability that chi-square(df) < k^2
+        expected = chi2.cdf(k * k, df=df)
+
+        # Empirical coverage
+        inside = (mahal < (k * k))               # ellipsoid boundary
+        empirical = inside.mean()
+
+        # Error = expected - empirical
+        results.append(expected - empirical)
+
+    return results
 
 
 def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_matrices, std_multipliers=[1, 2, 3, 4]):
