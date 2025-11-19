@@ -6,12 +6,46 @@ It incorporates frequency-aware attention mechanisms and predicts pose uncertain
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
+from jax import lax
 
 from human_pose_pipeline.motion_prediction.h36m_settings import (
     N_JOINTS,
     REDUCED_TIMESTEP,
     REDUCED_JOINT_INDICES
 )
+
+
+def pose_prediction_loss(pred_poses, target_poses):
+    """Simple MSE loss for pose predictions."""
+    return jnp.mean(jnp.abs(pred_poses - target_poses))
+
+
+def gaussian_nll_from_cholesky(y_true, y_pred, L):
+    """Compute Gaussian Negative Log-Likelihood using Cholesky factor L of covariance.
+      Args:
+          y_true: Ground truth poses [B, T, J, 3]
+          y_pred: Predicted poses [B, T, J, 3]
+          L: Cholesky factors of covariance matrices [B, T, J, 3, 3]
+      Returns:
+          nll: Mean negative log-likelihood over all samples
+    """
+    diff = y_true - y_pred
+    B, T, J, _ = diff.shape
+    C = 3
+
+    diff = diff.reshape(-1, C)
+    Lf = L.reshape(-1, C, C)
+
+    # Mahalanobis via triangular solve
+    m = jax.lax.linalg.triangular_solve(Lf, diff[..., None], lower=True)
+    mahal = jnp.sum(m.squeeze(-1)**2, axis=-1)
+
+    # log det = 2 * sum log diag(L)
+    diag_L = jnp.diagonal(Lf, axis1=-2, axis2=-1)
+    log_det = 2.0 * jnp.sum(jnp.log(diag_L), axis=-1)
+
+    nll = 0.5 * (log_det + mahal)
+    return nll.reshape(B, T, J).mean()
 
 
 class FrequencyAwareAttention(nn.Module):
@@ -170,6 +204,8 @@ class UncertaintyHead(nn.Module):
     """
     Predicts pose uncertainties using both pose features and embedded uncertainties.
     Outputs variance parameters and covariance matrix factors for each joint.
+
+    This was used in Marians experiments. We use the UncertaintyHeadCov in the paper.
     """
 
     d_model: int
@@ -254,6 +290,105 @@ class UncertaintyHead(nn.Module):
         return log_vars, raw_covs
 
 
+class UncertaintyHeadCov(nn.Module):
+    """
+    Predicts 3x3 covariance matrices per joint by outputting
+    a valid Cholesky factor L (lower triangular, positive diag).
+    """
+
+    d_model: int
+    seq_len: int
+    seq_len_output: int
+    num_joints: int = 22
+    coords_per_joint: int = 3
+
+    def setup(self):
+        # Number of parameters needed to define a Cholesky L for 3D:
+        # L = [[l11,   0,   0],
+        #      [l21, l22,   0],
+        #      [l31, l32, l33]]
+        l_params_per_joint = 6  # (l11, l21, l22, l31, l32, l33)
+
+        kernel_init = nn.initializers.normal(stddev=0.01)
+        bias_init = nn.initializers.zeros
+
+        # MLP for pose features
+        self.mlp_0 = nn.Dense(1024, kernel_init=kernel_init, bias_init=bias_init)
+        self.mlp_1 = nn.Dense(512, kernel_init=kernel_init, bias_init=bias_init)
+        self.mlp_2 = nn.Dense(
+            self.seq_len_output * self.num_joints * l_params_per_joint,
+            kernel_init=kernel_init,
+            bias_init=bias_init,
+        )
+
+        # MLP for uncertainty feature fusion
+        self.unc_proc_0 = nn.Dense(512, kernel_init=kernel_init, bias_init=bias_init)
+        self.unc_proc_1 = nn.Dense(
+            self.seq_len_output * self.num_joints * l_params_per_joint,
+            kernel_init=kernel_init,
+            bias_init=bias_init,
+        )
+
+        # Learnable fusion weight
+        self.uncertainty_weight = self.param(
+            "uncertainty_weight",
+            nn.initializers.zeros,
+            (1,),
+        )
+
+    def __call__(self, features, uncertainty_features=None):
+        batch_size = features.shape[1]
+        L_params_per_joint = 6
+
+        # Flatten features: [B, T*D]
+        flat_feat = jnp.transpose(features, (1, 0, 2)).reshape(batch_size, -1)
+
+        # Pose feature branch
+        x = nn.relu(self.mlp_0(flat_feat))
+        x = nn.relu(self.mlp_1(x))
+        unc_from_feat = self.mlp_2(x)
+
+        # Optional explicit uncertainty branch
+        if uncertainty_features is not None:
+            flat_unc = jnp.transpose(uncertainty_features, (1, 0, 2)).reshape(batch_size, -1)
+            u = nn.relu(self.unc_proc_0(flat_unc))
+            unc_proc = self.unc_proc_1(nn.relu(u))
+            w = nn.sigmoid(self.uncertainty_weight)
+            unc_params = (1 - w) * unc_from_feat + w * unc_proc
+        else:
+            unc_params = unc_from_feat
+
+        # Reshape into [B, T, J, 6]
+        unc_params = unc_params.reshape(
+            batch_size,
+            self.seq_len_output,
+            self.num_joints,
+            L_params_per_joint,
+        )
+
+        # Split parameters
+        l11_raw, l21, l22_raw, l31, l32, l33_raw = jnp.split(unc_params, 6, axis=-1)
+
+        # Ensure positive diagonals using softplus
+        l11 = nn.softplus(l11_raw) + 1e-4
+        l22 = nn.softplus(l22_raw) + 1e-4
+        l33 = nn.softplus(l33_raw) + 1e-4
+
+        # Build Cholesky matrix L
+        L = jnp.zeros((*l11.shape[:-1], 3, 3))
+        L = L.at[..., 0, 0].set(l11[..., 0])
+        L = L.at[..., 1, 0].set(l21[..., 0])
+        L = L.at[..., 1, 1].set(l22[..., 0])
+        L = L.at[..., 2, 0].set(l31[..., 0])
+        L = L.at[..., 2, 1].set(l32[..., 0])
+        L = L.at[..., 2, 2].set(l33[..., 0])
+
+        # Covariance = L @ L^T
+        cov = L @ jnp.swapaxes(L, -1, -2)
+
+        return cov, L
+
+
 def get_dct_matrix(N):
     """Compute the Discrete Cosine Transform (DCT) matrix and its inverse.
 
@@ -306,10 +441,11 @@ class DCTPoseTransformer(nn.Module):
 
         Returns:
             If reduced_size=True: predicted poses [batch_size, reduced_output_dim]
-            If reduced_size=False: tuple (predicted poses, (log_vars, raw_covs))
+            If reduced_size=False: tuple (predicted poses, (cov, L))
                 - predicted poses: [batch_size, seq_len_output, input_dim]
-                - log_vars: log variance parameters [batch_size, seq_len_output, num_joints, 3]
-                - raw_covs: raw covariance factors [batch_size, seq_len_output, num_joints, 3]
+                - cov: Covariance matrices of the predictions. Shape: (batch_size, seq_len_output, num_joints, 3, 3)
+                - L: Cholesky factors of the covariance matrices (used in gaussian_nll_from_cholesky loss).
+                     Shape: (batch_size, seq_len_output, num_joints, 3, 3)
         """
         batch_size = x.shape[0]
         input_dim = x.shape[2]
@@ -388,10 +524,10 @@ class DCTPoseTransformer(nn.Module):
 
         # Predict uncertainties (using detached features in training)
         num_joints = self.input_dim // 3
-        uncertainty_head = UncertaintyHead(
-            self.d_model,
-            self.seq_len,
-            self.seq_len_output,
+        uncertainty_head = UncertaintyHeadCov(
+            d_model=self.d_model,
+            seq_len=self.seq_len,
+            seq_len_output=self.seq_len_output,
             num_joints=num_joints,
             coords_per_joint=3,
             name="uncertainty_head",
@@ -404,10 +540,12 @@ class DCTPoseTransformer(nn.Module):
         else:
             uncertainty_features_detached = None
 
-        log_vars, raw_covs = uncertainty_head(features_detached, uncertainty_features_detached)
+        cov, L = uncertainty_head(features_detached, uncertainty_features_detached)
 
         # Convert to mm
         freq_poses = freq_poses * self.unit_conversion
+        cov = cov * (self.unit_conversion**2)
+        L = L * self.unit_conversion
 
         # Apply IDCT
         pred_poses = jnp.transpose(
@@ -432,4 +570,4 @@ class DCTPoseTransformer(nn.Module):
             # The OOD detection only works for a single output tensor
             return pred_poses
         else:
-            return pred_poses, (log_vars, raw_covs)
+            return pred_poses, (cov, L)

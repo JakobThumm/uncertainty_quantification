@@ -122,13 +122,13 @@ def main():
     # Model inference
     t0 = time()
     if batch_stats is not None:
-        pred_poses, (var_params, cov_params) = motion_prediction_jit_fn(params, batch_stats, input_pose)
+        pred_poses, (cov, L) = motion_prediction_jit_fn(params, batch_stats, input_pose)
     else:
-        pred_poses, (var_params, cov_params) = motion_prediction_jit_fn(params, input_pose)
+        pred_poses, (cov, L) = motion_prediction_jit_fn(params, input_pose)
     t1 = time()
     predictions = np.array([pred_poses])
     targets = np.array([target_pose])
-    covariance_matrices = np.array([(compute_covariance_matrices(var_params, cov_params))])
+    covariance_matrices = np.array([(cov)])
 
     print(f"Model prediction: {pred_poses[0, 0, :].reshape(13, 3)}")
     print(f"Marian prediction: {marians_model_prediction[0, 0, :].reshape(13, 3)}")

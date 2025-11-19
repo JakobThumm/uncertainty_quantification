@@ -52,14 +52,14 @@ def predict_poses(
         # Model inference
         t0 = time()
         if batch_stats is not None:
-            pred_poses, (var_params, cov_params) = motion_prediction_jit_fn(params, batch_stats, input_pose)
+            pred_poses, (cov, L) = motion_prediction_jit_fn(params, batch_stats, input_pose)
         else:
-            pred_poses, (var_params, cov_params) = motion_prediction_jit_fn(params, input_pose)
+            pred_poses, (cov, L) = motion_prediction_jit_fn(params, input_pose)
         t1 = time()
         # print(f"  Processed batch {i + 1} in {(t1 - t0) * 1000:.2f} ms")
         predictions.append(pred_poses)
         targets.append(target_pose)
-        covariance_matrices.append(compute_covariance_matrices(var_params, cov_params))
+        covariance_matrices.append(cov)
 
     predictions = jnp.concatenate(predictions, axis=0)
     targets = jnp.concatenate(targets, axis=0)
