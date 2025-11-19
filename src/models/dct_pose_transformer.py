@@ -60,7 +60,7 @@ def gaussian_nll_from_cholesky(y_pred, y_true, L, include_const=True, lambda_var
         k_log_2pi = 0.0
 
     nll = 0.5 * (mahal + log_det + k_log_2pi)
-    nll.reshape(B, T, J).mean()
+    nll = jnp.mean(nll.reshape(B, T, J))
 
     # Variances from Cholesky L
     var_x = L[..., 0, 0]**2

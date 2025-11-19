@@ -69,9 +69,15 @@ class TrainingConfig:
 
         # Training hyperparameters
         batch_size: int = 256,
-        learning_rate: float = 1e-4,
+        learning_rate: float = 1e-3,
         weight_decay: float = 1e-6,
         max_grad_norm: float = 0.01,
+
+        # Learning rate scheduling
+        use_lr_schedule: bool = True,
+        lr_schedule_type: str = "cosine",  # "cosine", "exponential", "constant"
+        lr_warmup_epochs: int = 5,
+        lr_min_factor: float = 0.01,  # Minimum LR as fraction of initial LR
 
         # Stage 1: Pose only training
         stage1_epochs: int = 50,
@@ -108,6 +114,12 @@ class TrainingConfig:
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.max_grad_norm = max_grad_norm
+
+        # Learning rate scheduling
+        self.use_lr_schedule = use_lr_schedule
+        self.lr_schedule_type = lr_schedule_type
+        self.lr_warmup_epochs = lr_warmup_epochs
+        self.lr_min_factor = lr_min_factor
 
         # Stage epochs
         self.stage1_epochs = stage1_epochs
@@ -148,12 +160,78 @@ class TrainingConfig:
         return cls.from_dict(config_dict)
 
 
+def get_lr_schedule_for_stage(
+    config: TrainingConfig,
+    steps_per_epoch: int,
+    stage_epochs: int,
+    learning_rate: float
+):
+    """Create learning rate schedule for a specific stage.
+
+    Args:
+        config: Training configuration
+        steps_per_epoch: Number of training steps per epoch
+        stage_epochs: Number of epochs for this stage
+        learning_rate: Initial learning rate for this stage
+
+    Returns:
+        tuple: (lr_schedule, lr_fn) where lr_schedule is for optax and lr_fn computes current LR
+    """
+    if not config.use_lr_schedule:
+        return learning_rate, lambda step: learning_rate
+
+    assert config.lr_schedule_type == "cosine" or config.lr_schedule_type == "exponential"
+
+    # Total steps for this stage
+    total_steps = stage_epochs * steps_per_epoch
+    warmup_steps = min(config.lr_warmup_epochs * steps_per_epoch, total_steps // 2)  # Cap warmup at half the stage
+
+    warmup_schedule = optax.linear_schedule(
+        init_value=0.0,
+        end_value=learning_rate,
+        transition_steps=warmup_steps
+    )
+    if config.lr_schedule_type == "cosine":
+        lr_schedule = optax.cosine_decay_schedule(
+            init_value=learning_rate,
+            decay_steps=total_steps - warmup_steps,
+            alpha=config.lr_min_factor  # Minimum learning rate as fraction of initial
+        )
+    elif config.lr_schedule_type == "exponential":
+        # Calculate decay rate to reach lr_min_factor at the end
+        decay_rate = (config.lr_min_factor) ** (1.0 / (total_steps - warmup_steps))
+        lr_schedule = optax.exponential_decay(
+            init_value=learning_rate,
+            transition_steps=1,
+            decay_rate=decay_rate
+        )
+    full_schedule = optax.join_schedules(
+        schedules=[warmup_schedule, lr_schedule],
+        boundaries=[warmup_steps]
+    )
+    # Return both the schedule and a function to get the current LR
+    return full_schedule, full_schedule
+
+
 def create_train_state(
     rng: jax.Array,
     config: TrainingConfig,
+    steps_per_epoch: int,
+    stage_epochs: int,
     learning_rate: Optional[float] = None,
-) -> TrainState:
-    """Create initial training state."""
+):
+    """Create initial training state for a stage.
+
+    Args:
+        rng: Random key for initialization
+        config: Training configuration
+        steps_per_epoch: Number of steps per epoch
+        stage_epochs: Number of epochs for the current stage
+        learning_rate: Learning rate (defaults to config.learning_rate)
+
+    Returns:
+        tuple: (state, lr_fn) where state is TrainState and lr_fn computes current LR
+    """
     if learning_rate is None:
         learning_rate = config.learning_rate
 
@@ -174,17 +252,64 @@ def create_train_state(
     variables = model.init(rng, dummy_input, train=True)
     params = variables['params']
 
+    # Create learning rate schedule for this stage
+    lr_schedule, lr_fn = get_lr_schedule_for_stage(config, steps_per_epoch, stage_epochs, learning_rate)
+
     # Create optimizer
     optimizer = optax.chain(
         optax.clip_by_global_norm(config.max_grad_norm),
-        optax.adamw(learning_rate, weight_decay=config.weight_decay),
+        optax.adamw(lr_schedule, weight_decay=config.weight_decay),
     )
 
-    return TrainState.create(
+    state = TrainState.create(
         apply_fn=model.apply,
         params=params,
         tx=optimizer,
     )
+
+    # Store the LR function in the state for logging purposes
+    return state, lr_fn
+
+
+def update_optimizer_for_stage(
+    state: TrainState,
+    config: TrainingConfig,
+    steps_per_epoch: int,
+    stage_epochs: int,
+    learning_rate: Optional[float] = None,
+):
+    """Update optimizer with a new learning rate schedule for a new stage.
+
+    Args:
+        state: Current training state
+        config: Training configuration
+        steps_per_epoch: Number of steps per epoch
+        stage_epochs: Number of epochs for the new stage
+        learning_rate: Learning rate (defaults to config.learning_rate)
+
+    Returns:
+        tuple: (new_state, lr_fn) with updated optimizer
+    """
+    if learning_rate is None:
+        learning_rate = config.learning_rate
+
+    # Create new learning rate schedule for this stage
+    lr_schedule, lr_fn = get_lr_schedule_for_stage(config, steps_per_epoch, stage_epochs, learning_rate)
+
+    # Create new optimizer with the new schedule
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(config.max_grad_norm),
+        optax.adamw(lr_schedule, weight_decay=config.weight_decay),
+    )
+
+    # Create new state with the same parameters but new optimizer
+    new_state = TrainState.create(
+        apply_fn=state.apply_fn,
+        params=state.params,
+        tx=optimizer,
+    )
+
+    return new_state, lr_fn
 
 
 @partial(jax.jit, static_argnames=['use_uncertainty_head', 'lambda_weight'])
@@ -272,6 +397,7 @@ def train_epoch(
     stage: int,
     epoch: int,
     config: TrainingConfig,
+    lr_fn,
 ) -> Tuple[TrainState, Dict[str, jnp.ndarray]]:
     """Train for one epoch."""
     epoch_metrics = []
@@ -312,6 +438,11 @@ def train_epoch(
     avg_metrics = {}
     for key in epoch_metrics[0].keys():
         avg_metrics["train/" + key] = float(jnp.mean(jnp.array([m[key] for m in epoch_metrics])))
+
+    # Get current learning rate from the schedule function
+    current_step = int(state.step)
+    current_lr = float(lr_fn(current_step))
+    avg_metrics["learning_rate"] = current_lr
 
     return state, avg_metrics
 
@@ -387,6 +518,7 @@ def train_stage(
     n_epochs: int,
     config: TrainingConfig,
     checkpoint_dir: str,
+    lr_fn,
     start_epoch: int = 0,
 ) -> TrainState:
     """Train a single stage."""
@@ -398,7 +530,7 @@ def train_stage(
     for epoch in range(start_epoch, n_epochs):
         # Train
         state, train_metrics = train_epoch(
-            state, train_loader, stage, epoch, config
+            state, train_loader, stage, epoch, config, lr_fn
         )
 
         # Evaluate
@@ -475,6 +607,10 @@ def main(args):
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             max_grad_norm=args.max_grad_norm,
+            use_lr_schedule=args.use_lr_schedule,
+            lr_schedule_type=args.lr_schedule_type,
+            lr_warmup_epochs=args.lr_warmup_epochs,
+            lr_min_factor=args.lr_min_factor,
             stage1_epochs=args.stage1_epochs,
             stage2_epochs=args.stage2_epochs,
             stage2_lambda_decay_epochs=args.stage2_lambda_decay_epochs,
@@ -509,9 +645,14 @@ def main(args):
         data_path=config.data_path,
     )
 
+    # Calculate steps per epoch for learning rate scheduling
+    steps_per_epoch = len(train_loader)
+    print(f"Steps per epoch: {steps_per_epoch}")
+
     # Create or load training state
     print("Initializing model...")
-    state = create_train_state(rng, config)
+    # Initialize with Stage 1 parameters
+    state, lr_fn = create_train_state(rng, config, steps_per_epoch, config.stage1_epochs)
 
     if args.resume:
         try:
@@ -524,37 +665,51 @@ def main(args):
     # Train stages: if stage 1 is done, proceed to stage 2, etc.
     if args.stage <= 1:
         print("\nStarting Stage 1: Pose Only Training")
+        # Stage 1 already has the correct LR schedule from initialization
         state = train_stage(
             state, train_loader, valid_loader,
             stage=1,
             n_epochs=config.stage1_epochs,
             config=config,
             checkpoint_dir=checkpoint_dir,
+            lr_fn=lr_fn,
         )
 
     if args.stage <= 2:
         print("\nStarting Stage 2: Uncertainty Head Training")
+        # Create new optimizer with Stage 2 LR schedule
+        print("Creating new LR schedule for Stage 2...")
+        state, lr_fn = update_optimizer_for_stage(
+            state, config, steps_per_epoch, config.stage2_epochs
+        )
         state = train_stage(
             state, train_loader, valid_loader,
             stage=2,
             n_epochs=config.stage2_epochs,
             config=config,
             checkpoint_dir=checkpoint_dir,
+            lr_fn=lr_fn,
         )
 
     if args.stage <= 3:
         print("\nStarting Stage 3: End-to-End Finetuning")
+        # Create new optimizer with Stage 3 LR schedule
+        print("Creating new LR schedule for Stage 3...")
+        state, lr_fn = update_optimizer_for_stage(
+            state, config, steps_per_epoch, config.stage3_epochs
+        )
         state = train_stage(
             state, train_loader, valid_loader,
             stage=3,
             n_epochs=config.stage3_epochs,
             config=config,
             checkpoint_dir=checkpoint_dir,
+            lr_fn=lr_fn,
         )
 
     # Final evaluation on test set
     print("\nFinal evaluation on test set...")
-    test_metrics = evaluate(state, test_loader)
+    test_metrics = evaluate(state, test_loader, epoch=0)
     print("Test metrics:", test_metrics)
 
     if config.use_wandb:
@@ -585,9 +740,22 @@ if __name__ == "__main__":
 
     # Training hyperparameters
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-6)
     parser.add_argument("--max_grad_norm", type=float, default=0.01)
+
+    # Learning rate scheduling
+    parser.add_argument("--use_lr_schedule", action="store_true", default=True,
+                        help="Use learning rate scheduling")
+    parser.add_argument("--no_lr_schedule", dest="use_lr_schedule", action="store_false",
+                        help="Disable learning rate scheduling")
+    parser.add_argument("--lr_schedule_type", type=str, default="cosine",
+                        choices=["cosine", "exponential", "constant"],
+                        help="Type of LR schedule: cosine, exponential, or constant")
+    parser.add_argument("--lr_warmup_epochs", type=int, default=5,
+                        help="Number of warmup epochs for learning rate")
+    parser.add_argument("--lr_min_factor", type=float, default=0.01,
+                        help="Minimum LR as fraction of initial LR (e.g., 0.01 = 1%)")
 
     # Stage epochs
     parser.add_argument("--stage1_epochs", type=int, default=50)
