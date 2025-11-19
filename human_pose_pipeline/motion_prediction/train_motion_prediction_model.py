@@ -20,8 +20,9 @@ The training has multiple stages:
 import os
 import json
 import argparse
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 from functools import partial
+from tqdm import tqdm
 
 import jax
 import jax.numpy as jnp
@@ -38,7 +39,11 @@ from src.models.dct_pose_transformer import (
     gaussian_nll_from_cholesky,
 )
 from src.datasets.wrapper import dataloader_from_string
-from human_pose_pipeline.motion_prediction.h36m_settings import N_JOINTS
+from human_pose_pipeline.motion_prediction.h36m_settings import (
+    N_JOINTS,
+    INPUT_HORIZON_LENGTH,
+    PREDICTION_HORIZON_LENGTH
+)
 
 
 class TrainingConfig:
@@ -51,13 +56,13 @@ class TrainingConfig:
         d_model: int = 128,
         nhead: int = 4,
         num_layers: int = 2,
-        seq_len: int = 50,
-        seq_len_output: int = 10,
+        seq_len: int = INPUT_HORIZON_LENGTH,
+        seq_len_output: int = PREDICTION_HORIZON_LENGTH,
         unit_conversion: float = 1000.0,
-        reduced_size: bool = False,
+        reduced_size: bool = False,  # Should always be False.
 
         # Training hyperparameters
-        batch_size: int = 32,
+        batch_size: int = 256,
         learning_rate: float = 1e-4,
         weight_decay: float = 1e-6,
         max_grad_norm: float = 0.01,
@@ -77,9 +82,9 @@ class TrainingConfig:
         seed: int = 420,
 
         # Experiment tracking
-        run_id: str = None,
+        run_id: Optional[str] = None,
         wandb_project: str = "motion-prediction",
-        wandb_entity: str = None,
+        wandb_entity: Optional[str] = None,
         use_wandb: bool = True,
     ):
         # Model hyperparameters
@@ -138,9 +143,9 @@ class TrainingConfig:
 
 
 def create_train_state(
-    rng: jax.random.PRNGKey,
+    rng: jax.Array,
     config: TrainingConfig,
-    learning_rate: float = None,
+    learning_rate: Optional[float] = None,
 ) -> TrainState:
     """Create initial training state."""
     if learning_rate is None:
@@ -176,30 +181,11 @@ def create_train_state(
     )
 
 
-@partial(jax.jit, static_argnames=['stage'])
-def train_step_stage1(
+@partial(jax.jit, static_argnames=['use_uncertainty_head', 'lambda_weight'])
+def train_step(
     state: TrainState,
     batch: Tuple[jnp.ndarray, jnp.ndarray],
-) -> Tuple[TrainState, Dict[str, float]]:
-    """Training step for Stage 1: Pose only."""
-    input_pose, target_pose = batch
-
-    def loss_fn(params):
-        pred_poses, _ = state.apply_fn({'params': params}, input_pose, train=True)
-        loss = pose_prediction_loss(pred_poses, target_pose)
-        return loss, {'loss': loss, 'pose_loss': loss}
-
-    grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-    (loss, metrics), grads = grad_fn(state.params)
-    state = state.apply_gradients(grads=grads)
-
-    return state, metrics
-
-
-@partial(jax.jit, static_argnames=['lambda_weight'])
-def train_step_stage2(
-    state: TrainState,
-    batch: Tuple[jnp.ndarray, jnp.ndarray],
+    use_uncertainty_head: bool,
     lambda_weight: float,
 ) -> Tuple[TrainState, Dict[str, float]]:
     """Training step for Stage 2: Uncertainty head only.
@@ -212,15 +198,18 @@ def train_step_stage2(
     def loss_fn(params):
         pred_poses, (cov, L) = state.apply_fn({'params': params}, input_pose, train=True)
 
-        # Reshape target to match covariance shape [B, T, J, 3]
-        batch_size = target_pose.shape[0]
-        target_reshaped = target_pose.reshape(batch_size, -1, N_JOINTS, 3)
-        pred_reshaped = pred_poses.reshape(batch_size, -1, N_JOINTS, 3)
-
-        nll_loss = gaussian_nll_from_cholesky(target_reshaped, pred_reshaped, L)
         pose_loss = pose_prediction_loss(pred_poses, target_pose)
 
-        total_loss = nll_loss + lambda_weight * pose_loss
+        if use_uncertainty_head:
+            # Reshape target to match covariance shape [B, T, J, 3]
+            batch_size = target_pose.shape[0]
+            target_reshaped = target_pose.reshape(batch_size, -1, N_JOINTS, 3)
+            pred_reshaped = pred_poses.reshape(batch_size, -1, N_JOINTS, 3)
+            nll_loss = gaussian_nll_from_cholesky(target_reshaped, pred_reshaped, L)
+            total_loss = nll_loss + lambda_weight * pose_loss
+        else:
+            nll_loss = 0.0
+            total_loss = pose_loss
 
         return total_loss, {
             'loss': total_loss,
@@ -237,44 +226,10 @@ def train_step_stage2(
 
 
 @jax.jit
-def train_step_stage3(
-    state: TrainState,
-    batch: Tuple[jnp.ndarray, jnp.ndarray],
-) -> Tuple[TrainState, Dict[str, float]]:
-    """Training step for Stage 3: End-to-end finetuning."""
-    input_pose, target_pose = batch
-
-    def loss_fn(params):
-        pred_poses, (cov, L) = state.apply_fn({'params': params}, input_pose, train=True)
-
-        # Reshape target to match covariance shape [B, T, J, 3]
-        batch_size = target_pose.shape[0]
-        target_reshaped = target_pose.reshape(batch_size, -1, N_JOINTS, 3)
-        pred_reshaped = pred_poses.reshape(batch_size, -1, N_JOINTS, 3)
-
-        nll_loss = gaussian_nll_from_cholesky(target_reshaped, pred_reshaped, L)
-        pose_loss = pose_prediction_loss(pred_poses, target_pose)
-
-        total_loss = nll_loss + pose_loss
-
-        return total_loss, {
-            'loss': total_loss,
-            'nll_loss': nll_loss,
-            'pose_loss': pose_loss,
-        }
-
-    grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-    (loss, metrics), grads = grad_fn(state.params)
-    state = state.apply_gradients(grads=grads)
-
-    return state, metrics
-
-
-@jax.jit
 def eval_step(
     state: TrainState,
     batch: Tuple[jnp.ndarray, jnp.ndarray],
-) -> Dict[str, float]:
+) -> Dict[str, jnp.ndarray]:
     """Evaluation step."""
     input_pose, target_pose = batch
 
@@ -300,31 +255,46 @@ def train_epoch(
     stage: int,
     epoch: int,
     config: TrainingConfig,
-) -> Tuple[TrainState, Dict[str, float]]:
+) -> Tuple[TrainState, Dict[str, jnp.ndarray]]:
     """Train for one epoch."""
     epoch_metrics = []
 
-    for batch_idx, batch in enumerate(train_loader):
+    for batch in train_loader:
         # Convert to JAX arrays
-        input_pose = jnp.array(batch[0].numpy(), dtype=jnp.float32)
-        target_pose = jnp.array(batch[1].numpy(), dtype=jnp.float32)
+        input_pose = jnp.array(batch[0], dtype=jnp.float32)
+        target_pose = jnp.array(batch[1], dtype=jnp.float32)
 
         # Select training step based on stage
         if stage == 1:
-            state, metrics = train_step_stage1(state, (input_pose, target_pose))
+            state, metrics = train_step(
+                state=state,
+                batch=(input_pose, target_pose),
+                use_uncertainty_head=False,
+                lambda_weight=1.0  # Not used here
+            )
         elif stage == 2:
             # Calculate lambda decay
-            lambda_weight = max(0.0, 1.0 - epoch / config.stage2_lambda_decay_epochs)
-            state, metrics = train_step_stage2(state, (input_pose, target_pose), lambda_weight)
+            lambda_weight = min(1.0, epoch / config.stage2_lambda_decay_epochs)
+            state, metrics = train_step(
+                state=state,
+                batch=(input_pose, target_pose),
+                use_uncertainty_head=True,
+                lambda_weight=lambda_weight
+            )
         elif stage == 3:
-            state, metrics = train_step_stage3(state, (input_pose, target_pose))
+            state, metrics = train_step(
+                state=state,
+                batch=(input_pose, target_pose),
+                use_uncertainty_head=True,
+                lambda_weight=1.0
+            )
 
         epoch_metrics.append(metrics)
 
     # Average metrics over the epoch
     avg_metrics = {}
     for key in epoch_metrics[0].keys():
-        avg_metrics[key] = float(jnp.mean(jnp.array([m[key] for m in epoch_metrics])))
+        avg_metrics["train/" + key] = float(jnp.mean(jnp.array([m[key] for m in epoch_metrics])))
 
     return state, avg_metrics
 
@@ -335,8 +305,8 @@ def evaluate(state: TrainState, eval_loader) -> Dict[str, float]:
 
     for batch in eval_loader:
         # Convert to JAX arrays
-        input_pose = jnp.array(batch[0].numpy(), dtype=jnp.float32)
-        target_pose = jnp.array(batch[1].numpy(), dtype=jnp.float32)
+        input_pose = jnp.array(batch[0], dtype=jnp.float32)
+        target_pose = jnp.array(batch[1], dtype=jnp.float32)
 
         metrics = eval_step(state, (input_pose, target_pose))
         eval_metrics.append(metrics)
@@ -344,7 +314,7 @@ def evaluate(state: TrainState, eval_loader) -> Dict[str, float]:
     # Average metrics
     avg_metrics = {}
     for key in eval_metrics[0].keys():
-        avg_metrics[key] = float(jnp.mean(jnp.array([m[key] for m in eval_metrics])))
+        avg_metrics["eval/" + key] = float(jnp.mean(jnp.array([m[key] for m in eval_metrics])))
 
     return avg_metrics
 
@@ -368,7 +338,7 @@ def save_checkpoint(
 def load_checkpoint(
     state: TrainState,
     checkpoint_dir: str,
-    step: int = None,
+    step: Optional[int] = None,
 ) -> TrainState:
     """Load checkpoint using Orbax."""
     checkpointer = orbax.checkpoint.PyTreeCheckpointer()
@@ -400,29 +370,30 @@ def train_stage(
 ) -> TrainState:
     """Train a single stage."""
     stage_names = {1: "Pose Only", 2: "Uncertainty Head", 3: "End-to-End"}
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Stage {stage}: {stage_names[stage]}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
-    for epoch in range(start_epoch, n_epochs):
+    for epoch in tqdm(range(start_epoch, n_epochs)):
         # Train
         state, train_metrics = train_epoch(
             state, train_loader, stage, epoch, config
         )
 
         # Evaluate
-        val_metrics = evaluate(state, valid_loader)
+        eval_metrics = evaluate(state, valid_loader)
 
         # Combine metrics
-        all_metrics = {**train_metrics, **val_metrics, 'epoch': epoch, 'stage': stage}
+        all_metrics = {**train_metrics, **eval_metrics, 'epoch': epoch, 'stage': stage}
 
         # Log to wandb
         if config.use_wandb:
             wandb.log(all_metrics)
 
         # Print progress
-        print(f"Epoch {epoch+1}/{n_epochs} - " +
-              " - ".join([f"{k}: {v:.6f}" for k, v in all_metrics.items() if k not in ['epoch', 'stage']]))
+        print(f"Epoch {epoch + 1}/{n_epochs} - " + " - ".join(
+            [f"{k}: {v:.6f}" for k, v in all_metrics.items() if k not in ['epoch', 'stage']])
+        )
 
         # Save checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
@@ -500,7 +471,6 @@ def main(args):
         download=False,
         data_path=config.data_path,
     )
-    print(f"Train batches: {len(train_loader)}, Valid batches: {len(valid_loader)}")
 
     # Create or load training state
     print("Initializing model...")
@@ -514,7 +484,7 @@ def main(args):
             print(f"Could not load checkpoint: {e}")
             print("Starting from scratch")
 
-    # Train stages
+    # Train stages: if stage 1 is done, proceed to stage 2, etc.
     if args.stage <= 1:
         print("\nStarting Stage 1: Pose Only Training")
         state = train_stage(
@@ -563,10 +533,10 @@ if __name__ == "__main__":
     # Run configuration
     parser.add_argument("--run_id", type=str, required=True, help="Unique run identifier")
     parser.add_argument("--stage", type=int, default=1, choices=[1, 2, 3],
-                       help="Training stage to start from (1, 2, or 3)")
+                        help="Training stage to start from (1, 2, or 3)")
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
     parser.add_argument("--new_config", action="store_true",
-                       help="Create new config even if one exists")
+                        help="Create new config even if one exists")
 
     # Model hyperparameters
     parser.add_argument("--d_model", type=int, default=128)
