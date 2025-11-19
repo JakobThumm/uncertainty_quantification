@@ -44,6 +44,7 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
     INPUT_HORIZON_LENGTH,
     PREDICTION_HORIZON_LENGTH
 )
+from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_jax
 
 
 class TrainingConfig:
@@ -243,9 +244,15 @@ def eval_step(
     nll_loss = gaussian_nll_from_cholesky(target_reshaped, pred_reshaped, L)
     pose_loss = pose_prediction_loss(pred_poses, target_pose)
 
+    # Compute MPJPE
+    mpjpe, std, _, _, _, _ = \
+        evaluate_pose_prediction_scores_jax(pred_reshaped, target_reshaped)
+
     return {
-        'val_nll_loss': nll_loss,
-        'val_pose_loss': pose_loss,
+        'nll_loss': nll_loss,
+        'pose_loss': pose_loss,
+        'mpjpe': mpjpe,
+        'mpjpe_std': std,
     }
 
 
@@ -407,8 +414,30 @@ def train_stage(
 
 def main(args):
     """Main training function."""
+    # Initialize wandb first to get run_id if not provided
+    if args.use_wandb:
+        wandb_run = wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.run_id,  # Will be None if not provided, wandb will generate one
+            config=vars(args),
+            resume="allow" if args.resume else False,
+        )
+        # Use wandb run id as the run_id
+        run_id = wandb_run.id
+        # Update the run name to match the id if it wasn't provided
+        if args.run_id is None:
+            wandb_run.name = run_id
+    else:
+        # Generate a run_id if not provided and wandb is disabled
+        if args.run_id is None:
+            import datetime
+            run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        else:
+            run_id = args.run_id
+
     # Setup paths
-    model_dir = os.path.join("human_pose_pipeline", "models", "motion_prediction", args.run_id)
+    model_dir = os.path.join("human_pose_pipeline", "models", "motion_prediction", run_id)
     checkpoint_dir = os.path.join(model_dir, "checkpoints")
     config_path = os.path.join(model_dir, "dct_pose_transformer_args.json")
 
@@ -438,7 +467,7 @@ def main(args):
             stage3_epochs=args.stage3_epochs,
             data_path=args.data_path,
             seed=args.seed,
-            run_id=args.run_id,
+            run_id=run_id,
             wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity,
             use_wandb=args.use_wandb,
@@ -446,15 +475,9 @@ def main(args):
         config.save(config_path)
         print(f"Saved configuration to {config_path}")
 
-    # Initialize wandb
+    # Update wandb config with full configuration
     if config.use_wandb:
-        wandb.init(
-            project=config.wandb_project,
-            entity=config.wandb_entity,
-            name=config.run_id,
-            config=config.to_dict(),
-            resume="allow" if args.resume else False,
-        )
+        wandb.config.update(config.to_dict())
 
     # Set random seeds
     np.random.seed(config.seed)
@@ -531,7 +554,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train DCT Pose Transformer")
 
     # Run configuration
-    parser.add_argument("--run_id", type=str, required=True, help="Unique run identifier")
+    parser.add_argument("--run_id", type=str, default=None,
+                        help="Unique run identifier (defaults to wandb run id or timestamp)")
     parser.add_argument("--stage", type=int, default=1, choices=[1, 2, 3],
                         help="Training stage to start from (1, 2, or 3)")
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
