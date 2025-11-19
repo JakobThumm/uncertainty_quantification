@@ -30,14 +30,14 @@ def gaussian_nll_from_cholesky(y_true, y_pred, L):
           nll: Mean negative log-likelihood over all samples
     """
     diff = y_true - y_pred
-    B, T, J, _ = diff.shape
-    C = 3
+    B, T, J, C = diff.shape
+    N = B * T * J
 
-    diff = diff.reshape(-1, C)
-    Lf = L.reshape(-1, C, C)
+    diff = diff.reshape(N, C)[..., None]  # shape = N, C, 1
+    Lf = L.reshape(N, C, C)  # shape = N, C, C
 
     # Mahalanobis via triangular solve
-    m = jax.lax.linalg.triangular_solve(Lf, diff[..., None], lower=True)
+    m = jax.lax.linalg.triangular_solve(Lf, diff, lower=True, left_side=True)
     mahal = jnp.sum(m.squeeze(-1)**2, axis=-1)
 
     # log det = 2 * sum log diag(L)

@@ -47,6 +47,9 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
 from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_jax
 
 
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+
+
 class TrainingConfig:
     """Configuration for training the DCT Pose Transformer."""
 
@@ -245,7 +248,7 @@ def eval_step(
     pose_loss = pose_prediction_loss(pred_poses, target_pose)
 
     # Compute MPJPE
-    mpjpe, std, _, _, _, _ = \
+    mpjpe, std, per_time_errors, _, _, _ = \
         evaluate_pose_prediction_scores_jax(pred_reshaped, target_reshaped)
 
     return {
@@ -253,6 +256,11 @@ def eval_step(
         'pose_loss': pose_loss,
         'mpjpe': mpjpe,
         'mpjpe_std': std,
+        'mpjpe_time_80ms': per_time_errors[1],
+        'mpjpe_time_160ms': per_time_errors[3],
+        'mpjpe_time_240ms': per_time_errors[5],
+        'mpjpe_time_320ms': per_time_errors[7],
+        'mpjpe_time_400ms': per_time_errors[9],
     }
 
 
@@ -266,7 +274,7 @@ def train_epoch(
     """Train for one epoch."""
     epoch_metrics = []
 
-    for batch in train_loader:
+    for batch in tqdm(train_loader, "Training Epoch {}".format(epoch + 1)):
         # Convert to JAX arrays
         input_pose = jnp.array(batch[0], dtype=jnp.float32)
         target_pose = jnp.array(batch[1], dtype=jnp.float32)
@@ -306,11 +314,15 @@ def train_epoch(
     return state, avg_metrics
 
 
-def evaluate(state: TrainState, eval_loader) -> Dict[str, float]:
+def evaluate(
+    state: TrainState,
+    eval_loader,
+    epoch: int
+) -> Dict[str, float]:
     """Evaluate the model."""
     eval_metrics = []
 
-    for batch in eval_loader:
+    for batch in tqdm(eval_loader, "Eval Epoch {}".format(epoch + 1)):
         # Convert to JAX arrays
         input_pose = jnp.array(batch[0], dtype=jnp.float32)
         target_pose = jnp.array(batch[1], dtype=jnp.float32)
@@ -381,14 +393,14 @@ def train_stage(
     print(f"Stage {stage}: {stage_names[stage]}")
     print(f"{'=' * 60}\n")
 
-    for epoch in tqdm(range(start_epoch, n_epochs)):
+    for epoch in range(start_epoch, n_epochs):
         # Train
         state, train_metrics = train_epoch(
             state, train_loader, stage, epoch, config
         )
 
         # Evaluate
-        eval_metrics = evaluate(state, valid_loader)
+        eval_metrics = evaluate(state, valid_loader, epoch)
 
         # Combine metrics
         all_metrics = {**train_metrics, **eval_metrics, 'epoch': epoch, 'stage': stage}
@@ -437,7 +449,7 @@ def main(args):
             run_id = args.run_id
 
     # Setup paths
-    model_dir = os.path.join("human_pose_pipeline", "models", "motion_prediction", run_id)
+    model_dir = os.path.join(root_dir, "human_pose_pipeline", "models", "motion_prediction", run_id)
     checkpoint_dir = os.path.join(model_dir, "checkpoints")
     config_path = os.path.join(model_dir, "dct_pose_transformer_args.json")
 
@@ -477,7 +489,7 @@ def main(args):
 
     # Update wandb config with full configuration
     if config.use_wandb:
-        wandb.config.update(config.to_dict())
+        wandb.config.update(config.to_dict(), allow_val_change=True)
 
     # Set random seeds
     np.random.seed(config.seed)
