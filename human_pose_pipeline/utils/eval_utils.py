@@ -1,6 +1,31 @@
 """Utilities for evaluating uncertainty estimates in human pose predictions."""
 
 import numpy as np
+import jax.numpy as jnp
+
+
+def evaluate_pose_prediction_scores_np(predictions, targets):
+    """Evaluate MPJPE scores."""
+    errors = np.linalg.norm(predictions - targets, axis=-1)
+    mpjpe = np.mean(errors)
+    std = np.std(errors)
+    per_time_errors = np.mean(np.mean(errors, axis=-1), axis=0)
+    per_time_std = np.std(np.mean(errors, axis=-1), axis=0)
+    per_joint_errors = np.mean(np.mean(errors, axis=1), axis=0)
+    per_joint_std = np.std(np.mean(errors, axis=1), axis=0)
+    return mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std
+
+
+def evaluate_pose_prediction_scores_jax(predictions, targets):
+    """Evaluate MPJPE scores using JAX."""
+    errors = jnp.linalg.norm(predictions - targets, axis=-1)
+    mpjpe = jnp.mean(errors)
+    std = jnp.std(errors)
+    per_time_errors = jnp.mean(jnp.mean(errors, axis=-1), axis=0)
+    per_time_std = jnp.std(jnp.mean(errors, axis=-1), axis=0)
+    per_joint_errors = jnp.mean(jnp.mean(errors, axis=1), axis=0)
+    per_joint_std = jnp.std(jnp.mean(errors, axis=1), axis=0)
+    return mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std
 
 
 def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_matrices, std_multipliers=[1, 2, 3, 4]):

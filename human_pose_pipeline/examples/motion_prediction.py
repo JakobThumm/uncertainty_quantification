@@ -22,22 +22,11 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
     PREDICTION_HORIZON_LENGTH,
     N_JOINTS
 )
+from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_np as evaluate_scores
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
 BATCH_SIZE = 128
-
-
-def evaluate_scores(predictions, targets):
-    """Evaluate MPJPE scores."""
-    errors = np.linalg.norm(predictions - targets, axis=-1)
-    mpjpe = np.mean(errors)
-    std = np.std(errors)
-    per_time_errors = np.mean(np.mean(errors, axis=-1), axis=0)
-    per_time_std = np.std(np.mean(errors, axis=-1), axis=0)
-    per_joint_errors = np.mean(np.mean(errors, axis=1), axis=0)
-    per_joint_std = np.std(np.mean(errors, axis=1), axis=0)
-    return mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std
 
 
 def main():
