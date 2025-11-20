@@ -14,31 +14,20 @@ import os
 import argparse
 import numpy as np
 from tqdm import tqdm
-import cv2
 
 from human_pose_pipeline.utils.transform_utils import transform_predictions_to_original_space
-from src.ood_scores.lm_lanczos import load_score_functions
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
-    initialize_human_detector,
     joint_mapping,
     predict_pose,
-    process_frame_2d
 )
 from human_pose_pipeline.pose_estimation.triangulation_helper import (
     load_camera_parameters,
     create_joint_covariance,
     triangulate_points_with_covariance,
 )
-from human_pose_pipeline.pose_estimation.h36m_settings import (
-    MIRROR_13_JOINT_MODEL_MAP,
-    YOLO_CONFIDENCE_THRESHOLD,
-)
-from human_pose_pipeline.motion_prediction.h36m_settings import (
-    N_JOINTS,
-    INPUT_HORIZON_LENGTH,
-    PREDICTION_HORIZON_LENGTH,
-)
+from human_pose_pipeline.pose_estimation.h36m_settings import MIRROR_13_JOINT_MODEL_MAP
+from human_pose_pipeline.motion_prediction.h36m_settings import N_JOINTS
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
@@ -61,8 +50,6 @@ def process_sequence(
     pose_estimation_jit_fn,
     params,
     batch_stats,
-    human_detector,
-    device_torch,
     projection_matrices,
 ):
     """Process a sequence of image pairs to extract 3D poses with covariances.
@@ -75,8 +62,6 @@ def process_sequence(
         pose_estimation_jit_fn: JAX pose estimation function
         params: Model parameters
         batch_stats: Batch statistics
-        human_detector: YOLO detector
-        device_torch: PyTorch device
         projection_matrices: Dict with projection matrices for both cameras
 
     Returns:
@@ -178,8 +163,6 @@ def preprocess_subject(
     pose_estimation_jit_fn,
     params,
     batch_stats,
-    human_detector,
-    device_torch,
     projection_matrices,
 ):
     """Preprocess all sequences for a given subject.
@@ -191,8 +174,6 @@ def preprocess_subject(
         pose_estimation_jit_fn: JAX pose estimation function
         params: Model parameters
         batch_stats: Batch statistics
-        human_detector: YOLO detector
-        device_torch: PyTorch device
         projection_matrices: Dict with projection matrices
     """
     subject_image_dir = os.path.join(preprocessed_dir, subject, 'PreprocessedImages')
@@ -260,8 +241,6 @@ def preprocess_subject(
             pose_estimation_jit_fn,
             params,
             batch_stats,
-            human_detector,
-            device_torch,
             projection_matrices,
         )
 
@@ -338,9 +317,6 @@ def main():
     pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
     print("Pose estimation model loaded")
 
-    human_detector, device_torch = initialize_human_detector('cuda')
-    print("Human detector loaded")
-
     # Load camera parameters
     camera_parameters_path = os.path.join(models_dir, 'camera-parameters.json')
     if not os.path.exists(camera_parameters_path):
@@ -387,8 +363,6 @@ def main():
             pose_estimation_jit_fn,
             params,
             batch_stats,
-            human_detector,
-            device_torch,
             projection_matrices,
         )
 
