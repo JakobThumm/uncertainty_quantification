@@ -1,6 +1,7 @@
 """Dataset for the motion prediction task on the Human3.6M dataset."""
 
 import os
+from typing import Optional
 import torch.utils.data
 from torch.utils.data import Dataset
 from spacepy import pycdf
@@ -133,6 +134,100 @@ def subsample_dataset(dataset, n_samples, seed=0):
     return subsampled_dataset
 
 
+def get_h36m_motion_dataset_function(
+    base_directory: str,
+    batch_size: int = 128,
+    shuffle: bool = False,
+    seed: int = 0,
+    split_train_val_ratio: float = 1.0,
+    n_samples: Optional[int] = None,
+    input_uncertainty: Optional[float] = None,
+    reduce_size: bool = False,
+    ood: bool = False,
+):
+    """
+    Get data loaders for preprocessed H36M dataset
+
+    Args:
+        base_directory: Path to dataset directory
+        batch_size: Batch size for data loaders
+        shuffle: Whether to shuffle the data
+        seed: Random seed for reproducibility
+        split_train_val_ratio: Ratio for splitting train set into train/val -> Not used for this dataset!
+        return_metadata: Whether to return metadata with samples
+        n_samples: Number of samples to use from dataset (None = use all),
+        input_uncertainty: Add artificial input uncertainty of this amount, defaults to None.
+        reduced_size: Reduced output size of only head and two hand poses.
+        ood: Shuffle input poses in time dimension.
+
+    Returns:
+        tuple: (train_loader, valid_loader, test_loader)
+    """
+    # Create datasets
+    train_dataset = Human36mMotionDataset3D(
+        base_directory=base_directory,
+        split='train',
+        jax_format=False,
+        input_uncertainty=input_uncertainty,
+        reduce_size=reduce_size,
+        ood=ood
+    )
+
+    validation_dataset = Human36mMotionDataset3D(
+        base_directory=base_directory,
+        split='validation',
+        jax_format=False,
+        input_uncertainty=input_uncertainty,
+        reduce_size=reduce_size,
+        ood=ood
+    )
+
+    test_dataset = Human36mMotionDataset3D(
+        base_directory=base_directory,
+        split='test',
+        jax_format=False,
+        input_uncertainty=input_uncertainty,
+        reduce_size=reduce_size,
+        ood=ood
+    )
+
+    # Subsample if n_samples is specified
+    if n_samples is not None:
+        train_dataset = subsample_dataset(train_dataset, n_samples, seed)
+        validation_dataset = subsample_dataset(validation_dataset, n_samples, seed)
+        test_dataset = subsample_dataset(test_dataset, n_samples, seed)
+
+    # Split train dataset into train/val
+    train_loader = get_loader(
+        train_dataset,
+        split_train_val_ratio=1.0,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=True,
+        seed=seed
+    )
+
+    validation_loader = get_loader(
+        validation_dataset,
+        split_train_val_ratio=1.0,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=True,
+        seed=seed
+    )
+
+    # Create test loader
+    test_loader = get_loader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        drop_last=True,
+        seed=seed
+    )
+
+    return train_loader, validation_loader, test_loader
+
+
 def get_h36m_motion_dataset(
     base_directory,
     batch_size=128,
@@ -156,44 +251,14 @@ def get_h36m_motion_dataset(
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
     """
-    # Create datasets
-    train_dataset = Human36mMotionDataset3D(
+    return get_h36m_motion_dataset_function(
         base_directory=base_directory,
-        split='train',
-        jax_format=False
-    )
-
-    test_dataset = Human36mMotionDataset3D(
-        base_directory=base_directory,
-        split='validation',
-        jax_format=False
-    )
-
-    # Subsample if n_samples is specified
-    if n_samples is not None:
-        train_dataset = subsample_dataset(train_dataset, n_samples, seed)
-        test_dataset = subsample_dataset(test_dataset, n_samples, seed)
-
-    # Split train dataset into train/val
-    train_loader, valid_loader = get_loader(
-        train_dataset,
-        split_train_val_ratio=split_train_val_ratio,
         batch_size=batch_size,
         shuffle=shuffle,
-        drop_last=True,
-        seed=seed
+        seed=seed,
+        split_train_val_ratio=split_train_val_ratio,
+        n_samples=n_samples,
     )
-
-    # Create test loader
-    test_loader = get_loader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=True,
-        seed=seed
-    )
-
-    return train_loader, valid_loader, test_loader
 
 
 def get_h36m_motion_dataset_with_uncertainty(
@@ -219,46 +284,15 @@ def get_h36m_motion_dataset_with_uncertainty(
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
     """
-    # Create datasets
-    train_dataset = Human36mMotionDataset3D(
+    return get_h36m_motion_dataset_function(
         base_directory=base_directory,
-        split='train',
-        jax_format=False,
-        input_uncertainty=FAKE_INPUT_UNCERTAINTY
-    )
-
-    test_dataset = Human36mMotionDataset3D(
-        base_directory=base_directory,
-        split='validation',
-        jax_format=False,
-        input_uncertainty=FAKE_INPUT_UNCERTAINTY
-    )
-
-    # Subsample if n_samples is specified
-    if n_samples is not None:
-        train_dataset = subsample_dataset(train_dataset, n_samples, seed)
-        test_dataset = subsample_dataset(test_dataset, n_samples, seed)
-
-    # Split train dataset into train/val
-    train_loader, valid_loader = get_loader(
-        train_dataset,
-        split_train_val_ratio=split_train_val_ratio,
         batch_size=batch_size,
         shuffle=shuffle,
-        drop_last=True,
-        seed=seed
+        seed=seed,
+        split_train_val_ratio=split_train_val_ratio,
+        n_samples=n_samples,
+        input_uncertainty=FAKE_INPUT_UNCERTAINTY
     )
-
-    # Create test loader
-    test_loader = get_loader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=True,
-        seed=seed
-    )
-
-    return train_loader, valid_loader, test_loader
 
 
 def get_h36m_motion_reduced_output_dataset(
@@ -284,46 +318,15 @@ def get_h36m_motion_reduced_output_dataset(
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
     """
-    # Create datasets
-    train_dataset = Human36mMotionDataset3D(
+    return get_h36m_motion_dataset_function(
         base_directory=base_directory,
-        split='train',
-        jax_format=False,
-        reduce_size=True
-    )
-
-    test_dataset = Human36mMotionDataset3D(
-        base_directory=base_directory,
-        split='validation',
-        jax_format=False,
-        reduce_size=True
-    )
-
-    # Subsample if n_samples is specified
-    if n_samples is not None:
-        train_dataset = subsample_dataset(train_dataset, n_samples, seed)
-        test_dataset = subsample_dataset(test_dataset, n_samples, seed)
-
-    # Split train dataset into train/val
-    train_loader, valid_loader = get_loader(
-        train_dataset,
-        split_train_val_ratio=split_train_val_ratio,
         batch_size=batch_size,
         shuffle=shuffle,
-        drop_last=True,
-        seed=seed
+        seed=seed,
+        split_train_val_ratio=split_train_val_ratio,
+        n_samples=n_samples,
+        reduce_size=True
     )
-
-    # Create test loader
-    test_loader = get_loader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=True,
-        seed=seed
-    )
-
-    return train_loader, valid_loader, test_loader
 
 
 def get_h36m_motion_ood_dataset(
@@ -350,46 +353,15 @@ def get_h36m_motion_ood_dataset(
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
     """
-    # Create datasets
-    train_dataset = Human36mMotionDataset3D(
+    return get_h36m_motion_dataset_function(
         base_directory=base_directory,
-        split='train',
-        jax_format=False,
-        ood=True
-    )
-
-    test_dataset = Human36mMotionDataset3D(
-        base_directory=base_directory,
-        split='validation',
-        jax_format=False,
-        ood=True
-    )
-
-    # Subsample if n_samples is specified
-    if n_samples is not None:
-        train_dataset = subsample_dataset(train_dataset, n_samples, seed)
-        test_dataset = subsample_dataset(test_dataset, n_samples, seed)
-
-    # Split train dataset into train/val
-    train_loader, valid_loader = get_loader(
-        train_dataset,
-        split_train_val_ratio=split_train_val_ratio,
         batch_size=batch_size,
         shuffle=shuffle,
-        drop_last=True,
-        seed=seed
+        seed=seed,
+        split_train_val_ratio=split_train_val_ratio,
+        n_samples=n_samples,
+        ood=True
     )
-
-    # Create test loader
-    test_loader = get_loader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=True,
-        seed=seed
-    )
-
-    return train_loader, valid_loader, test_loader
 
 
 def get_h36m_motion_reduced_output_ood_dataset(
@@ -417,45 +389,13 @@ def get_h36m_motion_reduced_output_ood_dataset(
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
     """
-    # Create datasets
-    train_dataset = Human36mMotionDataset3D(
+    return get_h36m_motion_dataset_function(
         base_directory=base_directory,
-        split='train',
-        jax_format=False,
-        reduce_size=True,
-        ood=True
-    )
-
-    test_dataset = Human36mMotionDataset3D(
-        base_directory=base_directory,
-        split='validation',
-        jax_format=False,
-        reduce_size=True,
-        ood=True
-    )
-
-    # Subsample if n_samples is specified
-    if n_samples is not None:
-        train_dataset = subsample_dataset(train_dataset, n_samples, seed)
-        test_dataset = subsample_dataset(test_dataset, n_samples, seed)
-
-    # Split train dataset into train/val
-    train_loader, valid_loader = get_loader(
-        train_dataset,
-        split_train_val_ratio=split_train_val_ratio,
         batch_size=batch_size,
         shuffle=shuffle,
-        drop_last=True,
-        seed=seed
+        seed=seed,
+        split_train_val_ratio=split_train_val_ratio,
+        n_samples=n_samples,
+        reduce_size=True,
+        ood=True
     )
-
-    # Create test loader
-    test_loader = get_loader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=True,
-        seed=seed
-    )
-
-    return train_loader, valid_loader, test_loader
