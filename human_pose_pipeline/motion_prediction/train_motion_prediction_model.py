@@ -33,6 +33,8 @@ from flax.training.train_state import TrainState
 import orbax.checkpoint
 import numpy as np
 import wandb
+import optuna
+from optuna.trial import TrialState
 
 from src.models.dct_pose_transformer import (
     DCTPoseTransformer,
@@ -706,11 +708,13 @@ def train_stage(
     lr_fn,
     start_epoch: int = 0,
     verify_freezing: bool = False,
+    trial: Optional[optuna.Trial] = None,
 ) -> TrainState:
     """Train a single stage.
 
     Args:
         verify_freezing: If True, verify parameter freezing after first batch (for debugging)
+        trial: Optional Optuna trial for hyperparameter optimization
     """
     stage_names = {1: "Pose Only", 2: "Uncertainty Head (Frozen Backbone)", 3: "End-to-End"}
     freeze_info = {
@@ -745,6 +749,16 @@ def train_stage(
             [f"{k}: {v:.6f}" for k, v in all_metrics.items() if k not in ['epoch', 'stage']])
         )
 
+        # Report intermediate value to Optuna and check for pruning
+        if trial is not None:
+            # Report the validation MPJPE as the intermediate value
+            intermediate_value = eval_metrics.get('eval/pose_loss', float('inf'))
+            trial.report(intermediate_value, epoch)
+
+            # Check if trial should be pruned
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+
         # Save checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
             save_checkpoint(state, checkpoint_dir, epoch + 1, stage)
@@ -758,8 +772,240 @@ def train_stage(
     return state
 
 
+def objective(trial: optuna.Trial, base_args) -> float:
+    """Optuna objective function for hyperparameter optimization.
+
+    Args:
+        trial: Optuna trial object
+        base_args: Base arguments from command line
+
+    Returns:
+        Final validation MPJPE (lower is better)
+    """
+    # Suggest hyperparameters
+    learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True)
+    use_lr_schedule = trial.suggest_categorical("use_lr_schedule", [True, False])
+    if use_lr_schedule:
+        lr_schedule_type = trial.suggest_categorical("lr_schedule_type", ["cosine", "exponential"])
+    else:
+        lr_schedule_type = "cosine"
+    lr_warmup_epochs = trial.suggest_int("lr_warmup_epochs", 0, 10)
+    lr_min_factor = trial.suggest_float("lr_min_factor", 0.0001, 0.1, log=True)
+    weight_decay = trial.suggest_float("weight_decay", 1e-8, 1e-4, log=True)
+    max_grad_norm = trial.suggest_float("max_grad_norm", 0.001, 1.0, log=True)
+
+    # Create a unique run_id for this trial
+    import datetime
+    trial_run_id = f"optuna_trial_{trial.number}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    # Initialize wandb for this trial if enabled
+    if base_args.use_wandb:
+        wandb_run = wandb.init(
+            project=base_args.wandb_project,
+            entity=base_args.wandb_entity,
+            name=trial_run_id,
+            config={
+                **vars(base_args),
+                **trial.params,
+                "trial_number": trial.number,
+            },
+            reinit=True,  # Allow multiple wandb runs in same process
+        )
+
+    # Setup paths
+    model_dir = os.path.join(root_dir, "human_pose_pipeline", "models", "motion_prediction", trial_run_id)
+    checkpoint_dir = os.path.join(model_dir, "checkpoints")
+    config_path = os.path.join(model_dir, "dct_pose_transformer_args.json")
+
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    # Create configuration with suggested hyperparameters
+    config = TrainingConfig(
+        input_dim=N_JOINTS * 3,
+        d_model=base_args.d_model,
+        nhead=base_args.nhead,
+        num_layers=base_args.num_layers,
+        seq_len=base_args.seq_len,
+        seq_len_output=base_args.seq_len_output,
+        batch_size=base_args.batch_size,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        max_grad_norm=max_grad_norm,
+        use_lr_schedule=use_lr_schedule,
+        lr_schedule_type=lr_schedule_type,
+        lr_warmup_epochs=lr_warmup_epochs,
+        lr_min_factor=lr_min_factor,
+        stage1_epochs=base_args.stage1_epochs,
+        stage2_epochs=base_args.stage2_epochs,
+        stage3_epochs=base_args.stage3_epochs,
+        data_path=base_args.data_path,
+        seed=base_args.seed,
+        run_id=trial_run_id,
+        wandb_project=base_args.wandb_project,
+        wandb_entity=base_args.wandb_entity,
+        use_wandb=base_args.use_wandb,
+    )
+    config.save(config_path)
+
+    # Set random seeds
+    np.random.seed(config.seed)
+    rng = jax.random.PRNGKey(config.seed)
+
+    # Load data
+    print("Loading data...")
+    dataset_name = "Human36mMotionDataset3D"
+    train_loader, valid_loader, test_loader = dataloader_from_string(
+        dataset_name,
+        batch_size=config.batch_size,
+        shuffle=True,
+        seed=config.seed,
+        download=False,
+        data_path=config.data_path,
+    )
+
+    # Calculate steps per epoch for learning rate scheduling
+    steps_per_epoch = len(train_loader)
+    print(f"Steps per epoch: {steps_per_epoch}")
+
+    # Create training state
+    print("Initializing model...")
+    state, lr_fn = create_train_state(rng, config, steps_per_epoch, config.stage1_epochs)
+
+    try:
+        # Train Stage 1 with trial for pruning
+        print("\nStarting Stage 1: Pose Only Training (Optuna Trial)")
+        state = train_stage(
+            state, train_loader, valid_loader,
+            stage=1,
+            n_epochs=config.stage1_epochs,
+            config=config,
+            checkpoint_dir=checkpoint_dir,
+            lr_fn=lr_fn,
+            trial=trial,  # Pass trial for pruning
+        )
+
+        # For optimization, we can optionally run all stages or just stage 1
+        # Here we'll just run stage 1 for faster optimization
+        # You can enable stages 2 and 3 if needed
+        if base_args.optuna_optimize_all_stages:
+            # Stage 2
+            print("\nStarting Stage 2: Uncertainty Head Training (Optuna Trial)")
+            state, lr_fn = update_optimizer_for_stage(
+                state, config, steps_per_epoch, config.stage2_epochs
+            )
+            state = train_stage(
+                state, train_loader, valid_loader,
+                stage=2,
+                n_epochs=config.stage2_epochs,
+                config=config,
+                checkpoint_dir=checkpoint_dir,
+                lr_fn=lr_fn,
+                trial=trial,
+            )
+
+            # Stage 3
+            print("\nStarting Stage 3: End-to-End Finetuning (Optuna Trial)")
+            state, lr_fn = update_optimizer_for_stage(
+                state, config, steps_per_epoch, config.stage3_epochs
+            )
+            state = train_stage(
+                state, train_loader, valid_loader,
+                stage=3,
+                n_epochs=config.stage3_epochs,
+                config=config,
+                checkpoint_dir=checkpoint_dir,
+                lr_fn=lr_fn,
+                trial=trial,
+            )
+
+        # Final evaluation
+        print("\nFinal evaluation on validation set...")
+        final_metrics = evaluate(state, valid_loader, epoch=0)
+        final_mpjpe = float(final_metrics.get('eval/mpjpe', float('inf')))
+
+        print(f"Trial {trial.number} finished with validation MPJPE: {final_mpjpe:.6f}")
+
+        if config.use_wandb:
+            wandb.log({"final_val_mpjpe": final_mpjpe})
+            wandb.finish()
+
+        return final_mpjpe
+
+    except optuna.TrialPruned:
+        print(f"Trial {trial.number} was pruned.")
+        if config.use_wandb:
+            wandb.finish(exit_code=1)
+        raise
+
+
 def main(args):
     """Main training function."""
+    # Check if Optuna optimization is enabled
+    if args.use_optuna:
+        print("=" * 80)
+        print("Starting Optuna Hyperparameter Optimization")
+        print("=" * 80)
+        print(f"Study name: {args.optuna_study_name}")
+        print(f"Number of trials: {args.optuna_n_trials}")
+        print(f"Optimize all stages: {args.optuna_optimize_all_stages}")
+        print(f"Storage: {args.optuna_storage if args.optuna_storage else 'In-memory'}")
+        print("=" * 80)
+
+        # Create Optuna study with TPESampler and MedianPruner
+        sampler = optuna.samplers.TPESampler(seed=args.seed)
+        pruner = optuna.pruners.MedianPruner(
+            n_startup_trials=args.optuna_pruner_warmup,
+            n_warmup_steps=args.optuna_pruner_warmup,
+            interval_steps=args.optuna_pruner_interval,
+        )
+
+        study = optuna.create_study(
+            study_name=args.optuna_study_name,
+            storage=args.optuna_storage,
+            sampler=sampler,
+            pruner=pruner,
+            direction="minimize",  # Minimize validation MPJPE
+            load_if_exists=True,  # Resume study if it exists
+        )
+
+        # Optimize using the objective function
+        study.optimize(
+            lambda trial: objective(trial, args),
+            n_trials=args.optuna_n_trials,
+            show_progress_bar=True,
+        )
+
+        # Print optimization results
+        print("\n" + "=" * 80)
+        print("Optimization Results")
+        print("=" * 80)
+        print(f"Number of finished trials: {len(study.trials)}")
+        print(f"Best trial: {study.best_trial.number}")
+        print(f"Best validation MPJPE: {study.best_value:.6f}")
+        print("\nBest hyperparameters:")
+        for key, value in study.best_params.items():
+            print(f"  {key}: {value}")
+        print("=" * 80)
+
+        # Save study results
+        study_results_path = os.path.join(root_dir, "human_pose_pipeline", "models", "motion_prediction",
+                                          f"{args.optuna_study_name}_results.json")
+        os.makedirs(os.path.dirname(study_results_path), exist_ok=True)
+
+        study_results = {
+            "best_trial_number": study.best_trial.number,
+            "best_value": study.best_value,
+            "best_params": study.best_params,
+            "n_trials": len(study.trials),
+        }
+        with open(study_results_path, 'w') as f:
+            json.dump(study_results, f, indent=2)
+        print(f"\nStudy results saved to {study_results_path}")
+
+        return
+
+    # Normal training mode (non-Optuna)
     # Initialize wandb first to get run_id if not provided
     if args.use_wandb:
         wandb_run = wandb.init(
@@ -950,8 +1196,8 @@ if __name__ == "__main__":
     parser.add_argument("--no_lr_schedule", dest="use_lr_schedule", action="store_false",
                         help="Disable learning rate scheduling")
     parser.add_argument("--lr_schedule_type", type=str, default="cosine",
-                        choices=["cosine", "exponential", "constant"],
-                        help="Type of LR schedule: cosine, exponential, or constant")
+                        choices=["cosine", "exponential"],
+                        help="Type of LR schedule: cosine or exponential")
     parser.add_argument("--lr_warmup_epochs", type=int, default=5,
                         help="Number of warmup epochs for learning rate")
     parser.add_argument("--lr_min_factor", type=float, default=0.01,
@@ -971,6 +1217,22 @@ if __name__ == "__main__":
     parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--use_wandb", action="store_true", default=True)
     parser.add_argument("--no_wandb", dest="use_wandb", action="store_false")
+
+    # Optuna hyperparameter optimization
+    parser.add_argument("--use_optuna", action="store_true",
+                        help="Enable Optuna hyperparameter optimization")
+    parser.add_argument("--optuna_n_trials", type=int, default=100,
+                        help="Number of Optuna trials to run")
+    parser.add_argument("--optuna_study_name", type=str, default="motion_prediction_optimization",
+                        help="Name of the Optuna study")
+    parser.add_argument("--optuna_storage", type=str, default=None,
+                        help="Optuna storage URL (e.g., sqlite:///optuna.db). If None, uses in-memory storage.")
+    parser.add_argument("--optuna_optimize_all_stages", action="store_true",
+                        help="Optimize all 3 training stages (slower). If False, only optimizes Stage 1.")
+    parser.add_argument("--optuna_pruner_warmup", type=int, default=5,
+                        help="Number of epochs before pruner starts pruning trials")
+    parser.add_argument("--optuna_pruner_interval", type=int, default=1,
+                        help="Interval (in epochs) for pruner to check intermediate values")
 
     args = parser.parse_args()
     main(args)
