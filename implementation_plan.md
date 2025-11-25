@@ -86,7 +86,7 @@ We have two things:
     - [ ] Train motion prediction with uncertainty model
       - [x] Train DCT transformer model without uncertainty input
       - [x] Change dataset to Marians train/eval/test split and retrain.
-      - [ ] Retrain DCT transformer model without uncertainty input
+      - [ ] Retrain DCT transformer model without uncertainty input with Optuna.
       - [x] Create dataset with predicted uncertainty of pose estimation model
       - [ ] Debugging: Test 3D pose estimation statistics on full pipeline
       - [ ] Train DCT transformer model with uncertainty

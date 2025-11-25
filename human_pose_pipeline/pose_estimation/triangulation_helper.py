@@ -6,31 +6,27 @@ import json
 
 
 def load_camera_parameters(json_path, subject, camera_ids):
-    """
-    Load camera intrinsics and extrinsics from JSON file.
-
-    Args:
-        json_path: Path to camera parameters JSON file
-        subject: Subject ID (e.g., 'S1')
-        camera_ids: List of camera IDs
-
-    Returns:
-        tuple: (intrinsics, extrinsics) dictionaries
-    """
+    """Load H36M camera parameters from JSON file"""
     with open(json_path, 'r') as f:
         params = json.load(f)
 
     intrinsics = {}
     extrinsics = {}
+    projection_matrices = {}
 
     for cam_id in camera_ids:
-        cam_id_str = f".{cam_id}"
-        intrinsics[cam_id] = np.array(params['intrinsics'][cam_id_str]['calibration_matrix'])
-        R = np.array(params['extrinsics'][subject][cam_id_str]['R'])
-        t = np.array(params['extrinsics'][subject][cam_id_str]['t']).reshape(3, 1)
+        cam_id_with_dot = f".{cam_id}"
+        intrinsics[cam_id] = np.array(params['intrinsics'][cam_id_with_dot]['calibration_matrix'])
+        R = np.array(params['extrinsics'][subject][cam_id_with_dot]['R'])
+        t = np.array(params['extrinsics'][subject][cam_id_with_dot]['t']).reshape(3, 1)
         extrinsics[cam_id] = np.hstack((R, t))  # [R|t]
 
-    return intrinsics, extrinsics
+        # Compute projection matrix
+        K = intrinsics[cam_id]
+        RT = extrinsics[cam_id]
+        projection_matrices[cam_id] = K @ RT  # P = K[R|t]
+
+    return intrinsics, extrinsics, projection_matrices
 
 
 def create_joint_covariance(mapped_uncertainty_cam1, mapped_covariance_cam1,

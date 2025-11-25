@@ -24,6 +24,10 @@ from human_pose_pipeline.utils.gpu_accelerated_utils import (
     resize_image_gpu,
     extract_bounding_box_images_gpu
 )
+from human_pose_pipeline.pose_estimation.triangulation_helper import (
+    create_joint_covariance,
+    triangulate_points_with_covariance
+)
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_IDX_13_MODEL,
@@ -417,6 +421,105 @@ def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_d
         t1 = time()
         print(f"Total frame processing time (detection + pose estimation): {t1 - t0:.3f} seconds")
     return pose_estimations
+
+
+def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
+                     mirror_map, score_fn=None,
+                     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
+                     num_output_joints=17, use_gpu_acceleration=True, verbose=True):
+    """
+    Process a single frame to extract pose with uncertainty (JAX version).
+
+    Args:
+        frames: Input frame images from the left and right camera
+        projection_matrices: The two camera projection matrices for triangulation
+        pose_estimation_jit_fn: JIT-compiled pose estimation function
+        params: JAX model parameters
+        batch_stats: JAX model batch statistics
+        human_detector: YOLO human detector
+        device_torch: PyTorch device for YOLO
+        mirror_map: Joint mapping to correct left/right swapping
+        score_fn: Function to compute OOD score from model outputs. If None -> No OOD scoring.
+        human_detection_threshold (float, optional): Confidence threshold for human detection
+        ood_threshold (float, optional): Threshold for OOD detection in pose estimation
+        num_output_joints (int, optional): Number of joints the model outputs
+        use_gpu_acceleration (bool, optional): Whether to use GPU-accelerated preprocessing (default True)
+
+    Returns:
+        List[Dict]: List of dictionaries containing for each detected person:
+            - 'keypoints': Joint coordinates [[x1,y1], [x2,y2], ...]
+            - 'uncertainties': Standard deviations
+            - 'covariance': Covariance values
+            - 'covariance_matrix': Per-joint 2x2 covariance matrices
+            - 'bbox': Bounding box in the YOLO image frame [x1, y1, x2, y2]
+            - 'center': Center of the bounding box in the YOLO image frame [x, y]
+            - 'scale': Width and height of the bounding box in the YOLO image frame [w, h]
+            - 'ood_score': OOD score for the detected person (0 if no score_fn provided)
+            - 'is_ood': Boolean indicating if the person is classified as OOD based on the threshold (False if no score_fn provided)
+    """
+    assert len(frames) >= 2
+    assert len(projection_matrices) == len(frames)
+
+    left_frame = frames[0]
+    right_frame = frames[1]
+    left_pose_predictions = process_frame_2d(
+        frame=left_frame,
+        pose_estimation_jit_fn=pose_estimation_jit_fn,
+        params=params,
+        batch_stats=batch_stats,
+        human_detector=human_detector,
+        device_torch=device_torch,
+        mirror_map=mirror_map,
+        score_fn=score_fn,
+        human_detection_threshold=human_detection_threshold,
+        ood_threshold=ood_threshold,
+        num_output_joints=num_output_joints,
+        use_gpu_acceleration=use_gpu_acceleration,
+        verbose=verbose
+    )
+    # Take the first detected person
+    left_pose = left_pose_predictions[0]['keypoints']
+    left_uncertainty = left_pose_predictions[0]['uncertainties']
+    left_covariance_matrix = left_pose_predictions[0]['covariance_matrix']
+    ood_score = left_pose_predictions[0]['ood_score']
+    is_ood = left_pose_predictions[0]['is_ood']
+    # Right camera
+    right_pose_predictions = process_frame_2d(
+        frame=right_frame,
+        pose_estimation_jit_fn=pose_estimation_jit_fn,
+        params=params,
+        batch_stats=batch_stats,
+        human_detector=human_detector,
+        device_torch=device_torch,
+        mirror_map=mirror_map,
+        score_fn=None,  # Only predict OOD score on one the images.
+        human_detection_threshold=human_detection_threshold,
+        ood_threshold=ood_threshold,
+        num_output_joints=num_output_joints,
+        use_gpu_acceleration=use_gpu_acceleration,
+        verbose=verbose
+    )
+    right_pose = right_pose_predictions[0]['keypoints']
+    right_uncertainty = right_pose_predictions[0]['uncertainties']
+    right_covariance_matrix = right_pose_predictions[0]['covariance_matrix']
+    # Create joint covariance matrices
+    C_joint_list = []
+    for i in range(13):
+        C_joint = create_joint_covariance(
+            mapped_uncertainty_cam1=left_uncertainty[i],
+            mapped_covariance_cam1=left_covariance_matrix[i, 0, 1],
+            mapped_uncertainty_cam2=right_uncertainty[i],
+            mapped_covariance_cam2=right_covariance_matrix[i, 0, 1],
+            cross_covariance=np.zeros((2, 2))  # Assume zero cross-covariance
+        )
+        C_joint_list.append(C_joint)
+
+    P1 = projection_matrices[0]
+    P2 = projection_matrices[1]
+    points_3d, C_3d_all = triangulate_points_with_covariance(
+        left_pose, right_pose, P1, P2, C_joint_list
+    )
+    return points_3d, C_3d_all, ood_score, is_ood
 
 
 def initialize_human_detector(device_torch=None):

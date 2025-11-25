@@ -42,11 +42,8 @@ CONNECTIONS_13 = [
     (8, 10), (10, 12)  # Right leg
 ]
 
-SPLIT = {
-    'train': ['S1'],#, 'S6', 'S7', 'S8', 'S9'],
-    'validation': ['S9'],
-    'test': ['S9']
-}
+SPLIT = {"train": ["S1", "S6", "S7", "S8", "S9"], "validation": ["S11"], "test": ["S5"]}
+
 transform = transforms.Compose([
     transforms.Resize((256, 192)),
     transforms.ToTensor(),
@@ -334,6 +331,97 @@ class Human36mDatasetSequence:
                 frames.append(dummy_frame)
         cap.release()
         return frames
+
+
+class Human36mDatasetSequenceTwoCameras:
+    """
+    Dataset class for loading Human3.6M data for pose estimation (JAX version).
+
+    Handles loading of pose sequences and corresponding video frames from the Human3.6M dataset.
+    Supports splitting data into train/validation/test sets and sequence-based sampling.
+    """
+    def __init__(self, base_directory, split='train', sequence_length=50, transform=None, camera_ids=['55011271', '60457274']):
+        self.sequence_length = sequence_length
+        self.camera_ids = camera_ids
+        self.transform = transform if transform else transforms.ToTensor()
+        self.data = self.load_data(base_directory, split, camera_ids)
+        self.base_directory = base_directory
+        self.split = split
+
+    def load_data(self, base_directory, split, camera_ids):
+        all_data = []
+        for subject in SPLIT[split]:
+            poses_dir = os.path.join(base_directory, subject, 'Poses_D3_Positions')
+            videos_dir = os.path.join(base_directory, subject, 'Videos')
+            print(f"Loading data from {poses_dir} and {videos_dir}")
+            pose_files = [f for f in os.listdir(poses_dir) if f.endswith('.cdf')]
+
+            for pose_file in pose_files:
+                pose_path = os.path.join(poses_dir, pose_file)
+                action = os.path.splitext(pose_file)[0]
+
+                # Look for corresponding video files
+                video_files = [f"{action}.{camera_id}.mp4" for camera_id in camera_ids]
+                video_paths = [os.path.join(videos_dir, vf) for vf in video_files
+                              if os.path.exists(os.path.join(videos_dir, vf))]
+                with CDF(pose_path) as cdf:
+                    poses = cdf['Pose'][:]
+                poses = np.squeeze(poses)
+                poses = poses.reshape(-1, 32, 3)  # (frames, 32 joints, 3 coords)
+                poses_17 = poses[:, JOINT_IDX_17, :]
+                poses_13 = poses_17[:, JOINT_IDX_13, :]
+                # Create non-overlapping sequences
+                num_sequences = len(poses_13) // self.sequence_length
+                for i in range(num_sequences):
+                    start_idx = i * self.sequence_length
+                    end_idx = start_idx + self.sequence_length
+                    sequence = poses_13[start_idx:end_idx]
+                    frame_indices = range(start_idx, end_idx)
+                    all_data.append({
+                        'pose_sequence': sequence,
+                        'video_paths': video_paths,
+                        'frame_indices': frame_indices,
+                    })
+        print(f"Loaded {len(all_data)} sequences for {split} split")
+        return all_data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        sample = self.data[idx]
+        pose_sequence = sample['pose_sequence']
+        video_paths = sample['video_paths']
+        frame_indices = sample['frame_indices']
+
+        # Load the necessary frames from the video
+        all_camera_frames = self.load_frames(video_paths, frame_indices)
+
+        return {
+            'pose_sequence': jnp.array(pose_sequence),
+            'all_camera_frames': all_camera_frames
+        }
+
+    def load_frames(self, video_paths, frame_indices):
+        all_camera_frames = []
+        for video_path in video_paths:
+            cap = cv2.VideoCapture(video_path)
+            frames = []
+            for frame_idx in frame_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ret, frame = cap.read()
+                if ret:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frame_pil = Image.fromarray(frame)
+                    frames.append(frame_pil)
+                else:
+                    print(f"Failed to read frame {frame_idx}")
+                    # Add dummy frame to maintain sequence length
+                    dummy_frame = Image.fromarray(np.zeros((480, 640, 3), dtype=np.uint8))
+                    frames.append(dummy_frame)
+            cap.release()
+            all_camera_frames.append(frames)
+        return all_camera_frames
 
 
 class Human36mDatasetTwoCameras:
