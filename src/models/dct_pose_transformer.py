@@ -102,9 +102,24 @@ class FrequencyAwareAttention(nn.Module):
         freq_weights = self.param("freq_weights", nn.initializers.ones, (1, 1, self.d_model))
 
         weighted_x = x * freq_weights
+        
+        # Potential improvements, not tested.
+        # from flash_attention_jax import flash_attention
+        # from aqt import quantized_einsum
 
         mha = nn.MultiHeadDotProductAttention(
-            num_heads=self.nhead, qkv_features=self.d_model, out_features=self.d_model, name="mha"
+            num_heads=self.nhead,
+            qkv_features=self.d_model,
+            out_features=self.d_model,
+            name="mha",
+            normalize_qk=True,  # Enables training with higher LR.
+            force_fp32_for_softmax=True,  # Better numerical stability for mixed precision data (prob. not needed)
+            kernel_init=nn.initializers.xavier_uniform(),  # Kernel initialization
+            out_kernel_init=nn.initializers.zeros,  # Output kernel init
+            # attention_fn=flash_attention,  # Drop-in replacement
+            # qk_attn_weights_einsum_cls=lambda: quantized_einsum,
+            # attn_weights_value_einsum_cls=lambda: quantized_einsum,
+            precision=jax.lax.Precision.HIGHEST,  # vs DEFAULT or HIGH
         )
 
         # Self-attention: query = key = value
