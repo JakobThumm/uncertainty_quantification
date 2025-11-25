@@ -350,7 +350,7 @@ class Human36mDatasetTwoCameras:
 
     def load_data(self, base_directory, subject, action, camera_ids):
         all_data = []
-        poses_dir = os.path.join(base_directory, subject, 'Poses_D2_Positions')
+        poses_dir = os.path.join(base_directory, subject, 'Poses_D3_Positions')
         videos_dir = os.path.join(base_directory, subject, 'Videos')
 
         pose_files = [f for f in os.listdir(poses_dir) if f.startswith(action) and f.endswith('.cdf')]
@@ -366,7 +366,7 @@ class Human36mDatasetTwoCameras:
             if len(video_paths) == 2:
                 with CDF(pose_path) as cdf:
                     poses = cdf['Pose'][:]
-                    poses = poses.reshape(-1, 32, 2)
+                    poses = poses.reshape(-1, 32, 3)
                     poses_17 = poses[:, JOINT_IDX_17, :]
                     poses_13 = poses_17[:, JOINT_IDX_13, :]
 

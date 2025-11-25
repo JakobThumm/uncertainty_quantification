@@ -256,7 +256,6 @@ def get_h36m_motion_dataset(
         batch_size=batch_size,
         shuffle=shuffle,
         seed=seed,
-        split_train_val_ratio=split_train_val_ratio,
         n_samples=n_samples,
     )
 
@@ -289,7 +288,6 @@ def get_h36m_motion_dataset_with_uncertainty(
         batch_size=batch_size,
         shuffle=shuffle,
         seed=seed,
-        split_train_val_ratio=split_train_val_ratio,
         n_samples=n_samples,
         input_uncertainty=FAKE_INPUT_UNCERTAINTY
     )
@@ -323,7 +321,6 @@ def get_h36m_motion_reduced_output_dataset(
         batch_size=batch_size,
         shuffle=shuffle,
         seed=seed,
-        split_train_val_ratio=split_train_val_ratio,
         n_samples=n_samples,
         reduce_size=True
     )
@@ -358,7 +355,6 @@ def get_h36m_motion_ood_dataset(
         batch_size=batch_size,
         shuffle=shuffle,
         seed=seed,
-        split_train_val_ratio=split_train_val_ratio,
         n_samples=n_samples,
         ood=True
     )
@@ -394,7 +390,6 @@ def get_h36m_motion_reduced_output_ood_dataset(
         batch_size=batch_size,
         shuffle=shuffle,
         seed=seed,
-        split_train_val_ratio=split_train_val_ratio,
         n_samples=n_samples,
         reduce_size=True,
         ood=True

@@ -79,15 +79,17 @@ def main():
     )
     # print(f"Loaded {len(dataset)} sequences.")
 
-    # Evaluate the model
+    # >>> Validation set <<<
+    print("\n" + "=" * 60)
+    print("EVALUATION RESULTS")
+    print("=" * 60)
     predictions, targets, covariance_matrices = predict_poses(
         motion_prediction_jit_fn=motion_prediction_jit_fn,
         params=params,
         batch_stats=batch_stats,
-        dataset_loader=test_loader,
+        dataset_loader=valid_loader,
         device=device,
     )
-
     coverage_stats = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices, std_multipliers=[1, 2, 3, 4]
     )
@@ -99,10 +101,39 @@ def main():
         predictions, targets
     )
 
-    # Debug outputs
+    print(f"\nOverall MPJPE: {mpjpe:.2f} mm, Std: {std_score:.2f} mm")
+
+    # Per-joint errors
+    print("\nPer-Time Errors:")
+    for i, error in enumerate(per_time_errors):
+        print(f"Time point {i + 1} error = {error:7.2f} mm")
+
+    print("\nPer-Joint Errors:")
+    for i, error in enumerate(per_joint_errors):
+        print(f"Joint {i + 1} error = {error:7.2f} mm")
+
+    # >>> Test set <<<
     print("\n" + "=" * 60)
-    print("EVALUATION RESULTS")
+    print("TEST RESULTS")
     print("=" * 60)
+    predictions, targets, covariance_matrices = predict_poses(
+        motion_prediction_jit_fn=motion_prediction_jit_fn,
+        params=params,
+        batch_stats=batch_stats,
+        dataset_loader=test_loader,
+        device=device,
+    )
+    coverage_stats = evaluate_uncertainty_coverage_with_covariance(
+        pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices, std_multipliers=[1, 2, 3, 4]
+    )
+
+    predictions = predictions.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
+    targets = targets.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
+
+    mpjpe, std_score, per_time_errors, per_time_stds, per_joint_errors, per_joint_std = evaluate_scores(
+        predictions, targets
+    )
+
     print(f"\nOverall MPJPE: {mpjpe:.2f} mm, Std: {std_score:.2f} mm")
 
     # Per-joint errors

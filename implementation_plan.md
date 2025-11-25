@@ -83,6 +83,14 @@ We have two things:
     - [x] Create OOD dataset(s)
     - [x] Train and evaluate OOD scores
     - [x] Write eval script ID/OOD
+    - [ ] Train motion prediction with uncertainty model
+      - [x] Train DCT transformer model without uncertainty input
+      - [x] Change dataset to Marians train/eval/test split and retrain.
+      - [ ] Retrain DCT transformer model without uncertainty input
+      - [x] Create dataset with predicted uncertainty of pose estimation model
+      - [ ] Debugging: Test 3D pose estimation statistics on full pipeline
+      - [ ] Train DCT transformer model with uncertainty
+      - [ ] Create evaluation
  6. (Implement the training pipeline in JAX)
     - The training pipeline is based on Marians code in the Experiment 1 folder. 
     - We want to have the training pipeline, so that we could do fine tuning and adaptions if needed.

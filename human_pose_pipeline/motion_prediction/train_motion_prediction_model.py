@@ -644,6 +644,26 @@ def save_model_pickle(
 
     print(f"Saved model pickle to {pickle_path}")
 
+    # Save args.json file with required fields
+    args_dict = {
+        "dataset": "Human36mMotionDataset3D",
+        "data_path": config.data_path,
+        "model": "DCTPoseTransformer",
+        "output_dim": config.seq_len_output * config.input_dim,
+        "input_dim": config.input_dim,
+        "d_model": config.d_model,
+        "nhead": config.nhead,
+        "num_layers": config.num_layers,
+        "seq_len": config.seq_len,
+        "seq_len_output": config.seq_len_output,
+    }
+
+    args_path = os.path.join(stage_dir, "dct_pose_transformer_args.json")
+    with open(args_path, 'w') as f:
+        json.dump(args_dict, f, indent=2)
+
+    print(f"Saved args file to {args_path}")
+
 
 def verify_frozen_params(state_before: TrainState, state_after: TrainState, stage: int):
     """Verify that frozen parameters didn't change during training.
