@@ -20,6 +20,7 @@ The training has multiple stages:
 import os
 import json
 import argparse
+import pickle
 from typing import Any, Dict, Optional, Tuple
 from functools import partial
 from tqdm import tqdm
@@ -604,6 +605,46 @@ def load_checkpoint(
     return restored_state
 
 
+def save_model_pickle(
+    state: TrainState,
+    checkpoint_dir: str,
+    stage: int,
+    config: TrainingConfig,
+):
+    """Save model parameters as a pickle file with the standard structure.
+
+    Args:
+        state: Training state to save
+        checkpoint_dir: Checkpoint directory (parent of stage directories)
+        stage: Training stage (1, 2, or 3)
+        config: Training configuration
+    """
+    # Create stage-specific subdirectory
+    stage_dir = os.path.join(checkpoint_dir, f"stage_{stage}")
+    os.makedirs(stage_dir, exist_ok=True)
+
+    # Create model data with standard structure
+    model_data = {
+        'model': 'DCTPoseTransformer',
+        'params': state.params,
+        'config': {
+            'input_dim': config.input_dim,
+            'd_model': config.d_model,
+            'nhead': config.nhead,
+            'num_layers': config.num_layers,
+            'seq_len': config.seq_len,
+            'seq_len_output': config.seq_len_output,
+        }
+    }
+
+    # Save as pickle
+    pickle_path = os.path.join(stage_dir, "dct_pose_transformer.pickle")
+    with open(pickle_path, 'wb') as f:
+        pickle.dump(model_data, f)
+
+    print(f"Saved model pickle to {pickle_path}")
+
+
 def verify_frozen_params(state_before: TrainState, state_after: TrainState, stage: int):
     """Verify that frozen parameters didn't change during training.
 
@@ -690,6 +731,9 @@ def train_stage(
 
     # Save final checkpoint for this stage
     save_checkpoint(state, checkpoint_dir, n_epochs, stage)
+
+    # Save model as pickle file
+    save_model_pickle(state, checkpoint_dir, stage, config)
 
     return state
 
