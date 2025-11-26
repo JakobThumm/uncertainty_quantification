@@ -99,6 +99,123 @@ def invert_affine_transform_torch_batch(M):
     return iM
 
 
+def cv2_transform_torch(src, M, shift=None):
+    """
+    src:   (B, N, scn)       input vectors
+    M:     (B, dcn, scn) or (dcn, scn)
+    shift: (B, dcn) or (dcn,), optional
+
+    Returns dst: (B, N, dcn)
+    """
+
+    src = src.to(torch.float64)
+
+    # Ensure batching
+    if M.dim() == 2:           # (dcn, scn)
+        M = M.unsqueeze(0)     # (1, dcn, scn)
+
+    B, N, scn = src.shape
+    Bm, dcn, scn_M = M.shape
+    assert scn == scn_M, "M must match src channel count"
+
+    if Bm == 1 and B > 1:
+        M = M.expand(B, -1, -1)
+    elif Bm != B:
+        raise ValueError("Batch mismatch between src and M")
+
+    # Linear transform: dst = src @ M^T
+    dst = torch.matmul(src, M.transpose(1, 2))   # (B, N, dcn)
+
+    if shift is not None:
+        if shift.dim() == 1:
+            shift = shift.unsqueeze(0)  # (1, dcn)
+
+        Bs, dcn_s = shift.shape
+        assert dcn_s == dcn, "Shift size mismatch"
+
+        if Bs == 1 and B > 1:
+            shift = shift.expand(B, -1)
+        elif Bs != B:
+            raise ValueError("Batch mismatch between src and shift")
+
+        dst = dst + shift[:, None, :]  # broadcast to (B, N, dcn)
+
+    return dst
+
+
+def transform_predictions_to_original_space_batched(
+    pred_joints_normalized: torch.Tensor,
+    trans: torch.Tensor,
+    scale_x: float,
+    scale_y: float,
+    uncertainties: Optional[torch.Tensor] = None,
+    covariance: Optional[torch.Tensor] = None
+):
+    """
+    Transform model predictions from normalized coordinates back to original image space.
+
+    This function performs the full reverse transformation pipeline:
+    1. Convert normalized coords (-0.5 to 0.5) to pixel coords in preprocessed image
+    2. Apply inverse affine transformation to get coords in resized image
+    3. Scale coords to original image dimensions
+    4. Scale uncertainties appropriately if provided
+
+    Args:
+        pred_joints_normalized: Joint coordinates in normalized space (-0.5 to 0.5), shape (B, N, 2)
+        trans: Affine transformation matrix used during preprocessing (B, 3, 2)
+        scale_x: Scale factor from resized to original width
+        scale_y: Scale factor from resized to original height
+        uncertainties: Optional uncertainty values, shape (B, N, 2)
+        covariance: Optional covariance values, shape (B, N,)
+
+    Returns:
+        dict: Dictionary containing:
+            - 'keypoints': Joint coordinates in original image space
+            - 'uncertainties': Scaled uncertainties (if provided)
+            - 'covariance': Scaled covariance (if provided)
+    """
+    device = pred_joints_normalized.device
+    # Step 1: Convert normalized coordinates to pixel coordinates in preprocessed image
+    img_height, img_width = TRANSFORM_IMAGE_SIZE[1], TRANSFORM_IMAGE_SIZE[0]
+    pred_joints_pixel = torch.zeros_like(pred_joints_normalized, device=device)
+    pred_joints_pixel[:, :, 0] = (pred_joints_normalized[:, :, 0] + 0.5) * img_width
+    pred_joints_pixel[:, :, 1] = (pred_joints_normalized[:, :, 1] + 0.5) * img_height
+
+    # Step 2: Apply inverse affine transformation
+    trans_inv = invert_affine_transform_torch_batch(trans)
+    
+    pred_joints_resized = cv2_transform_torch(pred_joints_pixel, trans_inv)
+
+    # Step 3: Scale to original image dimensions
+    pred_joints_original = pred_joints_resized
+    pred_joints_original[:, :, 0] *= scale_x
+    pred_joints_original[:, :, 1] *= scale_y
+
+    result = {'keypoints': pred_joints_original}
+
+    # Step 4: Transform uncertainties if provided
+    if uncertainties is not None:
+        # Scale uncertainties to preprocessed image dimensions
+        uncertainties_pixel = uncertainties
+        uncertainties_pixel[:, :, 0] = uncertainties[:, :, 0] * img_width
+        uncertainties_pixel[:, :, 1] = uncertainties[:, :, 1] * img_height
+
+        # Scale to original image dimensions
+        uncertainties_original = uncertainties_pixel
+        uncertainties_original[:, :, 0] *= scale_x
+        uncertainties_original[:, :, 1] *= scale_y
+
+        result['uncertainties'] = uncertainties_original
+
+        # Transform covariance if provided
+        if covariance is not None:
+            covariance_scaled = covariance * img_width * img_height
+            covariance_original = covariance_scaled * scale_x * scale_y
+            result['covariance'] = covariance_original
+
+    return result
+
+
 def resize_image_gpu(
     pil_image: Image.Image, target_size: Tuple[int, int] = YOLO_IMAGE_SIZE, device: str = "cuda"
 ) -> Tuple[Image.Image, Tuple[int, int], Tuple[float, float]]:
@@ -269,7 +386,6 @@ def preprocess_bbox_image_gpu(
 def preprocess_bbox_image_batched_gpu(
     resized_images: torch.Tensor,
     bbox: torch.Tensor,
-    mask: torch.Tensor,
     output_size: Tuple[int, int] = (TRANSFORM_IMAGE_SIZE[0], TRANSFORM_IMAGE_SIZE[1]),
     device: str = "cuda",
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -282,7 +398,6 @@ def preprocess_bbox_image_batched_gpu(
     Args:
         resized_images: Resized images, [B, H, W, C]
         bbox: Bounding boxes, one per image, [B, 4]
-        mask: Whether human in image, [B]
         output_size: Output image size (width, height)
         device: Device to use ('cuda' or 'cpu')
 
@@ -627,43 +742,30 @@ def extract_bounding_box_images_gpu(
 def extract_bounding_box_images_batched(
     resized_images: torch.Tensor,
     person_boxes: torch.Tensor,
-    mask: torch.Tensor,
     scale_factors: Tuple[float, float],
     device: str = "cuda",
-) -> List[dict]:
+) -> dict:
     """
     GPU-accelerated bounding box extraction for all detected persons.
 
     Args:
         resized_images: Resized images, [B, H, W, C]
         person_boxes: Bounding boxes, one per image, [B, 4]
-        mask: Whether human in image, [B]
         scale_factors: (scale_x, scale_y) from resize operation
         device: Device to use ('cuda' or 'cpu')
 
     Returns:
-        List of dictionaries with preprocessed bounding box data
+        Dictionaries with preprocessed bounding box data
     """
-    if not person_boxes:
-        return []
-
-    bounding_box_images = []
-    scale_x, scale_y = scale_factors
-
-    for bbox in person_boxes:
-        # Preprocess this bounding box on GPU
-        img_preprocessed, center, scale, trans, processed_bbox = preprocess_bbox_image_gpu(
-            resized_image_np, bbox, device=device
-        )
-
-        bbox_struct = {
-            "scale_factors_yolo": scale_factors,
-            "bbox": bbox,
-            "image": img_preprocessed,  # Already in JAX-compatible format (1, 3, H, W)
-            "center": center,
-            "scale": scale,
-            "trans": trans,
-        }
-        bounding_box_images.append(bbox_struct)
-
-    return bounding_box_images
+    img_preprocessed, center, scale, trans, processed_bbox = preprocess_bbox_image_batched_gpu(
+        resized_images, person_boxes, device=device
+    )
+    bbox_struct = {
+        "scale_factors_yolo": scale_factors,
+        "bbox": person_boxes,
+        "image": img_preprocessed,  # Already in JAX-compatible format (1, 3, H, W)
+        "center": center,
+        "scale": scale,
+        "trans": trans,
+    }
+    return bbox_struct

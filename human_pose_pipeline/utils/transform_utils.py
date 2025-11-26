@@ -325,7 +325,7 @@ def transform_coordinates_back_to_original(pred_joints_pixel, trans, scale_x=1.0
 
 
 def transform_predictions_to_original_space(pred_joints_normalized, trans, scale_x, scale_y,
-                                           uncertainties=None, covariance=None):
+                                            uncertainties=None, covariance=None):
     """
     Transform model predictions from normalized coordinates back to original image space.
 
@@ -387,6 +387,7 @@ def transform_predictions_to_original_space(pred_joints_normalized, trans, scale
             result['covariance'] = covariance_original
 
     return result
+
 
 def denormalize_image_regressflow(image):
     """

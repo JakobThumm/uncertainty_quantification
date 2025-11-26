@@ -24,6 +24,8 @@ from src.ood_scores.lm_lanczos import load_score_functions
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
+)
+from human_pose_pipeline.pose_estimation.inference_helper_batched import (
     process_frame_3d
 )
 from human_pose_pipeline.pose_estimation.triangulation_helper import (
