@@ -414,7 +414,7 @@ def _get_affine_transform_torch(
     src_w = scale[:, 0]
     dst_w, dst_h = output_size
 
-    rot_rad = torch.pi * torch.Tensor(rot, device=device) / 180.0
+    rot_rad = torch.pi * torch.tensor(rot, device=device) / 180.0
     sn, cs = torch.sin(rot_rad), torch.cos(rot_rad)
 
     # Source direction
