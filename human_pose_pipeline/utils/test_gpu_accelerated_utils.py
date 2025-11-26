@@ -8,7 +8,11 @@ import unittest
 import numpy as np
 import torch
 import cv2
-from typing import Tuple
+import sys
+import os
+
+# Add parent directory to path to import transform_utils
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from gpu_accelerated_utils import (
     get_affine_transform_torch_batch,
@@ -19,7 +23,11 @@ from gpu_accelerated_utils import (
     _apply_affine_transform_batched,
     preprocess_bbox_image_gpu,
     preprocess_bbox_image_batched_gpu,
+    cv2_transform_torch,
+    transform_predictions_to_original_space_batched,
 )
+
+from transform_utils import transform_predictions_to_original_space
 
 
 class TestAffineTransformFunctions(unittest.TestCase):
@@ -577,10 +585,9 @@ class TestAffineTransformFunctions(unittest.TestCase):
         # Process batch
         imgs_torch = torch.from_numpy(imgs_np).to(self.device)
         bboxes_torch = torch.from_numpy(bboxes_np).to(self.device)
-        mask_torch = torch.ones(batch_size, dtype=torch.bool, device=self.device)
 
         img_prep_batch, center_batch, scale_batch, trans_batch, bbox_batch = preprocess_bbox_image_batched_gpu(
-            imgs_torch, bboxes_torch, mask_torch, output_size=output_size, device=self.device
+            imgs_torch, bboxes_torch, output_size, self.device
         )
 
         # Compare results for each item in batch
@@ -647,11 +654,10 @@ class TestAffineTransformFunctions(unittest.TestCase):
         bboxes_torch = torch.rand(batch_size, 4, device=self.device) * 80 + 10
         bboxes_torch[:, 2] += bboxes_torch[:, 0]  # Ensure xmax > xmin
         bboxes_torch[:, 3] += bboxes_torch[:, 1]  # Ensure ymax > ymin
-        mask_torch = torch.ones(batch_size, dtype=torch.bool, device=self.device)
 
         # Process batch
         img_prep_batch, center_batch, scale_batch, trans_batch, bbox_batch = preprocess_bbox_image_batched_gpu(
-            imgs_torch, bboxes_torch, mask_torch, output_size=output_size, device=self.device
+            imgs_torch, bboxes_torch, output_size, self.device
         )
 
         # Check output shapes
@@ -664,6 +670,218 @@ class TestAffineTransformFunctions(unittest.TestCase):
         self.assertEqual(scale_batch.shape, (batch_size, 2), "Scale shape is incorrect")
         self.assertEqual(trans_batch.shape, (batch_size, 2, 3), "Transform shape is incorrect")
         self.assertEqual(bbox_batch.shape, (batch_size, 4), "Bbox shape is incorrect")
+
+    def test_cv2_transform_torch_vs_cv2_transform_single(self):
+        """Test that cv2_transform_torch matches cv2.transform for single batch."""
+        # Create test data: N points, 2D coordinates
+        num_points = 17  # e.g., number of keypoints
+        src_np = np.random.rand(num_points, 2).astype(np.float32) * 100
+
+        # Create a 2x3 affine transformation matrix
+        M_2x3 = np.random.rand(2, 3).astype(np.float64)
+
+        # cv2.transform expects (1, N, 2) and (2, 3) matrix
+        src_cv2 = np.expand_dims(src_np, axis=0)  # (1, N, 2)
+        dst_cv2 = cv2.transform(src_cv2, M_2x3)[0]  # (N, 2)
+
+        # cv2_transform_torch can accept full 2x3 matrix like cv2.transform
+        src_torch = torch.from_numpy(src_np).unsqueeze(0).to(self.device)  # (1, N, 2)
+        M_torch = torch.from_numpy(M_2x3).to(self.device)  # (2, 3)
+
+        dst_torch = cv2_transform_torch(src_torch, M_torch)  # (1, N, 2)
+        dst_torch_np = dst_torch.cpu().numpy().squeeze(0)  # (N, 2)
+
+        # Compare results
+        np.testing.assert_allclose(
+            dst_torch_np,
+            dst_cv2,
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="cv2_transform_torch doesn't match cv2.transform",
+        )
+
+    def test_cv2_transform_torch_vs_cv2_transform_batched(self):
+        """Test that cv2_transform_torch matches cv2.transform for batched data."""
+        batch_size = 5
+        num_points = 17
+        src_batch_np = np.random.rand(batch_size, num_points, 2).astype(np.float32) * 100
+
+        # Create different transformation matrices for each batch item
+        M_batch_np = np.random.rand(batch_size, 2, 3).astype(np.float64)
+
+        # Process each with cv2.transform
+        dst_cv2_list = []
+        for i in range(batch_size):
+            src_cv2 = np.expand_dims(src_batch_np[i], axis=0)  # (1, N, 2)
+            dst_cv2 = cv2.transform(src_cv2, M_batch_np[i])[0]  # (N, 2)
+            dst_cv2_list.append(dst_cv2)
+        dst_cv2_batch = np.stack(dst_cv2_list, axis=0)  # (B, N, 2)
+
+        # Process with cv2_transform_torch using full 2x3 format
+        src_torch = torch.from_numpy(src_batch_np).to(self.device)  # (B, N, 2)
+        M_torch = torch.from_numpy(M_batch_np).to(self.device)  # (B, 2, 3)
+
+        dst_torch = cv2_transform_torch(src_torch, M_torch)  # (B, N, 2)
+        dst_torch_np = dst_torch.cpu().numpy()
+
+        # Compare results
+        np.testing.assert_allclose(
+            dst_torch_np,
+            dst_cv2_batch,
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="Batched cv2_transform_torch doesn't match cv2.transform",
+        )
+
+    def test_cv2_transform_torch_no_shift(self):
+        """Test cv2_transform_torch without shift parameter."""
+        batch_size = 3
+        num_points = 10
+        src_batch_np = np.random.rand(batch_size, num_points, 2).astype(np.float32) * 50
+
+        # Create transformation matrices (linear part only)
+        M_batch_np = np.random.rand(batch_size, 2, 2).astype(np.float64)
+
+        # Process each with cv2.transform (add zero shift for cv2)
+        dst_cv2_list = []
+        for i in range(batch_size):
+            M_2x3 = np.hstack([M_batch_np[i], np.zeros((2, 1))])  # Add zero shift
+            src_cv2 = np.expand_dims(src_batch_np[i], axis=0)
+            dst_cv2 = cv2.transform(src_cv2, M_2x3)[0]
+            dst_cv2_list.append(dst_cv2)
+        dst_cv2_batch = np.stack(dst_cv2_list, axis=0)
+
+        # Process with cv2_transform_torch (no shift)
+        src_torch = torch.from_numpy(src_batch_np).to(self.device)
+        M_torch = torch.from_numpy(M_batch_np).to(self.device)
+
+        dst_torch = cv2_transform_torch(src_torch, M_torch, shift=None)
+        dst_torch_np = dst_torch.cpu().numpy()
+
+        # Compare results
+        np.testing.assert_allclose(
+            dst_torch_np,
+            dst_cv2_batch,
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="cv2_transform_torch without shift doesn't match cv2.transform",
+        )
+
+    def test_transform_predictions_batched_vs_single(self):
+        """Test that transform_predictions_to_original_space_batched matches single version."""
+        batch_size = 4
+        num_joints = 17
+        scale_x, scale_y = 1.5, 1.2
+
+        # Create test data
+        pred_joints_np = (np.random.rand(batch_size, num_joints, 2).astype(np.float32) - 0.5)  # Normalized coords
+        trans_batch_np = np.random.rand(batch_size, 2, 3).astype(np.float32)
+
+        # Process each individually with the single version
+        single_results = []
+        for i in range(batch_size):
+            result = transform_predictions_to_original_space(
+                pred_joints_np[i],
+                trans_batch_np[i],
+                scale_x,
+                scale_y,
+                uncertainties=None,
+                covariance=None
+            )
+            single_results.append(result)
+
+        # Process batch with batched version
+        pred_joints_torch = torch.from_numpy(pred_joints_np).to(self.device)
+        trans_torch = torch.from_numpy(trans_batch_np).to(self.device)
+
+        batch_result = transform_predictions_to_original_space_batched(
+            pred_joints_torch,
+            trans_torch,
+            scale_x,
+            scale_y,
+            uncertainties=None,
+            covariance=None
+        )
+
+        # Compare results
+        for i in range(batch_size):
+            with self.subTest(batch_idx=i):
+                np.testing.assert_allclose(
+                    single_results[i]['keypoints'],
+                    batch_result['keypoints'][i].cpu().numpy(),
+                    rtol=1e-3,
+                    atol=1e-4,
+                    err_msg=f"Keypoints don't match for batch index {i}",
+                )
+
+    def test_transform_predictions_batched_with_uncertainties(self):
+        """Test transform_predictions_to_original_space_batched with uncertainties."""
+        batch_size = 3
+        num_joints = 17
+        scale_x, scale_y = 2.0, 1.8
+
+        # Create test data with uncertainties
+        pred_joints_np = (np.random.rand(batch_size, num_joints, 2).astype(np.float32) - 0.5)
+        uncertainties_np = np.random.rand(batch_size, num_joints, 2).astype(np.float32) * 0.1
+        covariance_np = np.random.rand(batch_size, num_joints).astype(np.float32) * 0.01
+        trans_batch_np = np.random.rand(batch_size, 2, 3).astype(np.float32)
+
+        # Process each individually
+        single_results = []
+        for i in range(batch_size):
+            result = transform_predictions_to_original_space(
+                pred_joints_np[i],
+                trans_batch_np[i],
+                scale_x,
+                scale_y,
+                uncertainties=uncertainties_np[i],
+                covariance=covariance_np[i]
+            )
+            single_results.append(result)
+
+        # Process batch
+        pred_joints_torch = torch.from_numpy(pred_joints_np).to(self.device)
+        uncertainties_torch = torch.from_numpy(uncertainties_np).to(self.device)
+        covariance_torch = torch.from_numpy(covariance_np).to(self.device)
+        trans_torch = torch.from_numpy(trans_batch_np).to(self.device)
+
+        batch_result = transform_predictions_to_original_space_batched(
+            pred_joints_torch,
+            trans_torch,
+            scale_x,
+            scale_y,
+            uncertainties=uncertainties_torch,
+            covariance=covariance_torch
+        )
+
+        # Compare results
+        for i in range(batch_size):
+            with self.subTest(batch_idx=i, field='keypoints'):
+                np.testing.assert_allclose(
+                    single_results[i]['keypoints'],
+                    batch_result['keypoints'][i].cpu().numpy(),
+                    rtol=1e-3,
+                    atol=1e-4,
+                    err_msg=f"Keypoints don't match for batch index {i}",
+                )
+
+            with self.subTest(batch_idx=i, field='uncertainties'):
+                np.testing.assert_allclose(
+                    single_results[i]['uncertainties'],
+                    batch_result['uncertainties'][i].cpu().numpy(),
+                    rtol=1e-3,
+                    atol=1e-4,
+                    err_msg=f"Uncertainties don't match for batch index {i}",
+                )
+
+            with self.subTest(batch_idx=i, field='covariance'):
+                np.testing.assert_allclose(
+                    single_results[i]['covariance'],
+                    batch_result['covariance'][i].cpu().numpy(),
+                    rtol=1e-3,
+                    atol=1e-4,
+                    err_msg=f"Covariance doesn't match for batch index {i}",
+                )
 
 
 def run_tests():

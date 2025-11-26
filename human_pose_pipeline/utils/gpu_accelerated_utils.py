@@ -101,30 +101,45 @@ def invert_affine_transform_torch_batch(M):
 
 def cv2_transform_torch(src, M, shift=None):
     """
-    src:   (B, N, scn)       input vectors
-    M:     (B, dcn, scn) or (dcn, scn)
-    shift: (B, dcn) or (dcn,), optional
+    PyTorch implementation of cv2.transform.
 
-    Returns dst: (B, N, dcn)
+    Args:
+        src:   (B, N, scn) input vectors
+        M:     (B, dcn, scn+1) or (dcn, scn+1) or (B, dcn, scn) or (dcn, scn)
+               If last dimension is scn+1, it's treated as [linear | shift] like cv2.transform
+               If last dimension is scn, it's just the linear transformation
+        shift: (B, dcn) or (dcn,), optional (only used if M doesn't include shift)
+
+    Returns:
+        dst: (B, N, dcn)
     """
 
     src = src.to(torch.float64)
 
     # Ensure batching
-    if M.dim() == 2:           # (dcn, scn)
-        M = M.unsqueeze(0)     # (1, dcn, scn)
+    if M.dim() == 2:           # (dcn, scn) or (dcn, scn+1)
+        M = M.unsqueeze(0)     # (1, dcn, scn) or (1, dcn, scn+1)
 
     B, N, scn = src.shape
-    Bm, dcn, scn_M = M.shape
-    assert scn == scn_M, "M must match src channel count"
+    Bm, dcn, last_dim = M.shape
+
+    # Check if M includes shift (like cv2.transform format: 2x3 matrix)
+    if last_dim == scn + 1:
+        # M is (B, dcn, scn+1) - split into linear part and shift
+        M_linear = M[:, :, :scn]  # (B, dcn, scn)
+        shift = M[:, :, scn]       # (B, dcn)
+    else:
+        # M is (B, dcn, scn) - just linear transformation
+        assert last_dim == scn, f"M last dimension {last_dim} must match src channel count {scn} or be {scn+1}"
+        M_linear = M
 
     if Bm == 1 and B > 1:
-        M = M.expand(B, -1, -1)
+        M_linear = M_linear.expand(B, -1, -1)
     elif Bm != B:
         raise ValueError("Batch mismatch between src and M")
 
     # Linear transform: dst = src @ M^T
-    dst = torch.matmul(src, M.transpose(1, 2))   # (B, N, dcn)
+    dst = torch.matmul(src, M_linear.transpose(1, 2))   # (B, N, dcn)
 
     if shift is not None:
         if shift.dim() == 1:
