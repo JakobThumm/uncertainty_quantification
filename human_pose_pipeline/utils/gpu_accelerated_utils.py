@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import jax.numpy as jnp
+import jax
 import cv2
 from PIL import Image
 from typing import Tuple, List, Optional
@@ -18,6 +19,13 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
     TRANSFORM_IMAGE_SIZE,
     NORMALIZATION_OFFSET,
 )
+
+
+def jax_to_torch(jax_array):
+    """Converts a JAX array to a PyTorch tensor using DLPack."""
+    dlpack_tensor = jax.dlpack.from_dlpack(jax_array)
+    torch_tensor = torch.utils.dlpack.from_dlpack(dlpack_tensor)
+    return torch_tensor
 
 
 def get_affine_transform_torch_batch(src, dst):
@@ -198,7 +206,7 @@ def transform_predictions_to_original_space_batched(
 
     # Step 2: Apply inverse affine transformation
     trans_inv = invert_affine_transform_torch_batch(trans)
-    
+
     pred_joints_resized = cv2_transform_torch(pred_joints_pixel, trans_inv)
 
     # Step 3: Scale to original image dimensions
