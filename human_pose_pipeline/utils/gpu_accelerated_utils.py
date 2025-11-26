@@ -328,9 +328,7 @@ def preprocess_bbox_image_batched_gpu(
     scale = scale * scale_mult
 
     # Compute affine transform 
-    trans = get_affine_transform_torch_batch(center, s)
-    trans = _get_affine_transform_cv2(center_np, scale_np, output_size)
-    trans_tensor = torch.from_numpy(trans).to(device).float()
+    trans = _get_affine_transform_torch(center, scale, output_size)
 
     # Apply affine transformation to image
     img_preprocessed = _apply_affine_transform_gpu(img_tensor, trans_tensor, output_size)
@@ -501,6 +499,52 @@ def _apply_affine_transform_gpu(
 
     # Create sampling grid and apply transformation
     grid = F.affine_grid(trans_pt, [1, img_tensor.shape[1], output_h, output_w], align_corners=False)
+    transformed = F.grid_sample(img_tensor, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
+
+    return transformed
+
+
+def _apply_affine_transform_batched(
+    img_tensor: torch.Tensor, trans: torch.Tensor, output_size: Tuple[int, int], device="cuda"
+) -> torch.Tensor:
+    """
+    Apply affine transformation to image tensor on GPU.
+
+    Args:
+        img_tensor: (B, C, H, W) image tensor
+        trans: (B, 2, 3) affine transformation matrix (OpenCV format)
+        output_size: (width, height) output size
+
+    Returns:
+        transformed: (B, C, output_h, output_w) transformed image
+    """
+    B, C, input_h, input_w = img_tensor.shape
+    output_w, output_h = output_size
+
+    # Convert OpenCV affine matrix to PyTorch format
+    # Invert the transformation
+    trans_inv = invert_affine_transform_torch_batch(trans)
+
+    trans_inv_hom = torch.eye(3, device=device, dtype=torch.float32).unsqueeze(0).repeat(B, 1, 1)
+    trans_inv_hom[:, :2, :] = trans_inv
+
+    # Scale transformations for normalized coordinates
+    scale_out = torch.tensor(
+        [[output_w / 2.0, 0, output_w / 2.0], [0, output_h / 2.0, output_h / 2.0], [0, 0, 1]],
+        device=device,
+        dtype=torch.float32,
+    ).unsqueeze(0).repeat(B, 1, 1,)
+
+    scale_in = torch.tensor(
+        [[2.0 / input_w, 0, -1], [0, 2.0 / input_h, -1], [0, 0, 1]], device=device, dtype=torch.float32
+    ).unsqueeze(0).repeat(B, 1, 1,)
+
+    # Combine transformations
+    trans_pt_hom = torch.mm(torch.mm(scale_in, trans_inv_hom), scale_out)
+    trans_pt = trans_pt_hom[:, :2, :]
+
+    # Create sampling grid and apply transformation
+    grid = F.affine_grid(trans_pt, [B, C, output_h, output_w], align_corners=False)
     transformed = F.grid_sample(img_tensor, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
 
     return transformed
