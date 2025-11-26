@@ -17,6 +17,8 @@ from gpu_accelerated_utils import (
     invert_affine_transform_torch_batch,
     _apply_affine_transform_gpu,
     _apply_affine_transform_batched,
+    preprocess_bbox_image_gpu,
+    preprocess_bbox_image_batched_gpu,
 )
 
 
@@ -541,6 +543,127 @@ class TestAffineTransformFunctions(unittest.TestCase):
             expected_shape,
             f"Output shape {result.shape} doesn't match expected {expected_shape}",
         )
+
+    def test_preprocess_bbox_batched_vs_single(self):
+        """Test that preprocess_bbox_image_batched_gpu matches multiple preprocess_bbox_image_gpu calls."""
+        batch_size = 4
+        img_size = (640, 640, 3)  # (H, W, C)
+        output_size = (192, 256)  # Common pose estimation size
+
+        # Create test images (as numpy arrays for single version)
+        imgs_np = (np.random.rand(batch_size, *img_size) * 255).astype(np.uint8)
+
+        # Create random bounding boxes for each image
+        bboxes_np = np.random.rand(batch_size, 4).astype(np.float32)
+        bboxes_np[:, 0] *= 50  # xmin
+        bboxes_np[:, 1] *= 50  # ymin
+        bboxes_np[:, 2] = bboxes_np[:, 0] + 30 + np.random.rand(batch_size) * 30  # xmax
+        bboxes_np[:, 3] = bboxes_np[:, 1] + 40 + np.random.rand(batch_size) * 40  # ymax
+
+        # Process each image individually
+        single_results = []
+        for i in range(batch_size):
+            img_prep, center, scale, trans, proc_bbox = preprocess_bbox_image_gpu(
+                imgs_np[i], bboxes_np[i].tolist(), output_size=output_size, device=self.device
+            )
+            single_results.append({
+                'image': img_prep,
+                'center': center,
+                'scale': scale,
+                'trans': trans,
+                'bbox': proc_bbox
+            })
+
+        # Process batch
+        imgs_torch = torch.from_numpy(imgs_np).to(self.device)
+        bboxes_torch = torch.from_numpy(bboxes_np).to(self.device)
+        mask_torch = torch.ones(batch_size, dtype=torch.bool, device=self.device)
+
+        img_prep_batch, center_batch, scale_batch, trans_batch, bbox_batch = preprocess_bbox_image_batched_gpu(
+            imgs_torch, bboxes_torch, mask_torch, output_size=output_size, device=self.device
+        )
+
+        # Compare results for each item in batch
+        for i in range(batch_size):
+            with self.subTest(batch_idx=i):
+                # Compare images (convert from JAX to numpy for single result)
+                # Single result has shape (1, 3, H, W), need to squeeze batch dimension
+                single_img = np.array(single_results[i]['image']).squeeze(0)  # JAX to numpy, (3, H, W)
+                batch_img = img_prep_batch[i].cpu().numpy()  # (3, H, W)
+
+                # Use slightly relaxed tolerance for images due to cv2 vs torch differences
+                np.testing.assert_allclose(
+                    single_img,
+                    batch_img,
+                    rtol=1e-3,  # 0.1% relative tolerance
+                    atol=1e-4,  # Absolute tolerance for near-zero values
+                    err_msg=f"Preprocessed images don't match for batch index {i}",
+                )
+
+                # Compare centers
+                np.testing.assert_allclose(
+                    single_results[i]['center'],
+                    center_batch[i].cpu().numpy(),
+                    rtol=self.tolerance_rtol,
+                    atol=self.tolerance_atol,
+                    err_msg=f"Centers don't match for batch index {i}",
+                )
+
+                # Compare scales
+                np.testing.assert_allclose(
+                    single_results[i]['scale'],
+                    scale_batch[i].cpu().numpy(),
+                    rtol=self.tolerance_rtol,
+                    atol=self.tolerance_atol,
+                    err_msg=f"Scales don't match for batch index {i}",
+                )
+
+                # Compare transformations
+                np.testing.assert_allclose(
+                    single_results[i]['trans'],
+                    trans_batch[i].cpu().numpy(),
+                    rtol=self.tolerance_rtol,
+                    atol=self.tolerance_atol,
+                    err_msg=f"Transformations don't match for batch index {i}",
+                )
+
+                # Compare processed bboxes
+                np.testing.assert_allclose(
+                    single_results[i]['bbox'],
+                    bbox_batch[i].cpu().numpy(),
+                    rtol=self.tolerance_rtol,
+                    atol=self.tolerance_atol,
+                    err_msg=f"Processed bboxes don't match for batch index {i}",
+                )
+
+    def test_preprocess_bbox_batched_output_shapes(self):
+        """Test that preprocess_bbox_image_batched_gpu produces correct output shapes."""
+        batch_size = 5
+        img_size = (128, 96)  # (H, W)
+        output_size = (192, 256)
+
+        # Create test data
+        imgs_torch = torch.rand(batch_size, *img_size, 3, device=self.device) * 255
+        bboxes_torch = torch.rand(batch_size, 4, device=self.device) * 80 + 10
+        bboxes_torch[:, 2] += bboxes_torch[:, 0]  # Ensure xmax > xmin
+        bboxes_torch[:, 3] += bboxes_torch[:, 1]  # Ensure ymax > ymin
+        mask_torch = torch.ones(batch_size, dtype=torch.bool, device=self.device)
+
+        # Process batch
+        img_prep_batch, center_batch, scale_batch, trans_batch, bbox_batch = preprocess_bbox_image_batched_gpu(
+            imgs_torch, bboxes_torch, mask_torch, output_size=output_size, device=self.device
+        )
+
+        # Check output shapes
+        self.assertEqual(
+            img_prep_batch.shape,
+            (batch_size, 3, output_size[1], output_size[0]),
+            "Preprocessed image shape is incorrect",
+        )
+        self.assertEqual(center_batch.shape, (batch_size, 2), "Center shape is incorrect")
+        self.assertEqual(scale_batch.shape, (batch_size, 2), "Scale shape is incorrect")
+        self.assertEqual(trans_batch.shape, (batch_size, 2, 3), "Transform shape is incorrect")
+        self.assertEqual(bbox_batch.shape, (batch_size, 4), "Bbox shape is incorrect")
 
 
 def run_tests():

@@ -327,24 +327,22 @@ def preprocess_bbox_image_batched_gpu(
     # Apply scale multiplier
     scale = scale * scale_mult
 
-    # Compute affine transform 
-    trans = _get_affine_transform_torch(center, scale, output_size)
+    # Compute affine transform
+    trans = _get_affine_transform_torch(center, scale, output_size, device=device)
 
     # Apply affine transformation to image
-    img_preprocessed = _apply_affine_transform_gpu(img_tensor, trans_tensor, output_size)
+    img_preprocessed = _apply_affine_transform_batched(img_tensor, trans, output_size, device=device)
 
     # Apply RegressFlow normalization
-    normalization_offset = torch.tensor(NORMALIZATION_OFFSET, device=device, dtype=torch.float32).view(1, 3, 1, 1)
+    normalization_offset = torch.tensor(
+        NORMALIZATION_OFFSET, device=device, dtype=torch.float32
+    ).view(1, 3, 1, 1)
     img_preprocessed = img_preprocessed + normalization_offset
 
     # Compute processed bbox
-    processed_bbox = _center_scale_to_box(center_np, scale_np)
+    processed_bbox = _center_scale_to_box_batched(center, scale)
 
-    # Convert to JAX array for compatibility with existing code
-    img_preprocessed_np = img_preprocessed.cpu().numpy()
-    img_preprocessed_jax = jnp.array(img_preprocessed_np, dtype=jnp.float32)
-
-    return img_preprocessed_jax, center_np, scale_np, trans, processed_bbox
+    return img_preprocessed, center, scale, trans, processed_bbox
 
 
 def _get_affine_transform_cv2(
@@ -560,6 +558,25 @@ def _center_scale_to_box(center: np.ndarray, scale: np.ndarray) -> np.ndarray:
     xmax = xmin + w
     ymax = ymin + h
     return np.array([xmin, ymin, xmax, ymax])
+
+
+def _center_scale_to_box_batched(center: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    """Convert center and scale to bounding box coordinates.
+
+    Args:
+      center [B, 2]
+      scale [B, 2]
+    Returns:
+      box [B, 4]
+    """
+    pixel_std = 1.0
+    w = scale[:, 0] * pixel_std
+    h = scale[:, 1] * pixel_std
+    xmin = center[:, 0] - w * 0.5
+    ymin = center[:, 1] - h * 0.5
+    xmax = xmin + w
+    ymax = ymin + h
+    return torch.stack([xmin, ymin, xmax, ymax], dim=1)
 
 
 def extract_bounding_box_images_gpu(
