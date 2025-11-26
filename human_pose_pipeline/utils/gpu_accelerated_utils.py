@@ -540,7 +540,7 @@ def _apply_affine_transform_batched(
     ).unsqueeze(0).repeat(B, 1, 1,)
 
     # Combine transformations
-    trans_pt_hom = torch.mm(torch.mm(scale_in, trans_inv_hom), scale_out)
+    trans_pt_hom = torch.bmm(torch.bmm(scale_in, trans_inv_hom), scale_out)
     trans_pt = trans_pt_hom[:, :2, :]
 
     # Create sampling grid and apply transformation
