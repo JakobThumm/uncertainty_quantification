@@ -2,259 +2,234 @@
 
 The model input is the predicted 3D human pose with covariance matrix.
 The model output is the predicted 3D human pose in the next 10 timesteps.
-The ground truth future human pose is available in datasets/H36M/pre_processed/{subject}/PreprocessedPoses.
-However, as the model input should be uncertain, we have to use the 3D human pose estimation
-  (see: human_pose_pipeline/examples/pose_estimation_3D.py) to create the model input.
+The ground truth future human pose is available in datasets/H36M/extracted.
 
-This script loads the preprocessed images in datasets/H36M/pre_processed/{subject}/PreprocessedImages,
-  predicts the human pose and uncertainty covariance matrices, and saves the data to datasets/H36M/pre_processed_motion.
+This script loads the raw extracted H36M data from datasets/H36M/extracted,
+  predicts the human pose and uncertainty covariance matrices using batched processing,
+  and saves the data to datasets/H36M/pre_processed_motion.
 """
 
 import os
 import argparse
 import numpy as np
+import torch
 from tqdm import tqdm
 
-from human_pose_pipeline.utils.transform_utils import transform_predictions_to_original_space
+from src.datasets.h36m import Human36mDatasetSequenceTwoCameras, SPLIT
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
-    joint_mapping,
-    predict_pose,
+    initialize_human_detector,
+)
+from human_pose_pipeline.pose_estimation.inference_helper_batched import (
+    process_frame_3d
 )
 from human_pose_pipeline.pose_estimation.triangulation_helper import (
-    load_camera_parameters,
-    create_joint_covariance,
-    triangulate_points_with_covariance,
+    load_camera_parameters
 )
-from human_pose_pipeline.pose_estimation.h36m_settings import MIRROR_13_JOINT_MODEL_MAP
-from human_pose_pipeline.motion_prediction.h36m_settings import N_JOINTS
+from human_pose_pipeline.pose_estimation.h36m_settings import (
+    MIRROR_13_JOINT_MODEL_MAP,
+    YOLO_CONFIDENCE_THRESHOLD,
+    OOD_THRESHOLD
+)
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-
-# Dataset splits matching original H36M
-SPLIT = {
-    'train': ['S1', 'S6', 'S7', 'S8', 'S9'],
-    'validation': ['S11'],
-    'test': ['S5']
-}
 
 # Camera IDs for stereo setup
 CAMERA_IDS = ['55011271', '60457274']
 
 
-def process_sequence(
-    images_cam1,
-    images_cam2,
-    information_cam1,
-    information_cam2,
+def process_sequence_batched(
+    left_frames,
+    right_frames,
     pose_estimation_jit_fn,
     params,
     batch_stats,
+    human_detector,
+    device_torch,
     projection_matrices,
+    batch_size=32,
+    device='cpu',
+    score_fn=None,
+    ood_threshold=OOD_THRESHOLD,
 ):
-    """Process a sequence of image pairs to extract 3D poses with covariances.
+    """Process a sequence of image pairs in batches to extract 3D poses with covariances.
 
     Args:
-        images_cam1: Array of images from camera 1 (num_frames, H, W, C)
-        images_cam2: Array of images from camera 2 (num_frames, H, W, C)
-        information_cam1: includes all pose and transformation information from camera 1
-        information_cam2: includes all pose and transformation information from camera 2
+        left_frames: List of PIL images from left camera
+        right_frames: List of PIL images from right camera
         pose_estimation_jit_fn: JAX pose estimation function
         params: Model parameters
         batch_stats: Batch statistics
-        projection_matrices: Dict with projection matrices for both cameras
+        human_detector: YOLO human detector
+        device_torch: PyTorch device for YOLO
+        projection_matrices: List with projection matrices for both cameras [P1, P2]
+        batch_size: Number of frames to process in a batch
+        device: Device to use for tensors
+        score_fn: Optional OOD score function
+        ood_threshold: OOD detection threshold
 
     Returns:
         poses_3d: Array of 3D poses (num_frames, 13, 3)
         covariances_3d: Array of 3D covariances (num_frames, 13, 3, 3)
         valid_mask: Boolean mask indicating which frames have valid detections
     """
-    num_frames = len(images_cam1)
-    poses_3d = []
-    covariances_3d = []
-    valid_mask = []
+    num_frames = len(left_frames)
 
-    for frame_idx in range(num_frames):
-        frame_cam1 = images_cam1[frame_idx]
-        frame_cam2 = images_cam2[frame_idx]
+    # Pre-allocate arrays for results
+    all_3d_points_list = []
+    all_3d_covariances_list = []
+    all_ood_scores_list = []
+    all_is_ood_list = []
+    all_batch_sizes = []
 
-        # Process both camera views
-        uncertainties_cam1 = None
-        uncertainties_cam2 = None
-        cov_cam1 = None
-        cov_cam2 = None
+    # Process frames in batches
+    for frame_idx in range(0, num_frames, batch_size):
+        current_batch_size = min(batch_size, num_frames - frame_idx)
+        all_batch_sizes.append(current_batch_size)
 
-        for cam_idx, frame in enumerate([frame_cam1, frame_cam2]):
-            # Get pose estimations using JAX model
-            if cam_idx == 0:
-                information = information_cam1
-            else:
-                information = information_cam2
-            pred_joints_13, uncertainties_13, covariance_13 = predict_pose(
-                np.reshape(frame.copy(), [1, frame.shape[0], frame.shape[1], frame.shape[2]]),  # Batch size of 1
-                pose_estimation_jit_fn,
-                params,
-                batch_stats,
-                13
-            )
-            result = transform_predictions_to_original_space(
-                pred_joints_13, information['trans'][frame_idx],
-                information['scale_factors'][frame_idx][0],
-                information['scale_factors'][frame_idx][1],
-                uncertainties=uncertainties_13,
-                covariance=covariance_13
-            )
-            pose = joint_mapping(np.array(result['keypoints']), MIRROR_13_JOINT_MODEL_MAP)
-            uncertainties = joint_mapping(np.array(result['uncertainties']), MIRROR_13_JOINT_MODEL_MAP)
-            covariance_factor = joint_mapping(np.array(result['covariance']), MIRROR_13_JOINT_MODEL_MAP)
-            # Construct per-joint 2x2 covariance matrices
-            covariance_matrix = np.zeros((13, 2, 2))
-            for j in range(13):
-                covariance_matrix[j] = [
-                    [float(uncertainties[j, 0])**2, float(covariance_factor[j])],
-                    [float(covariance_factor[j]), float(uncertainties[j, 1])**2]
-                ]
+        # Get batch of frames from both cameras
+        left_batch = left_frames[frame_idx:frame_idx + current_batch_size]
+        right_batch = right_frames[frame_idx:frame_idx + current_batch_size]
 
-            if cam_idx == 0:
-                poses_cam1 = pose
-                uncertainties_cam1 = uncertainties
-                cov_cam1 = covariance_matrix
-            else:
-                poses_cam2 = pose
-                uncertainties_cam2 = uncertainties
-                cov_cam2 = covariance_matrix
+        # Combine frames for batched processing
+        both_frames = left_batch + right_batch
 
-        # Triangulate 3D points if both poses are available
-        if poses_cam1 is not None and poses_cam2 is not None:
-            # Create joint covariance matrices
-            C_joint_list = []
-            for i in range(N_JOINTS):
-                C_joint = create_joint_covariance(
-                    mapped_uncertainty_cam1=uncertainties_cam1[i],
-                    mapped_covariance_cam1=cov_cam1[i, 0, 1],
-                    mapped_uncertainty_cam2=uncertainties_cam2[i],
-                    mapped_covariance_cam2=cov_cam2[i, 0, 1],
-                    cross_covariance=np.zeros((2, 2))  # Assume zero cross-covariance
-                )
-                C_joint_list.append(C_joint)
+        # Process the batch
+        points_3d, C_3d_all, ood_score, is_ood = process_frame_3d(
+            frames=both_frames,
+            projection_matrices=projection_matrices,
+            pose_estimation_jit_fn=pose_estimation_jit_fn,
+            params=params,
+            batch_stats=batch_stats,
+            human_detector=human_detector,
+            device_torch=device_torch,
+            mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+            score_fn=score_fn,
+            human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
+            ood_threshold=ood_threshold,
+            verbose=False,
+            device=device
+        )
 
-            P1 = projection_matrices[CAMERA_IDS[0]]
-            P2 = projection_matrices[CAMERA_IDS[1]]
-            points_3d, C_3d_all = triangulate_points_with_covariance(
-                poses_cam1, poses_cam2, P1, P2, C_joint_list
-            )
+        # Store results (move to CPU to free GPU memory)
+        all_3d_points_list.append(points_3d.to('cpu').numpy())
+        all_3d_covariances_list.append(C_3d_all.to('cpu').numpy())
+        all_ood_scores_list.append(ood_score.to('cpu').numpy())
+        all_is_ood_list.append(is_ood.to('cpu').numpy())
 
-            poses_3d.append(points_3d)
-            covariances_3d.append(C_3d_all)
-            valid_mask.append(True)
-        else:
-            # No valid detection - create zeros
-            poses_3d.append(np.zeros((N_JOINTS, 3)))
-            covariances_3d.append(np.zeros((N_JOINTS, 3, 3)))
-            valid_mask.append(False)
+        # Free GPU memory
+        del points_3d, C_3d_all, ood_score, is_ood
 
-    return np.array(poses_3d), np.array(covariances_3d), np.array(valid_mask)
+    # Concatenate results
+    poses_3d = np.zeros((num_frames, 13, 3))
+    covariances_3d = np.zeros((num_frames, 13, 3, 3))
+    ood_scores = np.zeros((num_frames,))
+    is_ood_all = np.zeros((num_frames,), dtype=bool)
+
+    index = 0
+    for i, batch_size_i in enumerate(all_batch_sizes):
+        poses_3d[index:index + batch_size_i] = all_3d_points_list[i]
+        covariances_3d[index:index + batch_size_i] = all_3d_covariances_list[i]
+        ood_scores[index:index + batch_size_i] = all_ood_scores_list[i]
+        is_ood_all[index:index + batch_size_i] = all_is_ood_list[i]
+        index += batch_size_i
+
+    # Create valid mask (frames where human was detected in both cameras)
+    # Check if all values are zero (no detection)
+    valid_mask = ~np.all(poses_3d == 0, axis=(1, 2))
+
+    return poses_3d, covariances_3d, valid_mask, ood_scores, is_ood_all
 
 
 def preprocess_subject(
     subject,
-    preprocessed_dir,
+    dataset,
     output_dir,
     pose_estimation_jit_fn,
     params,
     batch_stats,
+    human_detector,
+    device_torch,
     projection_matrices,
+    batch_size=32,
+    device='cpu',
+    score_fn=None,
+    ood_threshold=OOD_THRESHOLD,
 ):
     """Preprocess all sequences for a given subject.
 
     Args:
         subject: Subject ID (e.g., 'S1')
-        preprocessed_dir: Path to preprocessed images directory
+        dataset: Human36mDatasetSequenceTwoCameras instance
         output_dir: Path to save processed motion data
         pose_estimation_jit_fn: JAX pose estimation function
         params: Model parameters
         batch_stats: Batch statistics
-        projection_matrices: Dict with projection matrices
+        human_detector: YOLO human detector
+        device_torch: PyTorch device for YOLO
+        projection_matrices: List with projection matrices [P1, P2]
+        batch_size: Batch size for processing
+        device: Device to use for tensors
+        score_fn: Optional OOD score function
+        ood_threshold: OOD detection threshold
     """
-    subject_image_dir = os.path.join(preprocessed_dir, subject, 'PreprocessedImages')
-    subject_pose_dir = os.path.join(preprocessed_dir, subject, 'PreprocessedPoses')
     subject_output_dir = os.path.join(output_dir, subject)
     os.makedirs(subject_output_dir, exist_ok=True)
 
-    if not os.path.exists(subject_image_dir):
-        print(f"Warning: Preprocessed directory not found for {subject}: {subject_image_dir}")
-        return
+    print(f"\nProcessing subject {subject}: {len(dataset)} sequences")
 
-    # Find all preprocessed image files
-    image_files = sorted([f for f in os.listdir(subject_image_dir) if f.endswith('.npy')])
-
-    print(f"\nProcessing subject {subject}: {len(image_files)} sequences")
-
-    for img_file in tqdm(image_files, desc=f"Processing {subject}"):
-        # Load images for both cameras
-        # Expected format: action.camera1.npy and action.camera2.npy
-        base_name = img_file.replace('.npy', '')
-        parts = base_name.split('.')
-
-        if len(parts) < 2:
-            print(f"Warning: Unexpected filename format: {img_file}")
+    for idx, sample in enumerate(tqdm(dataset, desc=f"Processing {subject}")):
+        # Extract sequence information from video paths
+        # video_paths format: /path/to/Subject/Videos/Action.CameraID.mp4
+        video_paths = dataset.data[idx]['video_paths']
+        if len(video_paths) == 0:
             continue
 
-        # Determine which camera this file is from
-        camera_id = parts[-1]
-        action_name = '.'.join(parts[:-1])
+        # Extract subject and action from the video path
+        video_path = video_paths[0]
+        path_parts = video_path.split(os.sep)
+        sample_subject = path_parts[-3]  # Subject directory
+        action_file = os.path.basename(video_path)  # Action.CameraID.mp4
+        action_name = '.'.join(action_file.split('.')[:-2])  # Remove .CameraID.mp4
 
-        # We only process when we have both camera views
-        if camera_id != CAMERA_IDS[0]:
+        # Skip if this sample doesn't belong to the current subject
+        if sample_subject != subject:
             continue
 
-        # Load images from both cameras
-        img_path_cam1 = os.path.join(subject_image_dir, f"{action_name}.{CAMERA_IDS[0]}.npy")
-        img_path_cam2 = os.path.join(subject_image_dir, f"{action_name}.{CAMERA_IDS[1]}.npy")
-        poses_path_cam1 = os.path.join(subject_pose_dir, f"{action_name}.{CAMERA_IDS[0]}.npz")
-        poses_path_cam2 = os.path.join(subject_pose_dir, f"{action_name}.{CAMERA_IDS[1]}.npz")
+        left_frames = sample['all_camera_frames'][0]
+        right_frames = sample['all_camera_frames'][1]
 
-        if not os.path.exists(img_path_cam1) or not os.path.exists(img_path_cam2):
-            print(f"Warning: Missing camera view for {action_name}")
-            continue
-
-        # Load images
-        images_cam1 = np.load(img_path_cam1)  # Shape: (num_frames, H, W, C)
-        images_cam2 = np.load(img_path_cam2)
-        information_cam1 = np.load(poses_path_cam1)
-        information_cam2 = np.load(poses_path_cam2)
-        if len(images_cam1) != len(images_cam2):
-            print(f"Warning: Frame count mismatch for {action_name}")
-            continue
-
-        # Convert images from (H, W, C) to RGB if needed
-        if images_cam1.shape[-1] == 3:
-            # Assuming images are in RGB format already
-            pass
-
-        # Process the sequence
-        poses_3d, covariances_3d, valid_mask = process_sequence(
-            images_cam1,
-            images_cam2,
-            information_cam1,
-            information_cam2,
+        # Process the sequence in batches
+        poses_3d, covariances_3d, valid_mask, ood_scores, is_ood = process_sequence_batched(
+            left_frames,
+            right_frames,
             pose_estimation_jit_fn,
             params,
             batch_stats,
+            human_detector,
+            device_torch,
             projection_matrices,
+            batch_size=batch_size,
+            device=device,
+            score_fn=score_fn,
+            ood_threshold=ood_threshold,
         )
 
         # Save the processed data
-        output_path = os.path.join(subject_output_dir, f"{action_name}.npz")
+        output_filename = f"{action_name}_seq{idx:04d}.npz"
+        output_path = os.path.join(subject_output_dir, output_filename)
         np.savez_compressed(
             output_path,
             poses_3d=poses_3d,
             covariances_3d=covariances_3d,
             valid_mask=valid_mask,
+            ood_scores=ood_scores,
+            is_ood=is_ood,
         )
 
         valid_count = valid_mask.sum()
-        print(f"  {action_name}: {valid_count}/{len(valid_mask)} valid frames")
+        ood_count = is_ood.sum() if score_fn is not None else 0
+        print(f"  {action_name}_seq{idx:04d}: {valid_count}/{len(valid_mask)} valid frames, {ood_count} OOD detections")
 
 
 def main():
@@ -262,10 +237,10 @@ def main():
         description='Preprocess H36M data for motion prediction with uncertainty'
     )
     parser.add_argument(
-        '--preprocessed_dir',
+        '--data_path',
         type=str,
-        default='datasets/H36M/pre_processed',
-        help='Path to preprocessed H36M images directory'
+        default='datasets/',
+        help='Path to datasets directory'
     )
     parser.add_argument(
         '--output_dir',
@@ -298,15 +273,61 @@ def main():
         default=None,
         help='Process only specific subject (e.g., S1). If not specified, processes all subjects in split.'
     )
+    parser.add_argument(
+        '--camera_ids',
+        type=str,
+        nargs=2,
+        default=CAMERA_IDS,
+        help='Camera IDs to use'
+    )
+    parser.add_argument(
+        '--batch_size',
+        type=int,
+        default=32,
+        help='Batch size for processing'
+    )
+    parser.add_argument(
+        '--device',
+        type=str,
+        default='cuda',
+        help='Device to use (cuda or cpu)'
+    )
+    parser.add_argument(
+        '--enable_ood',
+        action='store_true',
+        help='Enable OOD detection'
+    )
+    parser.add_argument(
+        '--cache_dir',
+        type=str,
+        default='cache/',
+        help='Cache directory with score functions'
+    )
+    parser.add_argument(
+        '--base_key',
+        type=str,
+        default=None,
+        help='Base key for loading the OOD score functions'
+    )
+    parser.add_argument(
+        '--ood_threshold',
+        type=float,
+        default=OOD_THRESHOLD,
+        help='OOD threshold'
+    )
 
     args = parser.parse_args()
 
     print("=" * 80)
     print("H36M Motion Prediction Dataset Preprocessing")
     print("=" * 80)
-    print(f"Preprocessed images directory: {args.preprocessed_dir}")
+    print(f"Data directory: {args.data_path}")
     print(f"Output directory: {args.output_dir}")
     print(f"Model: {args.run_name}")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Device: {args.device}")
+    if args.enable_ood:
+        print(f"OOD detection: ENABLED (threshold={args.ood_threshold})")
     print("=" * 80)
 
     # Initialize models
@@ -317,6 +338,22 @@ def main():
     pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
     print("Pose estimation model loaded")
 
+    # Initialize YOLO human detector
+    human_detector, device_torch = initialize_human_detector('cuda')
+    print("YOLO human detector loaded")
+
+    # Load OOD score functions if enabled
+    score_fn = None
+    if args.enable_ood:
+        if args.base_key is None:
+            print("\nWARNING: OOD detection enabled but no base_key provided. Skipping OOD detection.")
+            print("Use --base_key to specify the cache key for OOD score functions.")
+        else:
+            from src.ood_scores.lm_lanczos import load_score_functions
+            print(f"\nLoading OOD score functions with cache key: {args.base_key}")
+            score_fn, _, _, _ = load_score_functions(args.cache_dir, args.base_key)
+            print("OOD score functions loaded successfully!")
+
     # Load camera parameters
     camera_parameters_path = os.path.join(models_dir, 'camera-parameters.json')
     if not os.path.exists(camera_parameters_path):
@@ -324,10 +361,6 @@ def main():
             f"Camera parameters file not found at {camera_parameters_path}. "
             "Please ensure the camera-parameters.json file is available in the models directory."
         )
-
-    # We'll load camera parameters for each subject separately since they may differ
-    # For now, we'll use a default subject to get the structure
-    # In practice, you may need to load per-subject camera parameters
 
     # Determine which subjects to process
     if args.subject:
@@ -341,29 +374,58 @@ def main():
 
     print(f"\nSubjects to process: {subjects_to_process}")
 
+    # Base directory for extracted H36M data
+    base_directory = os.path.join(root_dir, args.data_path, "H36M", "extracted")
+
     # Process each subject
     for subject in subjects_to_process:
         # Load camera parameters for this subject
-        intrinsics, extrinsics = load_camera_parameters(
-            camera_parameters_path, subject, CAMERA_IDS
+        _, _, projection_matrices_dict = load_camera_parameters(
+            camera_parameters_path, subject, args.camera_ids
         )
 
-        # Compute projection matrices
-        projection_matrices = {}
-        for cam_id in CAMERA_IDS:
-            K = intrinsics[cam_id]
-            RT = extrinsics[cam_id]
-            projection_matrices[cam_id] = K @ RT  # P = K[R|t]
+        # Convert to torch tensors and move to device
+        P1 = torch.from_numpy(projection_matrices_dict[args.camera_ids[0]]).to(args.device)
+        P2 = torch.from_numpy(projection_matrices_dict[args.camera_ids[1]]).to(args.device)
+        projection_matrices = [P1, P2]
+
+        # Create dataset for this subject
+        # Determine split for this subject
+        subject_split = None
+        for split_name, split_subjects in SPLIT.items():
+            if subject in split_subjects:
+                subject_split = split_name
+                break
+
+        if subject_split is None:
+            print(f"Warning: Subject {subject} not found in any split. Skipping.")
+            continue
+
+        dataset = Human36mDatasetSequenceTwoCameras(
+            base_directory=base_directory,
+            split=subject_split,
+            camera_ids=args.camera_ids
+        )
+
+        if len(dataset) == 0:
+            print(f"Warning: No data found for subject {subject}. Skipping.")
+            continue
 
         # Preprocess subject
         preprocess_subject(
             subject,
-            args.preprocessed_dir,
+            dataset,
             args.output_dir,
             pose_estimation_jit_fn,
             params,
             batch_stats,
+            human_detector,
+            device_torch,
             projection_matrices,
+            batch_size=args.batch_size,
+            device=args.device,
+            score_fn=score_fn,
+            ood_threshold=args.ood_threshold,
         )
 
     print("\n" + "=" * 80)
