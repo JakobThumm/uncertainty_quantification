@@ -29,6 +29,18 @@ from gpu_accelerated_utils import (
 
 from transform_utils import transform_predictions_to_original_space
 
+# Import triangulation functions
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+from human_pose_pipeline.pose_estimation.triangulation_helper import (
+    triangulate_point_with_covariance,
+    triangulate_points_with_covariance,
+)
+from human_pose_pipeline.utils.batched_transform_torch import (
+    triangulate_points_torch,
+    triangulate_point_with_covariance_torch,
+    triangulate_points_with_covariance_batched,
+)
+
 
 class TestAffineTransformFunctions(unittest.TestCase):
     """Test cases for affine transformation functions."""
@@ -884,11 +896,321 @@ class TestAffineTransformFunctions(unittest.TestCase):
                 )
 
 
+class TestTriangulationFunctions(unittest.TestCase):
+    """Test cases for triangulation functions."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.tolerance_rtol = 1e-3
+        self.tolerance_atol = 1e-4
+        # Covariance uses numerical differentiation which amplifies float32 precision errors
+        # Covariance values can range from small to millions, float32 has ~7 significant digits
+        self.covariance_rtol = 1e-2  # 1% relative tolerance for float32 numerical differentiation
+        self.covariance_atol = 0.01  # Absolute tolerance for very large covariance values
+
+        # Create sample projection matrices
+        self.P1 = np.array([
+            [866.14, 905.29, -104.57, 2.8059e+06],
+            [-104.57, 243.94, -1226.6, 3.331e+06],
+            [-0.38023, 0.9025, -0.2023, 5541.1]
+        ], dtype=np.float32)
+        self.P2 = np.array([
+            [1254.5, 4.114, -60.179, 2.1064e+06],
+            [146.39, 137.42, -1233.7, 2.7093e+06],
+            [0.39505, 0.88055, -0.26185, 4435.4]
+        ], dtype=np.float32)
+
+    def test_triangulate_points_torch_vs_cv2_single(self):
+        """Test that triangulate_points_torch matches cv2.triangulatePoints for single point."""
+        # Create 2D points (simulated projections)
+        pts1_np = np.array([[320.0, 240.0]], dtype=np.float32)
+        pts2_np = np.array([[280.0, 240.0]], dtype=np.float32)
+
+        # Triangulate with cv2
+        pts_4d_cv2 = cv2.triangulatePoints(
+            self.P1, self.P2,
+            pts1_np.T,  # cv2 expects (2, N)
+            pts2_np.T
+        )
+        pts_3d_cv2 = (pts_4d_cv2[:3, :] / pts_4d_cv2[3, :]).T  # (N, 3)
+
+        # Triangulate with torch
+        P1_torch = torch.from_numpy(self.P1).to(self.device)
+        P2_torch = torch.from_numpy(self.P2).to(self.device)
+        pts1_torch = torch.from_numpy(pts1_np).to(self.device)
+        pts2_torch = torch.from_numpy(pts2_np).to(self.device)
+
+        pts_3d_torch = triangulate_points_torch(P1_torch, P2_torch, pts1_torch, pts2_torch)
+        pts_3d_torch_np = pts_3d_torch.cpu().numpy()
+
+        # Compare results
+        np.testing.assert_allclose(
+            pts_3d_torch_np,
+            pts_3d_cv2,
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="triangulate_points_torch doesn't match cv2.triangulatePoints",
+        )
+
+    def test_triangulate_points_torch_vs_cv2_multiple(self):
+        """Test that triangulate_points_torch matches cv2.triangulatePoints for multiple points."""
+        num_points = 10
+        # Create random 2D points
+        pts1_np = np.random.rand(num_points, 2).astype(np.float32) * 640
+        pts2_np = np.random.rand(num_points, 2).astype(np.float32) * 640
+
+        # Triangulate with cv2 (one at a time)
+        pts_3d_cv2_list = []
+        for i in range(num_points):
+            pts_4d = cv2.triangulatePoints(
+                self.P1, self.P2,
+                pts1_np[i:i+1].T,
+                pts2_np[i:i+1].T
+            )
+            pts_3d = (pts_4d[:3, 0] / pts_4d[3, 0])
+            pts_3d_cv2_list.append(pts_3d)
+        pts_3d_cv2 = np.stack(pts_3d_cv2_list, axis=0)
+
+        # Triangulate with torch (batched)
+        P1_torch = torch.from_numpy(self.P1).to(self.device)
+        P2_torch = torch.from_numpy(self.P2).to(self.device)
+        pts1_torch = torch.from_numpy(pts1_np).to(self.device)
+        pts2_torch = torch.from_numpy(pts2_np).to(self.device)
+
+        pts_3d_torch = triangulate_points_torch(P1_torch, P2_torch, pts1_torch, pts2_torch)
+        pts_3d_torch_np = pts_3d_torch.cpu().numpy()
+
+        # Compare results
+        np.testing.assert_allclose(
+            pts_3d_torch_np,
+            pts_3d_cv2,
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="triangulate_points_torch doesn't match cv2.triangulatePoints for multiple points",
+        )
+
+    def test_triangulate_point_with_covariance_torch_vs_numpy(self):
+        """Test that triangulate_point_with_covariance_torch matches numpy version."""
+        # Create test data
+        pose_cam1_np = np.array([535.0259, 245.7977], dtype=np.float64)
+        pose_cam2_np = np.array([504.1812, 160.5679], dtype=np.float64)
+
+        # Create covariance matrix
+        C_joint_np = np.array([[0.68762, -0.0011856, 0, 0],
+                               [-0.0011856, 1.0798, 0, 0],
+                               [0, 0, 0.56644, 0.011395],
+                               [0, 0, 0.011395, 0.89831]], dtype=np.float64)
+
+        # Compute with numpy version
+        pt_3d_np, C_3d_np = triangulate_point_with_covariance(
+            pose_cam1_np, pose_cam2_np, self.P1, self.P2, C_joint_np
+        )
+
+        # Compute with torch version
+        P1_torch = torch.from_numpy(self.P1).to(self.device)
+        P2_torch = torch.from_numpy(self.P2).to(self.device)
+        pose_cam1_torch = torch.from_numpy(pose_cam1_np).to(self.device)
+        pose_cam2_torch = torch.from_numpy(pose_cam2_np).to(self.device)
+        C_joint_torch = torch.from_numpy(C_joint_np).to(self.device)
+
+        pt_3d_torch, C_3d_torch = triangulate_point_with_covariance_torch(
+            pose_cam1_torch, pose_cam2_torch, P1_torch, P2_torch, C_joint_torch
+        )
+
+        pt_3d_torch_np = pt_3d_torch.cpu().numpy()
+        C_3d_torch_np = C_3d_torch.cpu().numpy()
+
+        # Compare 3D points
+        np.testing.assert_allclose(
+            pt_3d_torch_np,
+            pt_3d_np,
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="3D points don't match between torch and numpy versions",
+        )
+
+        # Compare covariance matrices (relaxed tolerance for float32)
+        np.testing.assert_allclose(
+            C_3d_torch_np,
+            C_3d_np,
+            rtol=self.covariance_rtol,
+            atol=self.covariance_atol,
+            err_msg="Covariance matrices don't match between torch and numpy versions",
+        )
+
+    def test_triangulate_points_with_covariance_batched_vs_single(self):
+        """Test that batched version matches multiple single calls."""
+        batch_size = 4
+        num_joints = 13
+
+        # Create test data
+        poses_cam1_np = np.random.rand(batch_size, num_joints, 2).astype(np.float64) * 640
+        poses_cam2_np = np.random.rand(batch_size, num_joints, 2).astype(np.float64) * 640
+
+        # Create covariance matrices
+        C_joint_list_np = np.zeros((batch_size, num_joints, 4, 4), dtype=np.float64)
+        for b in range(batch_size):
+            for j in range(num_joints):
+                C_joint_list_np[b, j] = np.eye(4, dtype=np.float64) * 0.1
+
+        # Compute with numpy version (single calls)
+        pts_3d_np_list = []
+        C_3d_np_list = []
+        for b in range(batch_size):
+            pts_3d_batch = []
+            C_3d_batch = []
+            for j in range(num_joints):
+                pt_3d, C_3d = triangulate_point_with_covariance(
+                    poses_cam1_np[b, j], poses_cam2_np[b, j],
+                    self.P1, self.P2, C_joint_list_np[b, j]
+                )
+                pts_3d_batch.append(pt_3d)
+                C_3d_batch.append(C_3d)
+            pts_3d_np_list.append(np.stack(pts_3d_batch, axis=0))
+            C_3d_np_list.append(np.stack(C_3d_batch, axis=0))
+
+        pts_3d_np = np.stack(pts_3d_np_list, axis=0)
+        C_3d_np = np.stack(C_3d_np_list, axis=0)
+
+        # Compute with batched torch version
+        P1_torch = torch.from_numpy(self.P1).to(self.device)
+        P2_torch = torch.from_numpy(self.P2).to(self.device)
+        poses_cam1_torch = torch.from_numpy(poses_cam1_np).to(self.device)
+        poses_cam2_torch = torch.from_numpy(poses_cam2_np).to(self.device)
+        C_joint_list_torch = torch.from_numpy(C_joint_list_np).to(self.device)
+
+        pts_3d_torch, C_3d_torch = triangulate_points_with_covariance_batched(
+            poses_cam1_torch, poses_cam2_torch, P1_torch, P2_torch, C_joint_list_torch
+        )
+
+        pts_3d_torch_np = pts_3d_torch.cpu().numpy()
+        C_3d_torch_np = C_3d_torch.cpu().numpy()
+
+        # Compare 3D points
+        np.testing.assert_allclose(
+            pts_3d_torch_np,
+            pts_3d_np,
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="Batched 3D points don't match single calls",
+        )
+
+        # Compare covariance matrices (relaxed tolerance for float32)
+        np.testing.assert_allclose(
+            C_3d_torch_np,
+            C_3d_np,
+            rtol=self.covariance_rtol,
+            atol=self.covariance_atol,
+            err_msg="Batched covariance matrices don't match single calls",
+        )
+
+    def test_triangulate_points_with_covariance_batched_output_shape(self):
+        """Test that batched version produces correct output shapes."""
+        batch_size = 3
+        num_joints = 13
+
+        # Create test data
+        poses_cam1 = torch.rand(batch_size, num_joints, 2, device=self.device) * 640
+        poses_cam2 = torch.rand(batch_size, num_joints, 2, device=self.device) * 640
+        C_joint_list = torch.eye(4, device=self.device).unsqueeze(0).unsqueeze(0).expand(
+            batch_size, num_joints, 4, 4
+        ) * 0.1
+
+        P1_torch = torch.from_numpy(self.P1).to(self.device)
+        P2_torch = torch.from_numpy(self.P2).to(self.device)
+
+        # Compute
+        pts_3d, C_3d = triangulate_points_with_covariance_batched(
+            poses_cam1, poses_cam2, P1_torch, P2_torch, C_joint_list
+        )
+
+        # Check shapes
+        self.assertEqual(
+            pts_3d.shape,
+            (batch_size, num_joints, 3),
+            f"3D points shape is incorrect: {pts_3d.shape}",
+        )
+        self.assertEqual(
+            C_3d.shape,
+            (batch_size, num_joints, 3, 3),
+            f"Covariance shape is incorrect: {C_3d.shape}",
+        )
+
+    def test_triangulate_points_with_covariance_batched_vs_numpy_function(self):
+        """Test batched torch version matches numpy triangulate_points_with_covariance."""
+        batch_size = 2
+        num_joints = 13
+
+        # Create test data
+        poses_cam1_np = np.random.rand(batch_size, num_joints, 2).astype(np.float64) * 640
+        poses_cam2_np = np.random.rand(batch_size, num_joints, 2).astype(np.float64) * 640
+
+        # Create covariance matrices
+        C_joint_list_np = []
+        for b in range(batch_size):
+            batch_C = []
+            for j in range(num_joints):
+                batch_C.append(np.eye(4, dtype=np.float64) * 0.1)
+            C_joint_list_np.append(batch_C)
+
+        # Compute with numpy version (using the original function)
+        pts_3d_np_list = []
+        C_3d_np_list = []
+        for b in range(batch_size):
+            pts_3d, C_3d = triangulate_points_with_covariance(
+                poses_cam1_np[b], poses_cam2_np[b],
+                self.P1, self.P2, C_joint_list_np[b]
+            )
+            pts_3d_np_list.append(pts_3d)
+            C_3d_np_list.append(C_3d)
+
+        pts_3d_np = np.stack(pts_3d_np_list, axis=0)
+        C_3d_np = np.stack(C_3d_np_list, axis=0)
+
+        # Compute with batched torch version
+        P1_torch = torch.from_numpy(self.P1).to(self.device)
+        P2_torch = torch.from_numpy(self.P2).to(self.device)
+        poses_cam1_torch = torch.from_numpy(poses_cam1_np).to(self.device)
+        poses_cam2_torch = torch.from_numpy(poses_cam2_np).to(self.device)
+
+        # Convert list of lists to tensor
+        C_joint_tensor = np.array(C_joint_list_np, dtype=np.float64)
+        C_joint_list_torch = torch.from_numpy(C_joint_tensor).to(self.device)
+
+        pts_3d_torch, C_3d_torch = triangulate_points_with_covariance_batched(
+            poses_cam1_torch, poses_cam2_torch, P1_torch, P2_torch, C_joint_list_torch
+        )
+
+        pts_3d_torch_np = pts_3d_torch.cpu().numpy()
+        C_3d_torch_np = C_3d_torch.cpu().numpy()
+
+        # Compare 3D points
+        np.testing.assert_allclose(
+            pts_3d_torch_np,
+            pts_3d_np,
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="Batched torch version doesn't match numpy triangulate_points_with_covariance",
+        )
+
+        # Compare covariance matrices (relaxed tolerance for float32)
+        np.testing.assert_allclose(
+            C_3d_torch_np,
+            C_3d_np,
+            rtol=self.covariance_rtol,
+            atol=self.covariance_atol,
+            err_msg="Batched covariance doesn't match numpy triangulate_points_with_covariance",
+        )
+
+
 def run_tests():
     """Run all tests."""
     # Create test suite
     loader = unittest.TestLoader()
-    suite = loader.loadTestsFromTestCase(TestAffineTransformFunctions)
+    suite = unittest.TestSuite()
+    suite.addTests(loader.loadTestsFromTestCase(TestAffineTransformFunctions))
+    suite.addTests(loader.loadTestsFromTestCase(TestTriangulationFunctions))
 
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

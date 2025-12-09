@@ -473,3 +473,213 @@ def batched_read_video_frames_cv2(
     cap.release()
 
     return frames, scale_factors
+
+
+def triangulate_points_torch(
+    P1: torch.Tensor,
+    P2: torch.Tensor,
+    pts1: torch.Tensor,
+    pts2: torch.Tensor
+) -> torch.Tensor:
+    """
+    Triangulate 3D points from two camera views using PyTorch (DLT method).
+    This is a PyTorch implementation of cv2.triangulatePoints.
+
+    Args:
+        P1: Projection matrix for camera 1, shape (..., 3, 4)
+        P2: Projection matrix for camera 2, shape (..., 3, 4)
+        pts1: 2D points from camera 1, shape (..., 2)
+        pts2: 2D points from camera 2, shape (..., 2)
+
+    Returns:
+        points_3d: Triangulated 3D points, shape (..., 3)
+    """
+    # Get batch dimensions
+    batch_shape = pts1.shape[:-1]
+    device = pts1.device
+    dtype = pts1.dtype
+
+    # Reshape for batch processing
+    P1_flat = P1.reshape(-1, 3, 4)
+    P2_flat = P2.reshape(-1, 3, 4)
+    pts1_flat = pts1.reshape(-1, 2)
+    pts2_flat = pts2.reshape(-1, 2)
+
+    batch_size = pts1_flat.shape[0]
+
+    # Build the system of equations A @ X = 0 for each point
+    # For each 2D point observation, we get 2 equations:
+    # x * P[2, :] - P[0, :] = 0
+    # y * P[2, :] - P[1, :] = 0
+
+    A = torch.zeros(batch_size, 4, 4, device=device, dtype=dtype)
+
+    # Camera 1 constraints
+    A[:, 0, :] = pts1_flat[:, 0:1] * P1_flat[:, 2, :] - P1_flat[:, 0, :]
+    A[:, 1, :] = pts1_flat[:, 1:2] * P1_flat[:, 2, :] - P1_flat[:, 1, :]
+
+    # Camera 2 constraints
+    A[:, 2, :] = pts2_flat[:, 0:1] * P2_flat[:, 2, :] - P2_flat[:, 0, :]
+    A[:, 3, :] = pts2_flat[:, 1:2] * P2_flat[:, 2, :] - P2_flat[:, 1, :]
+
+    # Solve using SVD: A @ X = 0, solution is last column of V
+    # A = U @ S @ V^T, the solution is the last row of V^T (last column of V)
+    U, S, Vt = torch.linalg.svd(A)
+
+    # Last row of Vt (corresponding to smallest singular value)
+    X_hom = Vt[:, -1, :]  # (batch_size, 4)
+
+    # Convert from homogeneous to 3D coordinates
+    # Prevent division by zero
+    w = X_hom[:, 3:4]
+    w = torch.where(torch.abs(w) < 1e-8, torch.ones_like(w) * 1e-8, w)
+
+    points_3d = X_hom[:, :3] / w
+
+    # Reshape back to original batch shape
+    points_3d = points_3d.reshape(*batch_shape, 3)
+
+    return points_3d
+
+
+def triangulate_point_with_covariance_torch(
+    pose_cam1: torch.Tensor,
+    pose_cam2: torch.Tensor,
+    P1: torch.Tensor,
+    P2: torch.Tensor,
+    C_joint: torch.Tensor,
+    epsilon: float = 1e-3
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Triangulate a single 3D point and propagate covariance (PyTorch version).
+
+    Args:
+        pose_cam1: 2D point from camera 1, shape (2,)
+        pose_cam2: 2D point from camera 2, shape (2,)
+        P1: Projection matrix for camera 1, shape (3, 4)
+        P2: Projection matrix for camera 2, shape (3, 4)
+        C_joint: 4x4 covariance matrix for the joint's 2D observations
+        epsilon: Finite difference step size for Jacobian computation
+
+    Returns:
+        tuple: (point_3d, C_3d) - 3D point (3,) and 3x3 covariance matrix
+    """
+    device = pose_cam1.device
+    dtype = pose_cam1.dtype
+
+    # Triangulate the original point
+    points_3d = triangulate_points_torch(P1, P2, pose_cam1, pose_cam2)  # (3,)
+
+    # Compute Jacobian using numerical differentiation
+    # J[i, j] = d(points_3d[i]) / d(input[j])
+    # input = [x1, y1, x2, y2]
+
+    J = torch.zeros(3, 4, device=device, dtype=dtype)
+
+    # Perturb each input dimension
+    for i in range(4):
+        # Create perturbation vector
+        delta = torch.zeros(4, device=device, dtype=dtype)
+        delta[i] = epsilon
+
+        # Apply perturbation
+        pose_cam1_perturbed = pose_cam1 + delta[:2]
+        pose_cam2_perturbed = pose_cam2 + delta[2:]
+
+        # Triangulate with perturbed points
+        points_3d_perturbed = triangulate_points_torch(
+            P1, P2, pose_cam1_perturbed, pose_cam2_perturbed
+        )
+
+        # Compute partial derivative
+        J[:, i] = (points_3d_perturbed - points_3d) / epsilon
+
+    # Propagate covariance: C_3d = J @ C_joint @ J^T
+    C_3d = J @ C_joint @ J.T  # (3, 3)
+
+    return points_3d, C_3d
+
+
+def triangulate_points_with_covariance_batched(
+    poses_cam1: torch.Tensor,
+    poses_cam2: torch.Tensor,
+    P1: torch.Tensor,
+    P2: torch.Tensor,
+    C_joint_list: torch.Tensor,
+    epsilon: float = 1e-3
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Triangulate 3D points from two camera views with covariance propagation (batched).
+
+    Args:
+        poses_cam1: 2D keypoints from camera 1, shape (B, N, 2)
+        poses_cam2: 2D keypoints from camera 2, shape (B, N, 2)
+        P1: Projection matrix for camera 1, shape (3, 4) or (B, 3, 4)
+        P2: Projection matrix for camera 2, shape (3, 4) or (B, 3, 4)
+        C_joint_list: Covariance matrices for each joint, shape (B, N, 4, 4)
+        epsilon: Finite difference step size for Jacobian computation
+
+    Returns:
+        tuple: (points_3d, C_3d_all)
+            - points_3d: 3D points, shape (B, N, 3)
+            - C_3d_all: 3D covariance matrices, shape (B, N, 3, 3)
+    """
+    device = poses_cam1.device
+    dtype = poses_cam1.dtype
+    batch_size, num_joints = poses_cam1.shape[:2]
+
+    # Expand projection matrices if needed
+    if P1.ndim == 2:
+        P1 = P1.unsqueeze(0).expand(batch_size, -1, -1)
+    if P2.ndim == 2:
+        P2 = P2.unsqueeze(0).expand(batch_size, -1, -1)
+
+    # Triangulate all points at once
+    # Reshape to (B*N, 2) for batch processing
+    poses_cam1_flat = poses_cam1.reshape(batch_size * num_joints, 2)
+    poses_cam2_flat = poses_cam2.reshape(batch_size * num_joints, 2)
+    P1_flat = P1.unsqueeze(1).expand(-1, num_joints, -1, -1).reshape(batch_size * num_joints, 3, 4)
+    P2_flat = P2.unsqueeze(1).expand(-1, num_joints, -1, -1).reshape(batch_size * num_joints, 3, 4)
+
+    # Triangulate original points
+    points_3d_flat = triangulate_points_torch(P1_flat, P2_flat, poses_cam1_flat, poses_cam2_flat)  # (B*N, 3)
+    points_3d = points_3d_flat.reshape(batch_size, num_joints, 3)
+
+    # Compute Jacobians using numerical differentiation
+    # For efficiency, compute all perturbations at once
+    J = torch.zeros(batch_size, num_joints, 3, 4, device=device, dtype=dtype)
+
+    # Perturb each of the 4 input dimensions
+    for i in range(4):
+        # Create perturbation: add epsilon to dimension i
+        delta = torch.zeros(batch_size, num_joints, 4, device=device, dtype=dtype)
+        delta[:, :, i] = epsilon
+
+        # Apply perturbation to appropriate camera
+        poses_cam1_perturbed = poses_cam1 + delta[:, :, :2]
+        poses_cam2_perturbed = poses_cam2 + delta[:, :, 2:]
+
+        # Flatten for triangulation
+        poses_cam1_perturbed_flat = poses_cam1_perturbed.reshape(batch_size * num_joints, 2)
+        poses_cam2_perturbed_flat = poses_cam2_perturbed.reshape(batch_size * num_joints, 2)
+
+        # Triangulate with perturbed points
+        points_3d_perturbed_flat = triangulate_points_torch(
+            P1_flat, P2_flat, poses_cam1_perturbed_flat, poses_cam2_perturbed_flat
+        )
+        points_3d_perturbed = points_3d_perturbed_flat.reshape(batch_size, num_joints, 3)
+
+        # Compute partial derivatives
+        J[:, :, :, i] = (points_3d_perturbed - points_3d) / epsilon
+
+    # Propagate covariance: C_3d = J @ C_joint @ J^T for each point
+    # J: (B, N, 3, 4), C_joint_list: (B, N, 4, 4)
+    # Result: (B, N, 3, 3)
+
+    # Compute J @ C_joint: (B, N, 3, 4) @ (B, N, 4, 4) = (B, N, 3, 4)
+    J_C = torch.matmul(J, C_joint_list)  # (B, N, 3, 4)
+
+    # Compute J @ C_joint @ J^T: (B, N, 3, 4) @ (B, N, 4, 3) = (B, N, 3, 3)
+    C_3d_all = torch.matmul(J_C, J.transpose(-2, -1))  # (B, N, 3, 3)
+
+    return points_3d, C_3d_all
