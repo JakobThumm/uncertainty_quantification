@@ -21,10 +21,22 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
 )
 
 
-def jax_to_torch(jax_array):
-    """Converts a JAX array to a PyTorch tensor using DLPack."""
-    dlpack_tensor = jax.dlpack.from_dlpack(jax_array)
-    torch_tensor = torch.utils.dlpack.from_dlpack(dlpack_tensor)
+def jax_to_torch(jax_array, device='cpu'):
+    """Converts a JAX array to a PyTorch tensor using DLPack.
+
+    Args:
+        jax_array: JAX array to convert
+        device: Target device for the PyTorch tensor ('cpu' or 'cuda')
+
+    Returns:
+        PyTorch tensor on the specified device
+    """
+    # Use the new DLPack API (JAX v0.7.0+)
+    # Pass JAX array directly to torch's from_dlpack
+    torch_tensor = torch.from_dlpack(jax_array)
+    # Move to the specified device if not already there
+    if str(torch_tensor.device) != device:
+        torch_tensor = torch_tensor.to(device)
     return torch_tensor
 
 
@@ -35,8 +47,8 @@ def get_affine_transform_torch_batch(src, dst):
     returns: (B, 2, 3)
     """
 
-    src = src.to(torch.float64)
-    dst = dst.to(torch.float64)
+    src = src.to(torch.float32)
+    dst = dst.to(torch.float32)
 
     B = src.shape[0]
 
@@ -46,7 +58,7 @@ def get_affine_transform_torch_batch(src, dst):
 
     # Build A matrices (B, 6, 6)
     # Row indices for A entries
-    A = torch.zeros((B, 6, 6), dtype=torch.float64, device=src.device)
+    A = torch.zeros((B, 6, 6), dtype=torch.float32, device=src.device)
 
     # Fill first rows: [x y 1 0 0 0]
     A[:, 0::2, 0] = x
@@ -59,7 +71,7 @@ def get_affine_transform_torch_batch(src, dst):
     A[:, 1::2, 5] = 1
 
     # Build b (target)
-    b = dst.reshape(B, 6).to(torch.float64)
+    b = dst.reshape(B, 6).to(torch.float32)
 
     # Solve A x = b  (B, 6)
     X = torch.linalg.solve(A, b.unsqueeze(-1)).squeeze(-1)
@@ -76,7 +88,7 @@ def invert_affine_transform_torch_batch(M):
     returns: (B, 2, 3)
     """
 
-    M = M.to(torch.float64)
+    M = M.to(torch.float32)
 
     a = M[:, 0, 0]
     b = M[:, 0, 1]
@@ -122,7 +134,7 @@ def cv2_transform_torch(src, M, shift=None):
         dst: (B, N, dcn)
     """
 
-    src = src.to(torch.float64)
+    src = src.to(torch.float32)
 
     # Ensure batching
     if M.dim() == 2:           # (dcn, scn) or (dcn, scn+1)

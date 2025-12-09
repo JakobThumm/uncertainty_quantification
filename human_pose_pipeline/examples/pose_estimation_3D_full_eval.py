@@ -16,6 +16,7 @@ Based on marian_code/Experiment2/3D_Pose_Estimation.py but adapted for JAX.
 import os
 import argparse
 import numpy as np
+import torch
 from tqdm import tqdm
 
 from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_np
@@ -60,6 +61,8 @@ def main():
     parser.add_argument('--max_sequences', type=int, default=10000000000, help='Maximum number of sequences to process')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection on left camera')
     parser.add_argument('--output_dir', type=str, default='results/pose_3d', help='Output directory for results')
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for inference')
+    parser.add_argument('--device', type=str, default='cuda', help='Device to use (cuda or cpu)')
 
     args = parser.parse_args()
 
@@ -74,6 +77,8 @@ def main():
     split = args.split
     action = args.action
     camera_ids = args.camera_ids
+    batch_size = args.batch_size
+    device = args.device
 
     # Initialize models
     print("\nInitializing models...")
@@ -114,6 +119,8 @@ def main():
     # Compute projection matrices
     P1 = projection_matrices[camera_ids[0]]
     P2 = projection_matrices[camera_ids[1]]
+    P1 = torch.from_numpy(P1).to(device)
+    P2 = torch.from_numpy(P2).to(device)
     projection_matrices = [P1, P2]
 
     # Create dataset
@@ -149,11 +156,15 @@ def main():
         if args.enable_ood and score_fn is not None:
             print("OOD detection will be performed on LEFT camera (camera 0) only")
 
-        for frame_idx in range(frames_to_process):
+        # for frame_idx in range(frames_to_process):
+        # Iterate through frames in a batched manner
+        for frame_idx in range(0, frames_to_process, batch_size):
+            current_batch_size = min(batch_size, frames_to_process - frame_idx)
             # Process frames from both cameras    
-            left_frame = all_camera_frames[0][frame_idx]
-            right_frame = all_camera_frames[1][frame_idx]
-            both_frames = [left_frame, right_frame]
+            left_frames = all_camera_frames[0][frame_idx:frame_idx + current_batch_size]
+            right_frames = all_camera_frames[1][frame_idx:frame_idx + current_batch_size]
+            # Append right frames to the left frames list
+            both_frames = left_frames + right_frames
 
             points_3d, C_3d_all, ood_score, is_ood = process_frame_3d(
                 frames=both_frames,
@@ -167,7 +178,8 @@ def main():
                 score_fn=score_fn,
                 human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
                 ood_threshold=args.ood_threshold,
-                verbose=False
+                verbose=False,
+                device=device
             )
 
             # Store OOD information

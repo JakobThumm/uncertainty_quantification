@@ -88,7 +88,8 @@ def pose_estimation_2d(
         human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
         ood_threshold=OOD_THRESHOLD,
         parallelize=False,
-        num_output_joints=17):
+        num_output_joints=17,
+        device='cpu'):
     """
     Complete 2D pose estimation pipeline: resize -> detect humans -> estimate poses.
 
@@ -135,15 +136,15 @@ def pose_estimation_2d(
     if score_fn is None:
         # No OOD scoring - run pose prediction only
         pred_joints_13, uncertainties_13, covariance_13 = predict_pose(
-            bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints
+            bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints, device=device
         )
-        ood_score = torch.zeros(input_images.shape[0])
+        ood_score = torch.zeros(input_images.shape[0], device=device)
     elif score_fn is not None and parallelize:
         # Run pose prediction and OOD scoring in parallel using thread pool
         executor = get_thread_pool()
 
         # Submit both tasks to the thread pool simultaneously
-        pose_future = executor.submit(predict_pose, bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints)
+        pose_future = executor.submit(predict_pose, bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints, device)
         ood_future = executor.submit(score_fn, bounding_box_image)
 
         # Wait for BOTH futures to complete simultaneously (more efficient than sequential .result() calls)
@@ -153,8 +154,8 @@ def pose_estimation_2d(
         pred_joints_13, uncertainties_13, covariance_13 = pose_future.result()
         ood_score = float(np.asarray(ood_future.result()))
     else:
-        pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints)
-        ood_score = torch.tensor(score_fn(bounding_box_image), device=device_torch)
+        pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints, device=device)
+        ood_score = torch.tensor(score_fn(bounding_box_image), device=device)
     is_ood = ood_score > ood_threshold
 
     # Transform back to original image space
@@ -167,7 +168,7 @@ def pose_estimation_2d(
     if result.get('uncertainties') is None:
         result['uncertainties'] = torch.ones_like(result['keypoints']) * 10.0  # 10 pixel std dev
     if result.get('covariance') is None:
-        result['covariance'] = torch.ones(len(result['keypoints'])) * 0.1  # Small covariance
+        result['covariance'] = torch.ones(len(result['keypoints']), device=device) * 0.1  # Small covariance
 
     # Store results for this person
     all_results = {
@@ -227,7 +228,7 @@ def extract_bounding_box_images(
     return bounding_box_images
 
 
-def predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints=17):
+def predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints=17, device='cpu'):
     """Predict pose for a single bounding box image using the JAX model.
 
     Args:
@@ -236,11 +237,11 @@ def predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats
         params: JAX model parameters
         batch_stats: JAX model batch statistics (if available)
         num_output_joints: Number of joints the model outputs (17 for full model, 3 for reduced model)
+        device: Device to place output tensors on ('cpu' or 'cuda')
     Returns:
         tuple: (pred_joints_13, uncertainties_13, covariance_13)
     """
     # Convert to jax
-    device = bounding_box_image.device
     if isinstance(bounding_box_image, torch.Tensor):
         bounding_box_image = jnp.asarray(bounding_box_image)
     # Get model predictions using JIT-compiled function
@@ -252,13 +253,13 @@ def predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats
     # Extract predictions - JAX model outputs (following Marian's approach)
     if isinstance(output, dict):
         # RegressFlowWithAleatoric returns dictionary with uncertainty outputs
-        pred_joints = jax_to_torch(output['pred_jts'])  # Joint coordinates (num_output_joints, 2)
-        log_variance = jax_to_torch(output.get('log_variance', output.get('pure_sigma', None)))
-        covariance_raw = jax_to_torch(output.get('covariance', None))
+        pred_joints = jax_to_torch(output['pred_jts'], device=device)  # Joint coordinates (num_output_joints, 2)
+        log_variance = jax_to_torch(output.get('log_variance', output.get('pure_sigma', None)), device=device) if output.get('log_variance', output.get('pure_sigma', None)) is not None else None
+        covariance_raw = jax_to_torch(output.get('covariance', None), device=device) if output.get('covariance', None) is not None else None
     else:
         # Regular RegressFlow returns tensor directly - reshape from flattened
-        pred_joints_flat = jax_to_torch(output)  # Remove batch dimension
-        pred_joints = pred_joints_flat.reshape(bounding_box_image.shape[0], num_output_joints, 2)  # B, num_output_joints, 2 coords
+        pred_joints_flat = jax_to_torch(output, device=device)  # Remove batch dimension
+        pred_joints = pred_joints_flat.reshape(pred_joints_flat.shape[0], num_output_joints, 2)  # B, num_output_joints, 2 coords
         log_variance = None
         covariance_raw = None
 
@@ -336,7 +337,7 @@ def expand_3joints_to_13joints(joints_3):
 def process_frame_2d(frames, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                      mirror_map, score_fn=None,
                      human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
-                     num_output_joints=17, verbose=True):
+                     num_output_joints=17, verbose=True, device='cpu'):
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -380,14 +381,15 @@ def process_frame_2d(frames, pose_estimation_jit_fn, params, batch_stats, human_
         score_fn=score_fn,
         human_detection_threshold=human_detection_threshold,
         ood_threshold=ood_threshold,
-        num_output_joints=num_output_joints
+        num_output_joints=num_output_joints,
+        device=device
     )
     pose_estimations['keypoints'] = joint_mapping(pose_estimations['keypoints'], mirror_map)
     pose_estimations['uncertainties'] = joint_mapping(pose_estimations['uncertainties'], mirror_map)
     pose_estimations['covariance'] = joint_mapping(pose_estimations['covariance'], mirror_map)
     # Construct per-joint 2x2 covariance matrices
     B, N, _ = pose_estimations['keypoints'].shape
-    joint_covariances = torch.zeros((B, N, 2, 2))
+    joint_covariances = torch.zeros((B, N, 2, 2), device=device)
     joint_covariances[:, :, 0, 0] = torch.pow(pose_estimations['uncertainties'][:, :, 0], 2)
     joint_covariances[:, :, 0, 1] = pose_estimations['covariance']
     joint_covariances[:, :, 1, 0] = pose_estimations['covariance']
@@ -402,7 +404,7 @@ def process_frame_2d(frames, pose_estimation_jit_fn, params, batch_stats, human_
 def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                      mirror_map, score_fn=None,
                      human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
-                     num_output_joints=17, use_gpu_acceleration=True, verbose=True):
+                     num_output_joints=17, use_gpu_acceleration=True, verbose=True, device='cpu'):
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -422,6 +424,7 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
         ood_threshold (float, optional): Threshold for OOD detection in pose estimation
         num_output_joints (int, optional): Number of joints the model outputs
         use_gpu_acceleration (bool, optional): Whether to use GPU-accelerated preprocessing (default True)
+        device: Device to place output tensors on ('cpu' or 'cuda')
 
     Returns:
         List[Dict]: List of dictionaries containing for each detected person:
@@ -437,7 +440,13 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
     """
     assert len(frames) >= 2
     assert len(frames) % 2 == 0
-    assert len(projection_matrices) == len(frames)
+    assert len(projection_matrices) == 2
+
+    P1 = projection_matrices[0]
+    P2 = projection_matrices[1]
+    if isinstance(P1, np.ndarray):
+        P1 = torch.from_numpy(P1).to(device)
+        P2 = torch.from_numpy(P2).to(device)
 
     B = len(frames) // 2  # Number of frame pairs (left + right)
     first_frame = np.array(frames[0])
@@ -463,7 +472,8 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
         human_detection_threshold=human_detection_threshold,
         ood_threshold=ood_threshold,
         num_output_joints=num_output_joints,
-        verbose=verbose
+        verbose=verbose,
+        device=device
     )
 
     # Take the first detected person
@@ -498,10 +508,8 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
         mapped_covariance_cam1=left_covariance_matrix[:, :, 0, 1],
         mapped_uncertainty_cam2=right_uncertainty,
         mapped_covariance_cam2=right_covariance_matrix[:, :, 0, 1],
-        cross_covariance=torch.zeros((B, 13, 2, 2), device=device_torch)  # Assume zero cross-covariance
+        cross_covariance=torch.zeros((B, 13, 2, 2), device=device)  # Assume zero cross-covariance
     )
-    P1 = projection_matrices[0]
-    P2 = projection_matrices[1]
     points_3d, C_3d_all = triangulate_points_with_covariance_batched(
         left_pose, right_pose, P1, P2, C_2D
     )
