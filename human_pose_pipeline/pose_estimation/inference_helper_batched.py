@@ -9,6 +9,7 @@ import json
 import pickle
 from time import time
 from typing import Union
+from matplotlib.pylab import f
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -19,6 +20,7 @@ import threading
 
 import torch
 
+from human_pose_pipeline.utils.batched_transform_torch import create_joint_covariance_batched, triangulate_points_with_covariance_batched
 from src.models.wrapper import model_from_string
 from human_pose_pipeline.utils.gpu_accelerated_utils import (
     extract_bounding_box_images_batched,
@@ -405,7 +407,9 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
     Process a single frame to extract pose with uncertainty (JAX version).
 
     Args:
-        frames: Input frame images from the left and right camera
+        frames: Input frame images from the left and right camera. Shape: [2*B, H, W, C].
+                The first B elements correspond to the left camera,
+                the next B elements correspond to the right camera.
         projection_matrices: The two camera projection matrices for triangulation
         pose_estimation_jit_fn: JIT-compiled pose estimation function
         params: JAX model parameters
@@ -432,19 +436,23 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
             - 'is_ood': Boolean indicating if the person is classified as OOD based on the threshold (False if no score_fn provided)
     """
     assert len(frames) >= 2
+    assert len(frames) % 2 == 0
     assert len(projection_matrices) == len(frames)
 
-    left_frame = np.array(frames[0])
-    right_frame = np.array(frames[1])
+    B = len(frames) // 2  # Number of frame pairs (left + right)
+    first_frame = np.array(frames[0])
+    np_frames = np.zeros([2 * B, first_frame.shape[0], first_frame.shape[1], first_frame.shape[2]], dtype=np.float32)
+    for i in range(2 * B):
+        new_frame = np.array(frames[i])
+        if new_frame.shape != first_frame.shape:
+            if verbose:
+                print(f"New frame shape {new_frame.shape}, first frame shape {first_frame.shape}, adjusting new frame.")
+            new_frame = new_frame[:first_frame.shape[0], :first_frame.shape[1]]
+        np_frames[i] = new_frame
+    frames = torch.from_numpy(np_frames).to(device_torch)
 
-    if left_frame.shape != right_frame.shape:
-        if verbose:
-            print(f"Left frame shape {left_frame.shape}, right frame shape {right_frame.shape}, adjusting right frame.")
-        right_frame = right_frame[:left_frame.shape[0], :left_frame.shape[1]]
-
-    frame_batch = torch.from_numpy(np.array([left_frame, right_frame], dtype=np.float32)).to(device_torch)
     batch_prediction = process_frame_2d(
-        frames=frame_batch,
+        frames=frames,
         pose_estimation_jit_fn=pose_estimation_jit_fn,
         params=params,
         batch_stats=batch_stats,
@@ -459,41 +467,43 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
     )
 
     # Take the first detected person
-    left_pose = batch_prediction['keypoints'][0]
-    left_uncertainty = batch_prediction['uncertainties'][0]
-    left_covariance_matrix = batch_prediction['covariance_matrix'][0]
-    left_ood_score = batch_prediction['ood_score'][0]
-    left_is_ood = batch_prediction['is_ood'][0]
-    left_human_detected = batch_prediction['mask'][0]
+    left_pose = batch_prediction['keypoints'][:B]
+    left_uncertainty = batch_prediction['uncertainties'][:B]  # [B, 13, 2]
+    left_covariance_matrix = batch_prediction['covariance_matrix'][:B]  # [B, 13, 2, 2]
+    left_ood_score = batch_prediction['ood_score'][:B]
+    left_is_ood = batch_prediction['is_ood'][:B]
+    left_human_detected = batch_prediction['mask'][:B]
     # Right
-    right_pose = batch_prediction['keypoints'][1]
-    right_uncertainty = batch_prediction['uncertainties'][1]
-    right_covariance_matrix = batch_prediction['covariance_matrix'][1]
-    right_ood_score = batch_prediction['ood_score'][1]
-    right_is_ood = batch_prediction['is_ood'][1]
-    right_human_detected = batch_prediction['mask'][1]
-    is_ood = bool(left_is_ood) or bool(right_is_ood)
-    ood_score = max(float(left_ood_score), float(right_ood_score))
-    human_detected = bool(left_human_detected) and bool(right_human_detected)
-    if not human_detected:
-        print(f"Human not detected in frame! Left human detected {left_human_detected}, Right human detected {right_human_detected}!")
-        return np.zeros([13, 3]), np.zeros([13, 3, 3]), ood_score, True
-    # Create joint covariance matrices
-    C_joint_list = []
-    for i in range(13):
-        C_joint = create_joint_covariance(
-            mapped_uncertainty_cam1=left_uncertainty[i],
-            mapped_covariance_cam1=left_covariance_matrix[i, 0, 1],
-            mapped_uncertainty_cam2=right_uncertainty[i],
-            mapped_covariance_cam2=right_covariance_matrix[i, 0, 1],
-            cross_covariance=np.zeros((2, 2))  # Assume zero cross-covariance
-        )
-        C_joint_list.append(C_joint)
+    right_pose = batch_prediction['keypoints'][B:]
+    right_uncertainty = batch_prediction['uncertainties'][B:]
+    right_covariance_matrix = batch_prediction['covariance_matrix'][B:]
+    right_ood_score = batch_prediction['ood_score'][B:]
+    right_is_ood = batch_prediction['is_ood'][B:]
+    right_human_detected = batch_prediction['mask'][B:]
+    is_ood = torch.logical_or(left_is_ood, right_is_ood)
+    ood_score = torch.max(left_ood_score, right_ood_score)
+    human_detected = torch.logical_and(left_human_detected, right_human_detected)
+    is_ood = torch.logical_and(is_ood, human_detected)
 
+    left_pose[human_detected == 0] = 0.0
+    right_pose[human_detected == 0] = 0.0
+    left_uncertainty[human_detected == 0] = 0.0
+    right_uncertainty[human_detected == 0] = 0.0
+    left_covariance_matrix[human_detected == 0] = 0.0
+    right_covariance_matrix[human_detected == 0] = 0.0
+
+    # Create joint covariance matrices
+    C_2D = create_joint_covariance_batched(
+        mapped_uncertainty_cam1=left_uncertainty,
+        mapped_covariance_cam1=left_covariance_matrix[:, :, 0, 1],
+        mapped_uncertainty_cam2=right_uncertainty,
+        mapped_covariance_cam2=right_covariance_matrix[:, :, 0, 1],
+        cross_covariance=torch.zeros((B, 13, 2, 2), device=device_torch)  # Assume zero cross-covariance
+    )
     P1 = projection_matrices[0]
     P2 = projection_matrices[1]
-    points_3d, C_3d_all = triangulate_points_with_covariance(
-        left_pose.cpu().numpy(), right_pose.cpu().numpy(), P1, P2, C_joint_list
+    points_3d, C_3d_all = triangulate_points_with_covariance_batched(
+        left_pose, right_pose, P1, P2, C_2D
     )
     return points_3d, C_3d_all, ood_score, is_ood
 

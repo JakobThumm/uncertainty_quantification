@@ -34,11 +34,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 from human_pose_pipeline.pose_estimation.triangulation_helper import (
     triangulate_point_with_covariance,
     triangulate_points_with_covariance,
+    create_joint_covariance,
 )
 from human_pose_pipeline.utils.batched_transform_torch import (
     triangulate_points_torch,
     triangulate_point_with_covariance_torch,
     triangulate_points_with_covariance_batched,
+    create_joint_covariance_batched,
 )
 
 
@@ -1201,6 +1203,167 @@ class TestTriangulationFunctions(unittest.TestCase):
             rtol=self.covariance_rtol,
             atol=self.covariance_atol,
             err_msg="Batched covariance doesn't match numpy triangulate_points_with_covariance",
+        )
+
+    def test_create_joint_covariance_batched_single(self):
+        """Test that create_joint_covariance_batched matches numpy version for single example."""
+        # Create test data
+        unc_cam1 = np.array([0.8, 1.2], dtype=np.float32)
+        cov_cam1 = np.float32(0.1)
+        unc_cam2 = np.array([0.7, 1.0], dtype=np.float32)
+        cov_cam2 = np.float32(-0.05)
+
+        # Compute with numpy version
+        C_joint_np = create_joint_covariance(
+            unc_cam1, cov_cam1, unc_cam2, cov_cam2, cross_covariance=None
+        )
+
+        # Compute with torch batched version (add batch and joint dimensions)
+        unc_cam1_torch = torch.from_numpy(unc_cam1).to(self.device).unsqueeze(0).unsqueeze(0)  # (1, 1, 2)
+        cov_cam1_torch = torch.tensor([[cov_cam1]], device=self.device)  # (1, 1)
+        unc_cam2_torch = torch.from_numpy(unc_cam2).to(self.device).unsqueeze(0).unsqueeze(0)  # (1, 1, 2)
+        cov_cam2_torch = torch.tensor([[cov_cam2]], device=self.device)  # (1, 1)
+
+        C_joint_torch = create_joint_covariance_batched(
+            unc_cam1_torch, cov_cam1_torch, unc_cam2_torch, cov_cam2_torch, cross_covariance=None
+        )
+
+        C_joint_torch_np = C_joint_torch[0, 0].cpu().numpy()  # Remove batch and joint dimensions
+
+        # Compare results
+        np.testing.assert_allclose(
+            C_joint_torch_np,
+            C_joint_np,
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="create_joint_covariance_batched doesn't match numpy version",
+        )
+
+    def test_create_joint_covariance_batched_multiple(self):
+        """Test create_joint_covariance_batched with multiple joints and batches."""
+        batch_size = 3
+        num_joints = 13
+
+        # Create random test data
+        unc_cam1_np = np.random.rand(batch_size, num_joints, 2).astype(np.float32) * 2
+        cov_cam1_np = (np.random.rand(batch_size, num_joints).astype(np.float32) - 0.5) * 0.5
+        unc_cam2_np = np.random.rand(batch_size, num_joints, 2).astype(np.float32) * 2
+        cov_cam2_np = (np.random.rand(batch_size, num_joints).astype(np.float32) - 0.5) * 0.5
+
+        # Compute with numpy version (loop over batch and joints)
+        C_joint_np_list = []
+        for b in range(batch_size):
+            batch_list = []
+            for j in range(num_joints):
+                C_joint = create_joint_covariance(
+                    unc_cam1_np[b, j], cov_cam1_np[b, j],
+                    unc_cam2_np[b, j], cov_cam2_np[b, j],
+                    cross_covariance=None
+                )
+                batch_list.append(C_joint)
+            C_joint_np_list.append(np.stack(batch_list, axis=0))
+        C_joint_np = np.stack(C_joint_np_list, axis=0)
+
+        # Compute with torch batched version
+        unc_cam1_torch = torch.from_numpy(unc_cam1_np).to(self.device)
+        cov_cam1_torch = torch.from_numpy(cov_cam1_np).to(self.device)
+        unc_cam2_torch = torch.from_numpy(unc_cam2_np).to(self.device)
+        cov_cam2_torch = torch.from_numpy(cov_cam2_np).to(self.device)
+
+        C_joint_torch = create_joint_covariance_batched(
+            unc_cam1_torch, cov_cam1_torch, unc_cam2_torch, cov_cam2_torch, cross_covariance=None
+        )
+
+        C_joint_torch_np = C_joint_torch.cpu().numpy()
+
+        # Compare results
+        np.testing.assert_allclose(
+            C_joint_torch_np,
+            C_joint_np,
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="Batched create_joint_covariance doesn't match numpy version",
+        )
+
+    def test_create_joint_covariance_batched_with_cross_covariance(self):
+        """Test create_joint_covariance_batched with cross-covariance."""
+        batch_size = 2
+        num_joints = 5
+
+        # Create test data
+        unc_cam1 = torch.rand(batch_size, num_joints, 2, device=self.device) * 2
+        cov_cam1 = (torch.rand(batch_size, num_joints, device=self.device) - 0.5) * 0.5
+        unc_cam2 = torch.rand(batch_size, num_joints, 2, device=self.device) * 2
+        cov_cam2 = (torch.rand(batch_size, num_joints, device=self.device) - 0.5) * 0.5
+        cross_cov = (torch.rand(batch_size, num_joints, 2, 2, device=self.device) - 0.5) * 0.3
+
+        # Compute with batched version
+        C_joint = create_joint_covariance_batched(
+            unc_cam1, cov_cam1, unc_cam2, cov_cam2, cross_covariance=cross_cov
+        )
+
+        # Check shape
+        self.assertEqual(
+            C_joint.shape,
+            (batch_size, num_joints, 4, 4),
+            f"Output shape is incorrect: {C_joint.shape}",
+        )
+
+        # Verify structure: check that cross-covariance blocks are symmetric
+        upper_right = C_joint[:, :, 0:2, 2:4]  # (B, N, 2, 2)
+        lower_left = C_joint[:, :, 2:4, 0:2]  # (B, N, 2, 2)
+
+        np.testing.assert_allclose(
+            upper_right.cpu().numpy(),
+            cross_cov.cpu().numpy(),
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="Upper-right block doesn't match input cross-covariance",
+        )
+
+        np.testing.assert_allclose(
+            lower_left.cpu().numpy(),
+            cross_cov.transpose(-2, -1).cpu().numpy(),
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="Lower-left block is not transpose of cross-covariance",
+        )
+
+    def test_create_joint_covariance_batched_output_structure(self):
+        """Test that create_joint_covariance_batched produces correct structure."""
+        batch_size = 2
+        num_joints = 3
+
+        # Create simple test data
+        unc_cam1 = torch.ones(batch_size, num_joints, 2, device=self.device)  # std = 1
+        cov_cam1 = torch.zeros(batch_size, num_joints, device=self.device)  # no covariance
+        unc_cam2 = torch.ones(batch_size, num_joints, 2, device=self.device) * 2  # std = 2
+        cov_cam2 = torch.zeros(batch_size, num_joints, device=self.device)
+
+        C_joint = create_joint_covariance_batched(
+            unc_cam1, cov_cam1, unc_cam2, cov_cam2, cross_covariance=None
+        )
+
+        # Check diagonal values (variances)
+        expected_diag = torch.tensor([1.0, 1.0, 4.0, 4.0], device=self.device)
+        actual_diag = torch.diagonal(C_joint[0, 0], dim1=0, dim2=1)
+
+        np.testing.assert_allclose(
+            actual_diag.cpu().numpy(),
+            expected_diag.cpu().numpy(),
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="Diagonal values (variances) are incorrect",
+        )
+
+        # Check that matrix is symmetric
+        C_joint_T = C_joint.transpose(-2, -1)
+        np.testing.assert_allclose(
+            C_joint.cpu().numpy(),
+            C_joint_T.cpu().numpy(),
+            rtol=self.tolerance_rtol,
+            atol=self.tolerance_atol,
+            err_msg="Covariance matrix is not symmetric",
         )
 
 

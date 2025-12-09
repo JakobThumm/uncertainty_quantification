@@ -475,6 +475,67 @@ def batched_read_video_frames_cv2(
     return frames, scale_factors
 
 
+def create_joint_covariance_batched(
+    mapped_uncertainty_cam1: torch.Tensor,
+    mapped_covariance_cam1: torch.Tensor,
+    mapped_uncertainty_cam2: torch.Tensor,
+    mapped_covariance_cam2: torch.Tensor,
+    cross_covariance: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    """
+    Create 4x4 joint covariance matrices from two camera observations (batched).
+
+    Args:
+        mapped_uncertainty_cam1: (std_x, std_y) for camera 1, shape (B, N, 2)
+        mapped_covariance_cam1: covariance xy for camera 1, shape (B, N)
+        mapped_uncertainty_cam2: (std_x, std_y) for camera 2, shape (B, N, 2)
+        mapped_covariance_cam2: covariance xy for camera 2, shape (B, N)
+        cross_covariance: 2x2 cross-covariance matrices between cameras (optional), shape (B, N, 2, 2)
+
+    Returns:
+        torch.Tensor: 4x4 joint covariance matrices, shape (B, N, 4, 4)
+    """
+    device = mapped_uncertainty_cam1.device
+    dtype = mapped_uncertainty_cam1.dtype
+    batch_size, num_joints = mapped_uncertainty_cam1.shape[:2]
+
+    # Initialize C_joint as (B, N, 4, 4)
+    C_joint = torch.zeros(batch_size, num_joints, 4, 4, device=device, dtype=dtype)
+
+    # Build C1 (2x2 covariance for camera 1)
+    # C1 = [[var_x1, cov_xy1],
+    #       [cov_xy1, var_y1]]
+    var_x1 = mapped_uncertainty_cam1[:, :, 0] ** 2  # (B, N)
+    var_y1 = mapped_uncertainty_cam1[:, :, 1] ** 2  # (B, N)
+    cov_xy1 = mapped_covariance_cam1  # (B, N)
+
+    C_joint[:, :, 0, 0] = var_x1
+    C_joint[:, :, 0, 1] = cov_xy1
+    C_joint[:, :, 1, 0] = cov_xy1
+    C_joint[:, :, 1, 1] = var_y1
+
+    # Build C2 (2x2 covariance for camera 2)
+    # C2 = [[var_x2, cov_xy2],
+    #       [cov_xy2, var_y2]]
+    var_x2 = mapped_uncertainty_cam2[:, :, 0] ** 2  # (B, N)
+    var_y2 = mapped_uncertainty_cam2[:, :, 1] ** 2  # (B, N)
+    cov_xy2 = mapped_covariance_cam2  # (B, N)
+
+    C_joint[:, :, 2, 2] = var_x2
+    C_joint[:, :, 2, 3] = cov_xy2
+    C_joint[:, :, 3, 2] = cov_xy2
+    C_joint[:, :, 3, 3] = var_y2
+
+    # Build C12 (2x2 cross-covariance between cameras)
+    if cross_covariance is not None:
+        # cross_covariance shape: (B, N, 2, 2)
+        C_joint[:, :, 0:2, 2:4] = cross_covariance
+        C_joint[:, :, 2:4, 0:2] = cross_covariance.transpose(-2, -1)
+    # else: C12 is already zeros
+
+    return C_joint
+
+
 def triangulate_points_torch(
     P1: torch.Tensor,
     P2: torch.Tensor,
