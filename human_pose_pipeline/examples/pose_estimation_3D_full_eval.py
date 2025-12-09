@@ -61,7 +61,7 @@ def main():
     parser.add_argument('--max_sequences', type=int, default=10000000000, help='Maximum number of sequences to process')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection on left camera')
     parser.add_argument('--output_dir', type=str, default='results/pose_3d', help='Output directory for results')
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for inference')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for inference')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use (cuda or cpu)')
 
     args = parser.parse_args()
@@ -138,6 +138,12 @@ def main():
     counter = 0
 
     # Get a sample from the dataset
+    all_3d_points_list = []
+    all_3d_covariances_list = []
+    all_gt_points_list = []
+    all_ood_scores_list = []  # Store OOD scores from left camera
+    all_is_ood_list = []  # Store OOD classifications
+    all_batch_sizes = []
     for sample in tqdm(dataset):
         if counter > args.max_sequences:
             break
@@ -146,12 +152,7 @@ def main():
         pose_sequence = sample['pose_sequence']
 
         # Process a limited number of frames for testing
-        frames_to_process = min(args.max_sequences, len(all_camera_frames[0]))
-        all_3d_points = []
-        all_3d_covariances = []
-        all_gt_points = []
-        all_ood_scores = []  # Store OOD scores from left camera
-        all_is_ood = []  # Store OOD classifications
+        frames_to_process = len(all_camera_frames[0])
 
         if args.enable_ood and score_fn is not None:
             print("OOD detection will be performed on LEFT camera (camera 0) only")
@@ -160,7 +161,8 @@ def main():
         # Iterate through frames in a batched manner
         for frame_idx in range(0, frames_to_process, batch_size):
             current_batch_size = min(batch_size, frames_to_process - frame_idx)
-            # Process frames from both cameras    
+            all_batch_sizes.append(current_batch_size)
+            # Process frames from both cameras
             left_frames = all_camera_frames[0][frame_idx:frame_idx + current_batch_size]
             right_frames = all_camera_frames[1][frame_idx:frame_idx + current_batch_size]
             # Append right frames to the left frames list
@@ -182,34 +184,45 @@ def main():
                 device=device
             )
 
-            # Store OOD information
-            all_ood_scores.append(ood_score)
-            all_is_ood.append(is_ood)
-            all_3d_points.append(points_3d)
-            all_3d_covariances.append(C_3d_all)
-            all_gt_points.append(pose_sequence[frame_idx])
+            # Store OOD information in numpy arrays
+            all_ood_scores_list.append(ood_score.to('cpu').numpy())
+            all_is_ood_list.append(is_ood.to('cpu').numpy())
+            all_3d_points_list.append(points_3d.to('cpu').numpy())
+            all_3d_covariances_list.append(C_3d_all.to('cpu').numpy())
+            all_gt_points_list.append(pose_sequence[frame_idx:frame_idx + current_batch_size])
+            # Remove GPU tensors to free memory
+            del points_3d, C_3d_all, ood_score, is_ood
 
-    print(f"\n3D pose estimation completed!")
-    print(f"Processed {len(all_3d_points)} frames")
+    # Convert to numpy arrays
+    num_frames = sum(all_batch_sizes)
+    print("3D pose estimation completed!")
+    print(f"Processed {num_frames} frames")
+
+    all_3d_points = np.zeros((num_frames, 13, 3))
+    all_3d_covariances = np.zeros((num_frames, 13, 3, 3))
+    all_gt_points = np.zeros((num_frames, 13, 3))
+    all_ood_scores = np.zeros((num_frames,))
+    all_is_ood = np.zeros((num_frames,), dtype=bool)
+    index = 0
+    for i, batch_size_i in enumerate(all_batch_sizes):
+        all_3d_points[index:index + batch_size_i] = all_3d_points_list[i]
+        all_3d_covariances[index:index + batch_size_i] = all_3d_covariances_list[i]
+        all_gt_points[index:index + batch_size_i] = all_gt_points_list[i]
+        all_ood_scores[index:index + batch_size_i] = all_ood_scores_list[i]
+        all_is_ood[index:index + batch_size_i] = all_is_ood_list[i]
+        index += batch_size_i
 
     # Print OOD statistics if enabled
     if args.enable_ood and score_fn is not None:
-        all_ood_scores_arr = np.array(all_ood_scores)
-        all_is_ood_arr = np.array(all_is_ood)
         print(f"\nOOD Detection Statistics (Left Camera):")
-        print(f"  Mean OOD score: {all_ood_scores_arr.mean():.4f}")
-        print(f"  Std OOD score: {all_ood_scores_arr.std():.4f}")
-        print(f"  Classified as OOD: {all_is_ood_arr.sum()} / {len(all_is_ood_arr)} ({100*all_is_ood_arr.mean():.1f}%)")
+        print(f"  Mean OOD score: {all_ood_scores.mean():.4f}")
+        print(f"  Std OOD score: {all_ood_scores.std():.4f}")
+        print(f"  Classified as OOD: {all_is_ood.sum()} / {len(all_is_ood)} ({100 * all_is_ood.mean():.1f}%)")
         print(f"  OOD threshold used: {args.ood_threshold:.4f}")
 
-    # Convert to numpy arrays
-    all_3d_points = np.array(all_3d_points)  # Shape: (num_frames, 13, 3)
-    all_3d_covariances = np.array(all_3d_covariances)  # Shape: (num_frames, 13, 3, 3)
-    all_gt_points = np.array(all_gt_points)
-    num_frames = all_3d_points.shape[0]
     mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(
         predictions=np.reshape(all_3d_points, [num_frames, 1, 13, 3]),
-        targets=np.reshape(pose_sequence[:num_frames], [num_frames, 1, 13, 3]),
+        targets=np.reshape(all_gt_points, [num_frames, 1, 13, 3]),
     )
     print(f"MPJPE = {mpjpe:.2f}")
     print(f"per_joint_errors = {per_joint_errors}")

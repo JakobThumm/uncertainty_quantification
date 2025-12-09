@@ -8,8 +8,6 @@ for real-time pose estimation, replacing slow CPU-based PIL and NumPy operations
 import torch
 import torch.nn.functional as F
 import numpy as np
-import jax.numpy as jnp
-import jax
 import cv2
 from PIL import Image
 from typing import Tuple, List, Optional

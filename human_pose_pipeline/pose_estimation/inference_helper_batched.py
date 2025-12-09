@@ -476,6 +476,9 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
         device=device
     )
 
+    # Free GPU memory - frames are no longer needed
+    del frames
+
     # Take the first detected person
     left_pose = batch_prediction['keypoints'][:B]
     left_uncertainty = batch_prediction['uncertainties'][:B]  # [B, 13, 2]
