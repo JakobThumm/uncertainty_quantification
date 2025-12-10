@@ -44,7 +44,7 @@ def load_ground_truth_poses(extracted_dir, subject, action):
     # Find matching CDF file
     cdf_file = None
     for filename in os.listdir(poses_dir):
-        if filename.endswith('.cdf') and action in filename:
+        if filename.endswith('.cdf') and filename == f"{action}.cdf":
             cdf_file = os.path.join(poses_dir, filename)
             break
 

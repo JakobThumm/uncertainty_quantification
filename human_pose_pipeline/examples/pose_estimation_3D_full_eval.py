@@ -219,6 +219,11 @@ def main():
         print(f"  Classified as OOD: {all_is_ood.sum()} / {len(all_is_ood)} ({100 * all_is_ood.mean():.1f}%)")
         print(f"  OOD threshold used: {args.ood_threshold:.4f}")
 
+    all_good_indices = np.where(~all_is_ood)
+    all_3d_points = all_3d_points[all_good_indices]
+    all_3d_covariances = all_3d_covariances[all_good_indices]
+    all_gt_points = all_gt_points[all_good_indices]
+
     mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(
         predictions=np.reshape(all_3d_points, [1, num_frames, 13, 3]),
         targets=np.reshape(all_gt_points, [1, num_frames, 13, 3]),
