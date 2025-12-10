@@ -188,7 +188,7 @@ def dataloader_from_string(
         )
     elif dataset_name == "Human36mMotionDataset3DWithInputUncertainty":
         train_loader, valid_loader, test_loader = get_h36m_motion_dataset_with_uncertainty(
-            base_directory=os.path.join(data_path, "H36M", "extracted"),
+            base_directory=os.path.join(data_path, "H36M", "pre_processed_motion"),
             batch_size=batch_size,
             shuffle=shuffle,
             seed=seed,

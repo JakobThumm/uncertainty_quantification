@@ -37,13 +37,17 @@ class Human36mMotionDataset3D(Dataset):
         reduced_timestep=REDUCED_TIMESTEP,
         reduced_joints=REDUCED_JOINT_INDICES,
         ood=False,
-        input_uncertainty=None
+        input_uncertainty=False
     ):
         self.input_frames = input_frames
         self.predict_frames = predict_frames
         self.jax_format = jax_format
-        self.data = []
-        self.data = self.load_data(base_directory, split)
+        self.pose_data = []
+        if not input_uncertainty:
+            self.pose_data = self.load_data(base_directory, split)
+            self.covariance_data = None
+        else:
+            self.pose_data, self.covariance_data = self.load_data_preprocessed(base_directory, split)
         self.reduce_size = reduce_size
         self.reduced_timestep = reduced_timestep
         self.reduced_joints = reduced_joints
@@ -76,11 +80,45 @@ class Human36mMotionDataset3D(Dataset):
         print(f"Loaded {len(all_data)} sequences for {split} split")
         return all_data
 
+    def load_data_preprocessed(self, base_directory, split):
+        all_poses = []
+        all_covariances = []
+        for subject in SPLIT[split]:
+            directory = os.path.join(base_directory, subject)
+            if not os.path.exists(directory):
+                print(f"Warning: Directory {directory} not found, skipping...")
+                continue
+            for filename in os.listdir(directory):
+                if not filename.endswith(".npz"):
+                    continue
+                file_path = os.path.join(directory, filename)
+                data = np.load(file_path)
+                pred_poses = data['poses_3d']  # (num_frames, 13, 3)
+                covariances = data['covariances_3d']  # (num_frames, 13, 3, 3)
+                valid_mask = data['valid_mask']  # (num_frames,)
+
+                for offset in [0, 1]:
+                    downsampled_poses = pred_poses[offset::2]
+                    downsampled_covariances = covariances[offset::2]
+                    downsampled_valid_mask = valid_mask[offset::2]
+                    for i in range(len(downsampled_poses) - self.input_frames - self.predict_frames + 1):
+                        poses_window = downsampled_poses[i : i + self.input_frames + self.predict_frames]
+                        covariances_window = downsampled_covariances[i : i + self.input_frames + self.predict_frames]
+                        valid_mask_window = downsampled_valid_mask[i : i + self.input_frames + self.predict_frames]
+                        if sum(valid_mask_window) < self.input_frames + self.predict_frames:
+                            continue
+                        all_poses.append(poses_window)
+                        all_covariances.append(covariances_window)
+        all_poses = np.array(all_poses)
+        all_covariances = np.array(all_covariances)
+        print(f"Loaded {len(all_poses)} sequences for {split} split from preprocessed data")
+        return all_poses, all_covariances
+
     def __len__(self):
-        return len(self.data)
+        return len(self.pose_data)
 
     def __getitem__(self, idx):
-        sequence = self.data[idx]
+        sequence = self.pose_data[idx]
         input_pose = sequence[: self.input_frames]
         if self.ood:
             # Randomly shuffle the input sequence in the first dimension for OOD testing
@@ -93,15 +131,13 @@ class Human36mMotionDataset3D(Dataset):
             target_pose_timestep = target_pose_timestep.reshape(-1, 3)  # [num_joints, 3]
             reduced_target = target_pose_timestep[self.reduced_joints, :]  # [len(reduced_joints), 3]
             target_pose = reduced_target.reshape(-1)  # [len(reduced_joints)*3]
-        if self.input_uncertainty is not None:
-            # Create 3x3 identity covariance matrices for each joint in the input sequence with std deviation
-            num_joints = input_pose.shape[1] // 3
-            input_covariances = np.tile(
-                np.eye(3)[np.newaxis, np.newaxis, :, :] * (self.input_uncertainty ** 2),
-                (input_pose.shape[0], num_joints, 1, 1)
-            )  # [input_frames, num_joints, 3, 3]
-            # Reshape to [input_frames, num_joints*3*3]
-            input_covariances = input_covariances.reshape(input_pose.shape[0], -1)
+        if self.input_uncertainty and self.covariance_data is not None:
+            covariance_sequence = self.covariance_data[idx]
+            input_covariances = covariance_sequence[: self.input_frames]
+            if self.ood:
+                # Randomly shuffle the input covariances in the first dimension for OOD testing
+                input_covariances = input_covariances.copy()
+                np.random.shuffle(input_covariances)
             # Append to input_pose
             input_pose = np.concatenate([input_pose, input_covariances], axis=-1)
         if self.jax_format:
@@ -141,7 +177,7 @@ def get_h36m_motion_dataset_function(
     seed: int = 0,
     split_train_val_ratio: float = 1.0,
     n_samples: Optional[int] = None,
-    input_uncertainty: Optional[float] = None,
+    input_uncertainty: bool = False,
     reduce_size: bool = False,
     ood: bool = False,
 ):
@@ -289,7 +325,7 @@ def get_h36m_motion_dataset_with_uncertainty(
         shuffle=shuffle,
         seed=seed,
         n_samples=n_samples,
-        input_uncertainty=FAKE_INPUT_UNCERTAINTY
+        input_uncertainty=True
     )
 
 
