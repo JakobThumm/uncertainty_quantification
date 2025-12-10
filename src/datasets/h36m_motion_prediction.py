@@ -96,6 +96,9 @@ class Human36mMotionDataset3D(Dataset):
                 pred_poses = data['poses_3d']  # (num_frames, 13, 3)
                 covariances = data['covariances_3d']  # (num_frames, 13, 3, 3)
                 valid_mask = data['valid_mask']  # (num_frames,)
+                pred_poses = pred_poses.reshape(pred_poses.shape[0], -1)  # (num_frames, 13*3)
+                covariances = covariances.reshape(covariances.shape[0], -1)  # (num_frames, 13*3*3)
+                valid_mask = valid_mask.astype(bool) 
 
                 for offset in [0, 1]:
                     downsampled_poses = pred_poses[offset::2]
