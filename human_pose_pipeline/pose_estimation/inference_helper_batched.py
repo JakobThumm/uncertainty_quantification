@@ -496,7 +496,7 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
     is_ood = torch.logical_or(left_is_ood, right_is_ood)
     ood_score = torch.max(left_ood_score, right_ood_score)
     human_detected = torch.logical_and(left_human_detected, right_human_detected)
-    is_ood = torch.logical_and(is_ood, human_detected)
+    is_ood = torch.logical_or(is_ood, ~human_detected)
 
     left_pose[human_detected == 0] = 0.0
     right_pose[human_detected == 0] = 0.0

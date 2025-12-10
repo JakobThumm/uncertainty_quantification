@@ -223,6 +223,7 @@ def main():
     all_3d_points = all_3d_points[all_good_indices]
     all_3d_covariances = all_3d_covariances[all_good_indices]
     all_gt_points = all_gt_points[all_good_indices]
+    num_frames = all_3d_points.shape[0]
 
     mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(
         predictions=np.reshape(all_3d_points, [1, num_frames, 13, 3]),
@@ -231,6 +232,7 @@ def main():
     print(f"MPJPE = {mpjpe:.2f}")
     print(f"per_joint_errors = {per_joint_errors}")
     print(f"Over the time errors = {per_time_errors}")
+    stop = 0
 
 
 if __name__ == "__main__":
