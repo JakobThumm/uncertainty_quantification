@@ -21,6 +21,7 @@ import cv2
 from tqdm import tqdm
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
+from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_np
 from src.datasets.h36m import Human36mDatasetTwoCameras
 from src.ood_scores.lm_lanczos import load_score_functions
 from human_pose_pipeline.pose_estimation.inference_helper import (
@@ -35,7 +36,8 @@ from human_pose_pipeline.pose_estimation.triangulation_helper import (
     validate_projection_matrices
 )
 from human_pose_pipeline.utils.visualization import (
-    draw_3d_pose_with_covariance
+    draw_3d_pose_with_covariance,
+    visualize_single_pose_on_image
 )
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
@@ -277,8 +279,7 @@ def main():
     parser.add_argument('--model_save_path', type=str, default='human_pose_pipeline/models/pose_estimation', help='Path to saved models')
     parser.add_argument('--run_name', type=str, default='finetuned_h36m_regressflow_with_unc', help='Model run name')
     parser.add_argument('--ood_threshold', type=float, default=OOD_THRESHOLD, help='OOD threshold')
-    parser.add_argument('--subject', type=str, default='S1', help='Subject ID (e.g., S1, S6)')
-    parser.add_argument('--action', type=str, default='WalkingDog', help='Action to visualize')
+    parser.add_argument('--split', type=str, default='validation', help='Split from train, validation, test')
     parser.add_argument('--camera_ids', type=str, nargs=2, default=['55011271', '60457274'], help='Camera IDs')
     parser.add_argument('--max_frames', type=int, default=100, help='Maximum number of frames to process')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection on left camera')
@@ -294,8 +295,7 @@ def main():
 
     # Configuration
     base_directory = os.path.join(root_dir, args.data_path, "H36M", "extracted")
-    subject = args.subject
-    action = args.action
+    split = args.split
     camera_ids = args.camera_ids
 
     try:
@@ -332,20 +332,8 @@ def main():
             print("Please ensure the camera-parameters.json file is available in the models directory")
             return
 
-        intrinsics, extrinsics = load_camera_parameters(camera_parameters_path, subject, camera_ids)
-
-        # Compute projection matrices
-        projection_matrices = {}
-        for cam_id in camera_ids:
-            K = intrinsics[cam_id]
-            RT = extrinsics[cam_id]
-            projection_matrices[cam_id] = K @ RT  # P = K[R|t]
-
-        # Validate projection matrices
-        validate_projection_matrices(projection_matrices[camera_ids[0]], projection_matrices[camera_ids[1]])
-
         # Create dataset
-        dataset = Human36mDatasetTwoCameras(base_directory, subject, action, camera_ids=camera_ids)
+        dataset = Human36mDatasetTwoCameras(base_directory, split, camera_ids=camera_ids)
 
         if len(dataset) == 0:
             print("No data found. Please check the dataset path and camera IDs.")
@@ -358,17 +346,12 @@ def main():
         sample = dataset[sample_idx]
         video_paths = sample['video_paths']
         pose_sequence = np.array(sample['pose_sequence'])
+        subject = sample['subject']
+        action = sample['action']
+        intrinsics, extrinsics, projection_matrices = load_camera_parameters(camera_parameters_path, subject, camera_ids)
+        validate_projection_matrices(projection_matrices[camera_ids[0]], projection_matrices[camera_ids[1]])
 
-        print(f"Processing videos:")
-        for i, path in enumerate(video_paths):
-            print(f"  Camera {i+1}: {path}")
-
-        # Open video captures
-        caps = [cv2.VideoCapture(vp) for vp in video_paths]
-
-        # Define a common frame size
-        common_width = 640
-        common_height = 480
+        visualize_frame_number = 0
 
         # Set up the 3D plot
         fig = plt.figure(figsize=(8, 6))
@@ -377,6 +360,7 @@ def main():
         # Process a limited number of frames for testing
         frames_to_process = min(args.max_frames, len(pose_sequence))
         all_3d_points = []
+        all_3d_gt_points = pose_sequence[:frames_to_process]
         all_3d_covariances = []
         all_frame_pairs = []  # Store frame pairs for video creation
         all_ood_scores = []  # Store OOD scores from left camera
@@ -388,15 +372,7 @@ def main():
 
         for frame_idx in tqdm(range(frames_to_process), desc="Processing frames"):
             ret_flags = []
-            frames = []
-
-            # Read frames from both cameras
-            for cap in caps:
-                ret, frame = cap.read()
-                ret_flags.append(ret)
-                if ret:
-                    frame = cv2.resize(frame, (common_width, common_height))
-                    frames.append(frame)
+            frames = [sample["all_camera_frames"][cam_idx][frame_idx] for cam_idx in range(2)]
 
             if not all(ret_flags):
                 break
@@ -479,6 +455,35 @@ def main():
 
                 all_3d_points.append(points_3d)
                 all_3d_covariances.append(C_3d_all)
+
+                # Visualize 3D pose for a sample frame
+                if frame_idx == visualize_frame_number:
+                    draw_3d_pose_with_covariance(
+                        ax, all_3d_points[frame_idx], all_3d_covariances[frame_idx],
+                        CONNECTIONS_13, scale=1.0, color='g'
+                    )
+                    draw_3d_pose_with_covariance(
+                        ax, all_3d_gt_points[frame_idx], all_3d_covariances[frame_idx],
+                        CONNECTIONS_13, scale=1.0, color='b'
+                    )
+                    os.makedirs("visualizations/3D_pose_estimation", exist_ok=True)
+                    plt.savefig(f"visualizations/3D_pose_estimation/3d_pose_estimation_{subject}_{action}_frame_{frame_idx}.png", dpi=150, bbox_inches='tight')
+                    print(f"Sample 3D pose visualization saved as: visualizations/3D_pose_estimation/3d_pose_estimation_{subject}_{action}_frame_{frame_idx}.png")
+
+                    result_image_left = visualize_single_pose_on_image(
+                        image=frames[0], gt_pose=poses_cam1, pred_pose=poses_cam1, pred_uncertainties=uncertainties_cam1, show_uncertainty=False
+                    )
+                    # Save the visualization
+                    cv2.imwrite(f"visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_left.png", result_image_left)
+                    print(f"Sample 2D pose visualization saved as: visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_left.png")
+
+                    result_image_right = visualize_single_pose_on_image(
+                        image=frames[1], gt_pose=poses_cam2, pred_pose=poses_cam2, pred_uncertainties=uncertainties_cam2, show_uncertainty=False
+                    )
+                    # Save the visualization
+                    cv2.imwrite(f"visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_right.png", result_image_right)
+                    print(f"Sample 2D pose visualization saved as: visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_right.png")
+                    stop=0
             else:
                 all_3d_points.append(np.zeros((13, 3)))
                 all_3d_covariances.append(np.zeros((13, 3, 3)))
@@ -504,15 +509,9 @@ def main():
         all_3d_points = np.array(all_3d_points)  # Shape: (num_frames, 13, 3)
         all_3d_covariances = np.array(all_3d_covariances)  # Shape: (num_frames, 13, 3, 3)
 
-        # Visualize a sample frame
-        if len(all_3d_points) > 0:
-            sample_frame = len(all_3d_points) // 2  # Middle frame
-            draw_3d_pose_with_covariance(
-                ax, all_3d_points[sample_frame], all_3d_covariances[sample_frame],
-                CONNECTIONS_13, scale=1.0
-            )
-            plt.savefig(f"3d_pose_estimation_frame_{sample_frame}.png", dpi=150, bbox_inches='tight')
-            print(f"Sample 3D pose visualization saved as: 3d_pose_estimation_frame_{sample_frame}.png")
+        mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(predictions=np.array(all_3d_points)[np.newaxis, :], targets=all_3d_gt_points[np.newaxis, :])
+        print(f"MPJPE = {mpjpe:.2f}")
+        print(f"per_joint_errors = {per_joint_errors}")
 
         # Compute mean positions across joints for each frame
         mean_3d_points = np.mean(all_3d_points, axis=1)  # Shape: (num_frames, 3)
