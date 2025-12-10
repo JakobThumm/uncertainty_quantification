@@ -520,11 +520,11 @@ def visualize_pose_sequence(
         print("No frames to save!")
 
 
-def draw_3d_pose_with_covariance(ax, points_3d, covariances, connections, scale=1.0):
+def draw_3d_pose_with_covariance(ax, points_3d, covariances, connections, scale=1.0, color='b'):
     """
     Draw the 3D pose with covariance ellipsoids on a matplotlib axis.
     """
-    ax.clear()
+    # ax.clear()
 
     # Draw skeleton connections
     for connection in connections:
@@ -533,11 +533,11 @@ def draw_3d_pose_with_covariance(ax, points_3d, covariances, connections, scale=
             [points_3d[start, 0], points_3d[end, 0]],
             [points_3d[start, 1], points_3d[end, 1]],
             [points_3d[start, 2], points_3d[end, 2]],
-            "r-",
+            f"{color}-",
         )
 
     # Draw keypoints
-    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c="b", marker="o")
+    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c=color, marker="o")
 
     # Draw covariance ellipsoids (simplified version)
     for i in range(points_3d.shape[0]):
@@ -552,12 +552,12 @@ def draw_3d_pose_with_covariance(ax, points_3d, covariances, connections, scale=
         for j, (eigval, eigvec) in enumerate(zip(eigenvalues, eigenvectors.T)):
             start = points_3d[i] - radii[j] * eigvec
             end = points_3d[i] + radii[j] * eigvec
-            ax.plot([start[0], end[0]], [start[1], end[1]], [start[2], end[2]], "r-", alpha=0.5, linewidth=1)
+            ax.plot([start[0], end[0]], [start[1], end[1]], [start[2], end[2]], f"{color}-", alpha=0.5, linewidth=1)
 
     # Set consistent axis limits
     ax.set_xlim(-2000, 0)
-    ax.set_ylim(-2000, 0)
-    ax.set_zlim(1000, 2000)
+    ax.set_ylim(-1000, 1000)
+    ax.set_zlim(0, 2000)
 
     ax.set_xlabel("X")
     ax.set_ylabel("Y")

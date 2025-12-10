@@ -281,7 +281,7 @@ def main():
     parser.add_argument('--ood_threshold', type=float, default=OOD_THRESHOLD, help='OOD threshold')
     parser.add_argument('--split', type=str, default='validation', help='Split from train, validation, test')
     parser.add_argument('--camera_ids', type=str, nargs=2, default=['55011271', '60457274'], help='Camera IDs')
-    parser.add_argument('--max_frames', type=int, default=100, help='Maximum number of frames to process')
+    parser.add_argument('--max_frames', type=int, default=10000000000, help='Maximum number of frames to process')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection on left camera')
     parser.add_argument('--output_dir', type=str, default='results/pose_3d', help='Output directory for results')
 
@@ -351,14 +351,14 @@ def main():
         intrinsics, extrinsics, projection_matrices = load_camera_parameters(camera_parameters_path, subject, camera_ids)
         validate_projection_matrices(projection_matrices[camera_ids[0]], projection_matrices[camera_ids[1]])
 
-        visualize_frame_number = 0
+        visualize_frame_number = 12
 
         # Set up the 3D plot
         fig = plt.figure(figsize=(8, 6))
         ax = fig.add_subplot(111, projection='3d')
 
         # Process a limited number of frames for testing
-        frames_to_process = min(args.max_frames, len(pose_sequence))
+        frames_to_process = min(args.max_frames, len(pose_sequence), len(sample["all_camera_frames"][0]))
         all_3d_points = []
         all_3d_gt_points = pose_sequence[:frames_to_process]
         all_3d_covariances = []
@@ -487,10 +487,6 @@ def main():
             else:
                 all_3d_points.append(np.zeros((13, 3)))
                 all_3d_covariances.append(np.zeros((13, 3, 3)))
-
-        # Release resources
-        for cap in caps:
-            cap.release()
 
         print(f"\n3D pose estimation completed!")
         print(f"Processed {len(all_3d_points)} frames")

@@ -461,6 +461,8 @@ class Human36mDatasetTwoCameras:
                 all_data.append({
                     'pose_sequence': poses_13,
                     'video_paths': video_paths,
+                    'subject': subject,
+                    'action': action
                 })
 
         return all_data
@@ -476,7 +478,10 @@ class Human36mDatasetTwoCameras:
 
         return {
             'pose_sequence': jnp.array(pose_sequence, dtype=jnp.float32),
-            'all_camera_frames': all_camera_frames
+            'all_camera_frames': all_camera_frames,
+            'video_paths': video_paths,
+            'subject': sample['subject'],
+            'action': sample['action']
         }
 
     def load_frames(self, video_paths):

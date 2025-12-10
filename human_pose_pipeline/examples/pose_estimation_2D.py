@@ -16,6 +16,7 @@ import os
 import numpy as np
 from scipy.stats import chi2
 
+from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_np
 from src.datasets.h36m import Human36mDatasetSequence
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
@@ -114,8 +115,8 @@ def main():
 
     # Initialize JAX pose estimation model with uncertainty estimation
     models_dir = os.path.join(root_dir, "human_pose_pipeline/models/pose_estimation", "H36M", "RegressFlow", "seed_420")
-    checkpoint_path_jax = os.path.join(models_dir, "jax_resnet18_regressflow")
-    # checkpoint_path_jax = os.path.join(models_dir, "jax_resnet50_regressflow")
+    # checkpoint_path_jax = os.path.join(models_dir, "jax_resnet18_regressflow")
+    checkpoint_path_jax = os.path.join(models_dir, "jax_resnet50_regressflow")
     # checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
     pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
     print("Using RegressFlowWithAleatoric model for uncertainty estimation")
@@ -202,6 +203,10 @@ def main():
                 total_within_3std += evaluation['counts']['within_3std']
                 total_within_4std += evaluation['counts']['within_4std']
 
+            mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(predictions=np.array(estimated_poses)[np.newaxis, :], targets=full_sequence[np.newaxis, :])
+            print(f"MPJPE = {mpjpe:.2f}")
+            print(f"per_joint_errors = {per_joint_errors}")
+
             # Print evaluation results
             if total_frames > 0:
                 avg_within_1std = (total_within_1std / total_joints) * 100
@@ -218,22 +223,22 @@ def main():
                 print(f"Average percentage of keypoints within 4 std: {avg_within_4std:.2f}%")
 
             # Visualize the results
-            output_file = f"sample_pose_sequence_with_images_{split}_{idx}.gif"
-            visualize_pose_sequence(
-                pose_sequence=full_sequence,
-                images=frames,
-                output_file=output_file,
-                num_frames=len(frames),
-                estimated_poses=estimated_poses,
-                estimated_uncertainties=estimated_uncertainties,
-                estimated_covariances=estimated_covariances,
-                show_uncertainty=True
-            )
-            print(f"Visualization saved as {output_file}")
+            # output_file = f"sample_pose_sequence_with_images_{split}_{idx}.gif"
+            # visualize_pose_sequence(
+            #     pose_sequence=full_sequence,
+            #     images=frames,
+            #     output_file=output_file,
+            #     num_frames=len(frames),
+            #     estimated_poses=estimated_poses,
+            #     estimated_uncertainties=estimated_uncertainties,
+            #     estimated_covariances=estimated_covariances,
+            #     show_uncertainty=True
+            # )
+            # print(f"Visualization saved as {output_file}")
 
             # Break after first sample
-            if idx == 0:
-                break
+            # if idx == 0:
+            #     break
 
 if __name__ == "__main__":
     main()

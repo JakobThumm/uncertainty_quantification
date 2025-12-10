@@ -20,7 +20,7 @@ import torch
 from tqdm import tqdm
 
 from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_np
-from src.datasets.h36m import Human36mDatasetSequenceTwoCameras, SPLIT
+from src.datasets.h36m import Human36mDatasetSequenceTwoCameras, SPLIT, Human36mDatasetTwoCameras
 from src.ood_scores.lm_lanczos import load_score_functions
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
@@ -113,18 +113,8 @@ def main():
         print("Please ensure the camera-parameters.json file is available in the models directory")
         return
 
-    subject = SPLIT[args.split][0]
-    intrinsics, extrinsics, projection_matrices = load_camera_parameters(camera_parameters_path, subject, camera_ids)
-
-    # Compute projection matrices
-    P1 = projection_matrices[camera_ids[0]]
-    P2 = projection_matrices[camera_ids[1]]
-    P1 = torch.from_numpy(P1).to(device)
-    P2 = torch.from_numpy(P2).to(device)
-    projection_matrices = [P1, P2]
-
     # Create dataset
-    dataset = Human36mDatasetSequenceTwoCameras(
+    dataset = Human36mDatasetTwoCameras(
         base_directory=base_directory,
         split=split,
         camera_ids=camera_ids
@@ -150,9 +140,18 @@ def main():
         counter += 1
         all_camera_frames = sample['all_camera_frames']
         pose_sequence = sample['pose_sequence']
+        subject = sample['subject']
+        action = sample['action']
+        intrinsics, extrinsics, projection_matrices = load_camera_parameters(camera_parameters_path, subject, camera_ids)
+        # Compute projection matrices
+        P1 = projection_matrices[camera_ids[0]]
+        P2 = projection_matrices[camera_ids[1]]
+        P1 = torch.from_numpy(P1).to(device)
+        P2 = torch.from_numpy(P2).to(device)
+        projection_matrices = [P1, P2]
 
         # Process a limited number of frames for testing
-        frames_to_process = len(all_camera_frames[0])
+        frames_to_process = min(len(all_camera_frames[0]), len(pose_sequence))
 
         if args.enable_ood and score_fn is not None:
             print("OOD detection will be performed on LEFT camera (camera 0) only")
@@ -221,11 +220,12 @@ def main():
         print(f"  OOD threshold used: {args.ood_threshold:.4f}")
 
     mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(
-        predictions=np.reshape(all_3d_points, [num_frames, 1, 13, 3]),
-        targets=np.reshape(all_gt_points, [num_frames, 1, 13, 3]),
+        predictions=np.reshape(all_3d_points, [1, num_frames, 13, 3]),
+        targets=np.reshape(all_gt_points, [1, num_frames, 13, 3]),
     )
     print(f"MPJPE = {mpjpe:.2f}")
     print(f"per_joint_errors = {per_joint_errors}")
+    print(f"Over the time errors = {per_time_errors}")
 
 
 if __name__ == "__main__":
