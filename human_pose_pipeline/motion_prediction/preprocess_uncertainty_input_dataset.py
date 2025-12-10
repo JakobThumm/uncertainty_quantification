@@ -124,21 +124,21 @@ def process_sequence_batched(
     poses_3d = np.zeros((num_frames, 13, 3))
     covariances_3d = np.zeros((num_frames, 13, 3, 3))
     ood_scores = np.zeros((num_frames,))
-    is_ood_all = np.zeros((num_frames,), dtype=bool)
+    is_oods = np.zeros((num_frames,), dtype=bool)
 
     index = 0
     for i, batch_size_i in enumerate(all_batch_sizes):
         poses_3d[index:index + batch_size_i] = all_3d_points_list[i]
         covariances_3d[index:index + batch_size_i] = all_3d_covariances_list[i]
         ood_scores[index:index + batch_size_i] = all_ood_scores_list[i]
-        is_ood_all[index:index + batch_size_i] = all_is_ood_list[i]
+        is_oods[index:index + batch_size_i] = all_is_ood_list[i]
         index += batch_size_i
 
     # Create valid mask (frames where human was detected in both cameras)
     # Check if all values are zero (no detection)
-    valid_mask = ~np.all(poses_3d == 0, axis=(1, 2))
+    valid_mask = np.logical_and(~np.all(poses_3d == 0, axis=(1, 2)), ~is_oods)
 
-    return poses_3d, covariances_3d, valid_mask, ood_scores, is_ood_all
+    return poses_3d, covariances_3d, valid_mask, ood_scores, is_oods
 
 
 def preprocess_subject(

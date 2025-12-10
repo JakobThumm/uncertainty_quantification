@@ -159,6 +159,12 @@ def debug_sequence(preprocessed_path, extracted_dir, subject, action):
     min_length = min(len(pred_poses), len(gt_poses))
     aligned_pred = pred_poses[:min_length]
     aligned_gt = gt_poses[:min_length]
+    aligned_covariances = covariances[:min_length]
+    valid_mask = valid_mask[:min_length]
+    aligned_pred = aligned_pred[valid_mask]
+    aligned_gt = aligned_gt[valid_mask]
+    aligned_covariances = aligned_covariances[valid_mask]
+
     # aligned_pred, aligned_gt = align_sequences(pred_poses, gt_poses, valid_mask)
 
     if len(aligned_pred) == 0:
@@ -170,11 +176,10 @@ def debug_sequence(preprocessed_path, extracted_dir, subject, action):
 
     # Compute uncertainty statistics
     # Average uncertainty (standard deviation) for each joint
-    valid_covariances = covariances[valid_mask][:len(aligned_pred)]
     avg_uncertainties = []
     for j in range(13):
         # Get diagonal elements (variances) for this joint
-        variances = np.diagonal(valid_covariances[:, j, :, :], axis1=1, axis2=2)  # (num_frames, 3)
+        variances = np.diagonal(aligned_covariances[:, j, :, :], axis1=1, axis2=2)  # (num_frames, 3)
         std_devs = np.sqrt(variances)  # (num_frames, 3)
         avg_uncertainties.append(np.mean(std_devs))
     avg_uncertainties = np.array(avg_uncertainties)
