@@ -15,7 +15,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from src.datasets.h36m import Human36mDatasetSequenceTwoCameras, SPLIT
+from src.datasets.h36m import Human36mDatasetSequenceTwoCameras, SPLIT, Human36mDatasetTwoCameras
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
@@ -216,7 +216,7 @@ def preprocess_subject(
         )
 
         # Save the processed data
-        output_filename = f"{action_name}_seq{idx:04d}.npz"
+        output_filename = f"{action_name}.npz"
         output_path = os.path.join(subject_output_dir, output_filename)
         np.savez_compressed(
             output_path,
@@ -229,7 +229,7 @@ def preprocess_subject(
 
         valid_count = valid_mask.sum()
         ood_count = is_ood.sum() if score_fn is not None else 0
-        print(f"  {action_name}_seq{idx:04d}: {valid_count}/{len(valid_mask)} valid frames, {ood_count} OOD detections")
+        print(f"  {action_name}: {valid_count}/{len(valid_mask)} valid frames, {ood_count} OOD detections")
 
 
 def main():
@@ -401,7 +401,7 @@ def main():
             print(f"Warning: Subject {subject} not found in any split. Skipping.")
             continue
 
-        dataset = Human36mDatasetSequenceTwoCameras(
+        dataset = Human36mDatasetTwoCameras(
             base_directory=base_directory,
             split=subject_split,
             camera_ids=args.camera_ids

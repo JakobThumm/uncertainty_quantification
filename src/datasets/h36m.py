@@ -431,27 +431,27 @@ class Human36mDatasetTwoCameras:
     Handles loading of pose sequences and corresponding video frames from two camera views
     for stereo triangulation.
     """
-    def __init__(self, base_directory, subject, action, camera_ids=['55011271', '60457274']):
+    def __init__(self, base_directory, split='train', camera_ids=['55011271', '60457274']):
         self.camera_ids = camera_ids
-        self.data = self.load_data(base_directory, subject, action, camera_ids)
+        self.data = self.load_data(base_directory, split, camera_ids)
         self.base_directory = base_directory
 
-    def load_data(self, base_directory, subject, action, camera_ids):
+    def load_data(self, base_directory, split, camera_ids):
         all_data = []
-        poses_dir = os.path.join(base_directory, subject, 'Poses_D3_Positions')
-        videos_dir = os.path.join(base_directory, subject, 'Videos')
+        for subject in SPLIT[split]:
+            poses_dir = os.path.join(base_directory, subject, 'Poses_D3_Positions')
+            videos_dir = os.path.join(base_directory, subject, 'Videos')
+            print(f"Loading data from {poses_dir} and {videos_dir}")
+            pose_files = [f for f in os.listdir(poses_dir) if f.endswith('.cdf')]
 
-        pose_files = [f for f in os.listdir(poses_dir) if f.startswith(action) and f.endswith('.cdf')]
+            for pose_file in pose_files:
+                pose_path = os.path.join(poses_dir, pose_file)
+                action = os.path.splitext(pose_file)[0]
 
-        for pose_file in pose_files:
-            pose_path = os.path.join(poses_dir, pose_file)
-
-            # Look for corresponding video files
-            video_files = [f"{action}.{camera_id}.mp4" for camera_id in camera_ids]
-            video_paths = [os.path.join(videos_dir, vf) for vf in video_files
-                          if os.path.exists(os.path.join(videos_dir, vf))]
-
-            if len(video_paths) == 2:
+                # Look for corresponding video files
+                video_files = [f"{action}.{camera_id}.mp4" for camera_id in camera_ids]
+                video_paths = [os.path.join(videos_dir, vf) for vf in video_files
+                               if os.path.exists(os.path.join(videos_dir, vf))]
                 with CDF(pose_path) as cdf:
                     poses = cdf['Pose'][:]
                     poses = poses.reshape(-1, 32, 3)
@@ -472,11 +472,34 @@ class Human36mDatasetTwoCameras:
         sample = self.data[idx]
         pose_sequence = sample['pose_sequence']
         video_paths = sample['video_paths']
+        all_camera_frames = self.load_frames(video_paths)
 
         return {
             'pose_sequence': jnp.array(pose_sequence, dtype=jnp.float32),
-            'video_paths': video_paths
+            'all_camera_frames': all_camera_frames
         }
+
+    def load_frames(self, video_paths):
+        all_camera_frames = []
+        for video_path in video_paths:
+            cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            frames = []
+            for frame_idx in range(total_frames):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ret, frame = cap.read()
+                if ret:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frame_pil = Image.fromarray(frame)
+                    frames.append(frame_pil)
+                else:
+                    break
+            cap.release()
+            all_camera_frames.append(frames)
+        min_number_of_frames = min(len(frames) for frames in all_camera_frames)
+        # Trim all camera frames to the minimum number of frames
+        all_camera_frames = [frames[:min_number_of_frames] for frames in all_camera_frames]
+        return all_camera_frames
 
 
 # for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS}")):

@@ -156,7 +156,10 @@ def debug_sequence(preprocessed_path, extracted_dir, subject, action):
         return None
 
     # Align sequences
-    aligned_pred, aligned_gt = align_sequences(pred_poses, gt_poses, valid_mask)
+    min_length = min(len(pred_poses), len(gt_poses))
+    aligned_pred = pred_poses[:min_length]
+    aligned_gt = gt_poses[:min_length]
+    # aligned_pred, aligned_gt = align_sequences(pred_poses, gt_poses, valid_mask)
 
     if len(aligned_pred) == 0:
         print(f"Warning: No valid frames to compare for {subject}/{action}")
