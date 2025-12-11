@@ -86,14 +86,18 @@ We have two things:
     - [ ] Train motion prediction with uncertainty model
       - [x] Train DCT transformer model without uncertainty input
       - [x] Change dataset to Marians train/eval/test split and retrain.
-      - [ ] Retrain DCT transformer model without uncertainty input with Optuna.
+      - [x] Retrain DCT transformer model without uncertainty input with Optuna.
       - [x] Create dataset with predicted uncertainty of pose estimation model
-      - [ ] Debugging: Test 3D pose estimation statistics on full pipeline
-      - [ ] Train DCT transformer model with uncertainty
-      - [ ] Create evaluation
- 6. (Implement the training pipeline in JAX)
-    - The training pipeline is based on Marians code in the Experiment 1 folder. 
-    - We want to have the training pipeline, so that we could do fine tuning and adaptions if needed.
+      - [x] Debugging: Test 3D pose estimation statistics on full pipeline
+      - [x] Train DCT transformer model with uncertainty
+      - [x] Create evaluation
+ 6. Debug prediction accuracies Pytorch vs. Jax
+    - [ ] Investigate prediction accuracy 2D Pose estimation in pytorch vs. Jax.
+    - [ ] Investigate the uncertainty coverage for the 2D Pose estimation in pytorch vs. Jax.
+    - [ ] Investigate prediction accuracy 3D Pose estimation in pytorch vs. Jax.
+    - [ ] Investigate the uncertainty coverage for the 3D Pose estimation in pytorch vs. Jax.
+    - [ ] Investigate prediction accuracy 3D motion prediction in pytorch vs. Jax.
+    - [ ] Investigate the uncertainty coverage for the 3D motion prediction in pytorch vs. Jax.
  7. Full single-human pipeline
     - First, find out how the current bounding box algorithm works in Marians code. E.g., Experiment 4. There, he did real-world tests, so it should include some bounding box algorithm.
     - Implement the full pipeline based on the code of Experiment 4 plus the new OOD detection. Everything in JAX.
