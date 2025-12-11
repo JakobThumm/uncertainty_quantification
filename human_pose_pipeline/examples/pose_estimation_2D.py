@@ -17,7 +17,10 @@ import numpy as np
 from scipy.stats import chi2
 
 from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_np
-from src.datasets.h36m import Human36mDatasetSequence
+from src.datasets.h36m import (
+    Human36mDatasetSequence,
+    SPLIT
+)
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
@@ -33,13 +36,6 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
-# Dataset splits (same as Marian's)
-SPLIT = {
-    'train': ['S1'],
-    'validation': ['S11'],
-    'test': ['S5']
-}
-
 
 def evaluate_pose_estimation_full(ground_truth, estimated_pose, estimated_uncertainty, estimated_covariance):
     """
@@ -48,6 +44,7 @@ def evaluate_pose_estimation_full(ground_truth, estimated_pose, estimated_uncert
     """
     # Calculate the difference between ground truth and estimated pose
     delta = ground_truth - estimated_pose  # Shape: (num_joints, 2)
+    mpjpe = np.mean(np.linalg.norm(delta, axis=-1))  # Mean Per Joint Position Error
 
     # Extract uncertainties and covariance
     std_x = estimated_uncertainty[:, 0]  # Shape: (num_joints,)
@@ -97,6 +94,7 @@ def evaluate_pose_estimation_full(ground_truth, estimated_pose, estimated_uncert
         joint_results.append(joint_result)
 
     return {
+        'mpjpe': mpjpe,
         'counts': counts,
         'joint_results': joint_results,
         'num_joints': len(ground_truth)
@@ -109,6 +107,24 @@ def main():
     JAX version of Marian's main function.
     """
     base_directory = os.path.join(root_dir, "datasets", "H36M", "extracted")
+    
+    # ============ CONFIGURATION FLAGS ============
+    QUICK_TEST = True     # Set to True to test with just 1 video file and 50 frames
+    splits = ['validation']
+    # =============================================
+
+    # Set parameters based on quick test mode
+    if QUICK_TEST:
+        print("\n" + "="*50)
+        print("QUICK TEST MODE ENABLED")
+        print("Loading: 1 video file only")
+        print("Frames per sequence: 50")
+        print("="*50 + "\n")
+        max_files = 3
+        sequence_length = 500
+    else:
+        max_files = None  # Load all files
+        sequence_length = 500
 
     # Initialize models
     print("Initializing models...")
@@ -128,14 +144,28 @@ def main():
 
     # Create datasets and dataloaders for each split
     datasets = {}
-    for split in ['train']:  # Reduced to just 'train' split
-        datasets[split] = Human36mDatasetSequence(base_directory, split=split, sequence_length=500)
+    for split in splits:
+        datasets[split] = Human36mDatasetSequence(
+            base_directory,
+            split=split,
+            sequence_length=sequence_length,
+            max_files=max_files
+        )
         print(f"{split.capitalize()} dataset size: {len(datasets[split])}")
 
     # Process each split
-    for split in ['train']:
+    for split in splits:
         dataset = datasets[split]
         print(f"\nProcessing {split} split...")
+        
+        # Initialize statistics variables
+        total_mpjpe = 0.0
+        total_frames = 0
+        total_joints = 0
+        total_within_1std = 0
+        total_within_2std = 0
+        total_within_3std = 0
+        total_within_4std = 0
 
         for idx, sample in enumerate(dataset):
             full_sequence = np.array(sample['pose_sequence'])
@@ -145,15 +175,8 @@ def main():
             print(f"Full sequence shape: {full_sequence.shape}")
             print(f"Number of frames: {len(frames)}")
 
-            # Initialize statistics variables
-            total_frames = 0
-            total_joints = 0
-            total_within_1std = 0
-            total_within_2std = 0
-            total_within_3std = 0
-            total_within_4std = 0
-
             # Perform pose estimation on each frame
+            gt_poses = []
             estimated_poses = []
             estimated_uncertainties = []
             estimated_covariances = []
@@ -173,55 +196,43 @@ def main():
                     score_fn=None,  # No OOD scoring for now
                     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD
                 )
+                if pose_predictions is None or len(pose_predictions) == 0:
+                    print(f"Warning: No humans detected in frame {frame_idx}. Skipping frame.")
+                    continue
                 # Take the first detected person
                 mapped_pose = pose_predictions[0]['keypoints']
                 mapped_uncertainty = pose_predictions[0]['uncertainties']
                 mapped_covariance = pose_predictions[0]['covariance']
+                ground_truth = full_sequence[frame_idx]
 
+                gt_poses.append(ground_truth)
                 estimated_poses.append(mapped_pose)
                 estimated_uncertainties.append(mapped_uncertainty)
                 estimated_covariances.append(mapped_covariance)
 
-                # Evaluate pose estimation
-                ground_truth = full_sequence[frame_idx]
-                estimated_pose = np.array(estimated_poses[frame_idx])
-                estimated_uncertainty = np.array(estimated_uncertainties[frame_idx])
-                estimated_covariance = np.array(estimated_covariances[frame_idx])
-
                 evaluation = evaluate_pose_estimation_full(
                     ground_truth=ground_truth,
-                    estimated_pose=estimated_pose,
-                    estimated_uncertainty=estimated_uncertainty,
-                    estimated_covariance=estimated_covariance
+                    estimated_pose=np.array(mapped_pose),
+                    estimated_uncertainty=np.array(mapped_uncertainty),
+                    estimated_covariance=np.array(mapped_covariance)
                 )
 
                 # Update counters
                 total_frames += 1
                 total_joints += evaluation['num_joints']
+                total_mpjpe += evaluation['mpjpe']
                 total_within_1std += evaluation['counts']['within_1std']
                 total_within_2std += evaluation['counts']['within_2std']
                 total_within_3std += evaluation['counts']['within_3std']
                 total_within_4std += evaluation['counts']['within_4std']
 
-            mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(predictions=np.array(estimated_poses)[np.newaxis, :], targets=full_sequence[np.newaxis, :])
+            if len(estimated_poses) > 0:
+                mpjpe, _, _, _, per_joint_errors, _ = evaluate_pose_prediction_scores_np(
+                    predictions=np.array(estimated_poses)[np.newaxis, :],
+                    targets=np.array(gt_poses)[np.newaxis, :]
+                )
             print(f"MPJPE = {mpjpe:.2f}")
             print(f"per_joint_errors = {per_joint_errors}")
-
-            # Print evaluation results
-            if total_frames > 0:
-                avg_within_1std = (total_within_1std / total_joints) * 100
-                avg_within_2std = (total_within_2std / total_joints) * 100
-                avg_within_3std = (total_within_3std / total_joints) * 100
-                avg_within_4std = (total_within_4std / total_joints) * 100
-
-                print(f"\nOverall Evaluation Results:")
-                print(f"Total frames processed: {total_frames}")
-                print(f"Total joints evaluated: {total_joints}")
-                print(f"Average percentage of keypoints within 1 std: {avg_within_1std:.2f}%")
-                print(f"Average percentage of keypoints within 2 std: {avg_within_2std:.2f}%")
-                print(f"Average percentage of keypoints within 3 std: {avg_within_3std:.2f}%")
-                print(f"Average percentage of keypoints within 4 std: {avg_within_4std:.2f}%")
-
             # Visualize the results
             # output_file = f"sample_pose_sequence_with_images_{split}_{idx}.gif"
             # visualize_pose_sequence(
@@ -239,6 +250,23 @@ def main():
             # Break after first sample
             # if idx == 0:
             #     break
+
+        # Print evaluation results
+        if total_frames > 0:
+            avg_within_1std = (total_within_1std / total_joints) * 100
+            avg_within_2std = (total_within_2std / total_joints) * 100
+            avg_within_3std = (total_within_3std / total_joints) * 100
+            avg_within_4std = (total_within_4std / total_joints) * 100
+
+            print(f"\nOverall Evaluation Results:")
+            print(f"Total frames processed: {total_frames}")
+            print(f"Total joints evaluated: {total_joints}")
+            print(f"Average MPJPE: {total_mpjpe / total_frames:.2f}")
+            print(f"Average percentage of keypoints within 1 std: {avg_within_1std:.2f}%")
+            print(f"Average percentage of keypoints within 2 std: {avg_within_2std:.2f}%")
+            print(f"Average percentage of keypoints within 3 std: {avg_within_3std:.2f}%")
+            print(f"Average percentage of keypoints within 4 std: {avg_within_4std:.2f}%")
+
 
 if __name__ == "__main__":
     main()

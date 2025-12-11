@@ -239,21 +239,25 @@ class Human36mDatasetSequence:
     Handles loading of pose sequences and corresponding video frames from the Human3.6M dataset.
     Supports splitting data into train/validation/test sets and sequence-based sampling.
     """
-    def __init__(self, base_directory, split='train', sequence_length=50, transform=None):
+    def __init__(self, base_directory, split='train', sequence_length=50, transform=None, max_files=None):
         self.sequence_length = sequence_length
         self.transform = transform if transform else transforms.ToTensor()
-        self.data = self.load_data(base_directory, split)
+        self.max_files = max_files
         self.base_directory = base_directory
         self.split = split
+        self.data = self.load_data(base_directory, split)
 
     def load_data(self, base_directory, split):
         all_data = []
+        file_counter = 0
         for subject in SPLIT[split]:
             poses_dir = os.path.join(base_directory, subject, 'Poses_D2_Positions')
             videos_dir = os.path.join(base_directory, subject, 'Videos')
             print(f"Loading data from {poses_dir} and {videos_dir}")
 
             for filename in os.listdir(poses_dir):
+                if self.max_files and file_counter >= self.max_files:
+                    break
                 try:
                     if filename.endswith('.cdf'):
                         file_path = os.path.join(poses_dir, filename)
@@ -283,6 +287,7 @@ class Human36mDatasetSequence:
                                     'video_path': video_path,
                                     'frame_indices': frame_indices,
                                 })
+                        file_counter += 1
                 except Exception as e:
                     print(f"Error loading data: {str(e)}")
 

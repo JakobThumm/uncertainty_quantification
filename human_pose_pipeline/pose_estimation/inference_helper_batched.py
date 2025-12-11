@@ -337,7 +337,7 @@ def expand_3joints_to_13joints(joints_3):
 def process_frame_2d(frames, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                      mirror_map, score_fn=None,
                      human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
-                     num_output_joints=17, verbose=True, device='cpu'):
+                     num_output_joints=17, verbose=False, device='cpu'):
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 

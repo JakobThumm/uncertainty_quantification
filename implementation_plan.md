@@ -92,8 +92,24 @@ We have two things:
       - [x] Train DCT transformer model with uncertainty
       - [x] Create evaluation
  6. Debug prediction accuracies Pytorch vs. Jax
-    - [ ] Investigate prediction accuracy 2D Pose estimation in pytorch vs. Jax.
-    - [ ] Investigate the uncertainty coverage for the 2D Pose estimation in pytorch vs. Jax.
+    - [x] Investigate prediction accuracy 2D Pose estimation in pytorch vs. Jax.
+            Results Marian Pytorch on 3 validation files (yolo threshold = 0.8):
+              Total frames processed: 4881
+              Total joints evaluated: 63453
+              Average MPJPE: 7.64 pixels
+              Average percentage of keypoints within 1 std: 73.14%
+              Average percentage of keypoints within 2 std: 91.45%
+              Average percentage of keypoints within 3 std: 97.50%
+              Average percentage of keypoints within 4 std: 99.17%
+            Results Jax on 3 validation files (yolo threshold = 0.3)
+              Total frames processed: 4988
+              Total joints evaluated: 64844
+              Average MPJPE: 7.83
+              Average percentage of keypoints within 1 std: 73.08%
+              Average percentage of keypoints within 2 std: 92.45%
+              Average percentage of keypoints within 3 std: 97.51%
+              Average percentage of keypoints within 4 std: 99.14%
+    - [x] Investigate the uncertainty coverage for the 2D Pose estimation in pytorch vs. Jax.
     - [ ] Investigate prediction accuracy 3D Pose estimation in pytorch vs. Jax.
     - [ ] Investigate the uncertainty coverage for the 3D Pose estimation in pytorch vs. Jax.
     - [ ] Investigate prediction accuracy 3D motion prediction in pytorch vs. Jax.

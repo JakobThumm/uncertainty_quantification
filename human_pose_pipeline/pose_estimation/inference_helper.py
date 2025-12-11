@@ -359,7 +359,7 @@ def expand_3joints_to_13joints(joints_3):
 def process_frame_2d(frame, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
                      mirror_map, score_fn=None,
                      human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
-                     num_output_joints=17, use_gpu_acceleration=True, verbose=True):
+                     num_output_joints=17, use_gpu_acceleration=True, verbose=False):
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -640,11 +640,14 @@ def get_human_detector(device_torch):
             # Warmup inference for GPU
             import numpy as np
             from PIL import Image
-            dummy_image = Image.fromarray(np.random.randint(0, 255, (640, 640, 3), dtype=np.uint8))
+            dummy_image = Image.fromarray(
+                np.random.randint(
+                    0, 255, (YOLO_IMAGE_SIZE[0], YOLO_IMAGE_SIZE[1], 3), dtype=np.uint8
+                )
+            )
             _ = model.predict(dummy_image, verbose=False)
             torch.cuda.synchronize()
             print("GPU warmup completed.")
-
         else:
             print("YOLO human detector loaded successfully on CPU.")
 
@@ -662,6 +665,7 @@ def get_human_detector(device_torch):
             print(f"Fallback also failed: {e2}")
             raise e2
 
+
 def detect_humans(model, image, device_torch, threshold=0.8, verbose=False):
     """
     Detect humans in an image using YOLO (ultralytics).
@@ -678,7 +682,7 @@ def detect_humans(model, image, device_torch, threshold=0.8, verbose=False):
     """
     try:
         # Run YOLO prediction
-        results = model.predict(image, conf=threshold, verbose=False)
+        results = model.predict(image, conf=threshold, classes=[0], verbose=False)
         person_boxes = []
 
         # Extract detections from first result
@@ -703,6 +707,7 @@ def detect_humans(model, image, device_torch, threshold=0.8, verbose=False):
         import traceback
         traceback.print_exc()
         return []
+
 
 def visualize_pose_estimation_results(pil_image, pose_estimations, save_path=None):
     """
