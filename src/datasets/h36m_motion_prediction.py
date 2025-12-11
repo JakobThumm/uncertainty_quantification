@@ -37,7 +37,8 @@ class Human36mMotionDataset3D(Dataset):
         reduced_timestep=REDUCED_TIMESTEP,
         reduced_joints=REDUCED_JOINT_INDICES,
         ood=False,
-        input_uncertainty=False
+        input_uncertainty=False,
+        directory_uncertain=None,
     ):
         self.input_frames = input_frames
         self.predict_frames = predict_frames
@@ -47,7 +48,12 @@ class Human36mMotionDataset3D(Dataset):
             self.pose_data = self.load_data(base_directory, split)
             self.covariance_data = None
         else:
-            self.pose_data, self.covariance_data = self.load_data_preprocessed(base_directory, split)
+            assert directory_uncertain is not None, "directory_uncertain must be provided when input_uncertainty is True"
+            self.pose_data, self.covariance_data = self.load_data_preprocessed(
+                base_directory_uncertain=directory_uncertain,
+                base_directory_gt=base_directory,
+                split=split
+            )
         self.reduce_size = reduce_size
         self.reduced_timestep = reduced_timestep
         self.reduced_joints = reduced_joints
@@ -80,32 +86,55 @@ class Human36mMotionDataset3D(Dataset):
         print(f"Loaded {len(all_data)} sequences for {split} split")
         return all_data
 
-    def load_data_preprocessed(self, base_directory, split):
+    def load_data_preprocessed(self, base_directory_uncertain, base_directory_gt, split):
         all_poses = []
         all_covariances = []
         for subject in SPLIT[split]:
-            directory = os.path.join(base_directory, subject)
-            if not os.path.exists(directory):
-                print(f"Warning: Directory {directory} not found, skipping...")
+            uncertain_directory = os.path.join(base_directory_uncertain, subject)
+            if not os.path.exists(uncertain_directory):
+                print(f"Warning: Directory {uncertain_directory} not found, skipping...")
                 continue
-            for filename in os.listdir(directory):
+            for filename in os.listdir(uncertain_directory):
                 if not filename.endswith(".npz"):
                     continue
-                file_path = os.path.join(directory, filename)
+                action = os.path.splitext(filename)[0]
+                file_path = os.path.join(uncertain_directory, filename)
                 data = np.load(file_path)
                 pred_poses = data['poses_3d']  # (num_frames, 13, 3)
                 covariances = data['covariances_3d']  # (num_frames, 13, 3, 3)
                 valid_mask = data['valid_mask']  # (num_frames,)
                 pred_poses = pred_poses.reshape(pred_poses.shape[0], -1)  # (num_frames, 13*3)
                 covariances = covariances.reshape(covariances.shape[0], -1)  # (num_frames, 13*3*3)
-                valid_mask = valid_mask.astype(bool) 
+                valid_mask = valid_mask.astype(bool)
+
+                gt_file = os.path.join(base_directory_gt, subject, "Poses_D3_Positions", f"{action}.cdf")
+                if os.path.exists(gt_file):
+                    with pycdf.CDF(gt_file) as cdf:
+                        gt_poses = cdf["Pose"][:]
+                        gt_poses = gt_poses.reshape(-1, 32, 3)
+                        gt_poses_13 = gt_poses[:, JOINT_IDX_17, :]
+                        gt_poses_13 = gt_poses_13[:, JOINT_IDX_13, :]
+                        gt_poses_13 = gt_poses_13.reshape(gt_poses_13.shape[0], -1)
+                else:
+                    print(f"Warning: GT file {gt_file} not found, using predicted poses as GT.")
+                    gt_poses_13 = pred_poses.copy()
+
+                # Trim sequences to match lengths
+                min_length = min(len(pred_poses), len(gt_poses_13), len(covariances), len(valid_mask))
+                pred_poses = pred_poses[:min_length]
+                gt_poses_13 = gt_poses_13[:min_length]
+                covariances = covariances[:min_length]
+                valid_mask = valid_mask[:min_length]
 
                 for offset in [0, 1]:
                     downsampled_poses = pred_poses[offset::2]
                     downsampled_covariances = covariances[offset::2]
                     downsampled_valid_mask = valid_mask[offset::2]
+                    downsampled_gt_poses = gt_poses_13[offset::2]
                     for i in range(len(downsampled_poses) - self.input_frames - self.predict_frames + 1):
                         poses_window = downsampled_poses[i : i + self.input_frames + self.predict_frames]
+                        # Replace the target frames with ground truth poses
+                        poses_window[-self.predict_frames:] = downsampled_gt_poses[i + self.input_frames : i + self.input_frames + self.predict_frames]
                         covariances_window = downsampled_covariances[i : i + self.input_frames + self.predict_frames]
                         valid_mask_window = downsampled_valid_mask[i : i + self.input_frames + self.predict_frames]
                         if sum(valid_mask_window) < self.input_frames + self.predict_frames:
@@ -183,6 +212,7 @@ def get_h36m_motion_dataset_function(
     input_uncertainty: bool = False,
     reduce_size: bool = False,
     ood: bool = False,
+    directory_uncertain: Optional[str] = None
 ):
     """
     Get data loaders for preprocessed H36M dataset
@@ -198,6 +228,7 @@ def get_h36m_motion_dataset_function(
         input_uncertainty: Add artificial input uncertainty of this amount, defaults to None.
         reduced_size: Reduced output size of only head and two hand poses.
         ood: Shuffle input poses in time dimension.
+        directory_uncertain: Directory containing preprocessed uncertain data.
 
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
@@ -209,7 +240,8 @@ def get_h36m_motion_dataset_function(
         jax_format=False,
         input_uncertainty=input_uncertainty,
         reduce_size=reduce_size,
-        ood=ood
+        ood=ood,
+        directory_uncertain=directory_uncertain
     )
 
     validation_dataset = Human36mMotionDataset3D(
@@ -218,7 +250,8 @@ def get_h36m_motion_dataset_function(
         jax_format=False,
         input_uncertainty=input_uncertainty,
         reduce_size=reduce_size,
-        ood=ood
+        ood=ood,
+        directory_uncertain=directory_uncertain
     )
 
     test_dataset = Human36mMotionDataset3D(
@@ -227,7 +260,8 @@ def get_h36m_motion_dataset_function(
         jax_format=False,
         input_uncertainty=input_uncertainty,
         reduce_size=reduce_size,
-        ood=ood
+        ood=ood,
+        directory_uncertain=directory_uncertain
     )
 
     # Subsample if n_samples is specified
@@ -301,6 +335,7 @@ def get_h36m_motion_dataset(
 
 def get_h36m_motion_dataset_with_uncertainty(
     base_directory,
+    directory_uncertain,
     batch_size=128,
     shuffle=False,
     seed=0,
@@ -312,6 +347,7 @@ def get_h36m_motion_dataset_with_uncertainty(
 
     Args:
         base_directory: Path to dataset directory
+        directory_uncertain: Directory containing preprocessed uncertain data.
         batch_size: Batch size for data loaders
         shuffle: Whether to shuffle the data
         seed: Random seed for reproducibility
@@ -328,7 +364,8 @@ def get_h36m_motion_dataset_with_uncertainty(
         shuffle=shuffle,
         seed=seed,
         n_samples=n_samples,
-        input_uncertainty=True
+        input_uncertainty=True,
+        directory_uncertain=directory_uncertain
     )
 
 
@@ -396,6 +433,44 @@ def get_h36m_motion_ood_dataset(
         seed=seed,
         n_samples=n_samples,
         ood=True
+    )
+
+
+def get_h36m_motion_ood_dataset_with_uncertainty(
+    base_directory,
+    directory_uncertain,
+    batch_size=128,
+    shuffle=False,
+    seed=0,
+    split_train_val_ratio=0.9,
+    n_samples=None
+):
+    """Get data loaders for the H36M motion prediction OOD dataset.
+    
+    This dataset shuffles the input sequences to create out-of-distribution samples.
+
+    Args:
+        base_directory: Path to dataset directory
+        directory_uncertain: Directory containing preprocessed uncertain data.
+        batch_size: Batch size for data loaders
+        shuffle: Whether to shuffle the data
+        seed: Random seed for reproducibility
+        split_train_val_ratio: Ratio for splitting train set into train/val
+        return_metadata: Whether to return metadata with samples
+        n_samples: Number of samples to use from dataset (None = use all)
+
+    Returns:
+        tuple: (train_loader, valid_loader, test_loader)
+    """
+    return get_h36m_motion_dataset_function(
+        base_directory=base_directory,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        seed=seed,
+        n_samples=n_samples,
+        ood=True,
+        input_uncertainty=True,
+        directory_uncertain=directory_uncertain
     )
 
 

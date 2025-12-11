@@ -112,7 +112,7 @@ class FrequencyAwareAttention(nn.Module):
             qkv_features=self.d_model,
             out_features=self.d_model,
             name="mha",
-            normalize_qk=True,  # Enables training with higher LR.
+            normalize_qk=False,  # Enables training with higher LR.
             force_fp32_for_softmax=True,  # Better numerical stability for mixed precision data (prob. not needed)
             kernel_init=nn.initializers.xavier_uniform(),  # Kernel initialization
             out_kernel_init=nn.initializers.zeros,  # Output kernel init
@@ -497,6 +497,7 @@ class DCTPoseTransformer(nn.Module):
         input_dim = x.shape[2]
         if input_dim == N_JOINTS * 3:
             input_uncertainty = None
+            use_uncertainty_input = False
         else:
             # Split input into poses and uncertainties
             pose_dim = N_JOINTS * 3
@@ -507,6 +508,8 @@ class DCTPoseTransformer(nn.Module):
                 batch_size, self.seq_len, N_JOINTS, 3, 3
             )
             x = input_pose
+            use_uncertainty_input = True
+            input_dim = pose_dim
         offset = x[:, -1:, :]
         # Subtract offset
         x = x - offset
@@ -560,8 +563,8 @@ class DCTPoseTransformer(nn.Module):
         high_freq = x[..., half_dim:]
 
         # Frequency decoders
-        low_freq_features = (self.input_dim + 1) // 2
-        high_freq_features = self.input_dim - low_freq_features
+        low_freq_features = (input_dim + 1) // 2
+        high_freq_features = input_dim - low_freq_features
 
         low_freq_out = nn.Dense(low_freq_features, name="low_freq_decoder")(low_freq)
         high_freq_out = nn.Dense(high_freq_features, name="high_freq_decoder")(high_freq)
@@ -569,7 +572,7 @@ class DCTPoseTransformer(nn.Module):
         freq_poses = jnp.concatenate([low_freq_out, high_freq_out], axis=-1)
 
         # Predict uncertainties (using detached features in training)
-        num_joints = self.input_dim // 3
+        num_joints = input_dim // 3
         uncertainty_head = UncertaintyHeadCov(
             d_model=self.d_model,
             seq_len=self.seq_len,

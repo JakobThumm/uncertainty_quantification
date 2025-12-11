@@ -55,6 +55,105 @@ from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
 
+def merge_params(source_params, target_params, verbose=True):
+    """
+    Merge parameters from source into target, keeping target's unique parameters.
+
+    This is used when transferring from a smaller model (e.g., Stage 3) to a larger
+    model (e.g., Stage 4) that has additional parameters.
+
+    Args:
+        source_params: Parameters from the source model (e.g., Stage 3)
+        target_params: Parameters from the target model (e.g., Stage 4)
+        verbose: If True, print detailed information about which parameters were merged
+
+    Returns:
+        Merged parameters with source values where they exist, target values otherwise
+    """
+    from flax.core import freeze, unfreeze
+
+    # Unfreeze to allow modifications
+    target_dict = unfreeze(target_params) if hasattr(target_params, 'unfreeze') else dict(target_params)
+    source_dict = unfreeze(source_params) if hasattr(source_params, 'unfreeze') else dict(source_params)
+
+    # Track what happened to each parameter
+    loaded_params = []
+    newly_initialized_params = []
+    shape_mismatch_params = []
+
+    def recursive_merge(src, tgt, path=""):
+        """Recursively merge nested dictionaries."""
+        if isinstance(tgt, dict):
+            result = dict(tgt)  # Start with target
+            for key in src:
+                current_path = f"{path}.{key}" if path else key
+                if key in tgt:
+                    if isinstance(src[key], dict) and isinstance(tgt[key], dict):
+                        # Recursively merge nested dicts
+                        result[key] = recursive_merge(src[key], tgt[key], current_path)
+                    elif hasattr(src[key], 'shape') and hasattr(tgt[key], 'shape'):
+                        # Check if shapes match for array parameters
+                        if src[key].shape == tgt[key].shape:
+                            result[key] = src[key]
+                            loaded_params.append(f"{current_path} {src[key].shape}")
+                        else:
+                            shape_mismatch_params.append(
+                                f"{current_path} (source: {src[key].shape}, target: {tgt[key].shape})"
+                            )
+                    else:
+                        # For non-dict, non-array values, use source
+                        result[key] = src[key]
+                        loaded_params.append(current_path)
+                # If key not in target, skip it (don't add source-only params)
+
+            # Check for parameters only in target (newly initialized)
+            for key in tgt:
+                current_path = f"{path}.{key}" if path else key
+                if key not in src:
+                    if isinstance(tgt[key], dict):
+                        # Recursively count newly initialized params in this subtree
+                        recursive_merge({}, tgt[key], current_path)
+                    elif hasattr(tgt[key], 'shape'):
+                        newly_initialized_params.append(f"{current_path} {tgt[key].shape}")
+                    else:
+                        newly_initialized_params.append(current_path)
+
+            return result
+        else:
+            # For non-dict values, return target
+            return tgt
+
+    merged = recursive_merge(source_dict, target_dict)
+
+    # Print summary if verbose
+    if verbose:
+        print("\n" + "=" * 70)
+        print("Parameter Loading Summary")
+        print("=" * 70)
+
+        if loaded_params:
+            print(f"\n✓ Loaded from checkpoint ({len(loaded_params)} parameters):")
+            for param in loaded_params:
+                print(f"  • {param}")
+
+        if newly_initialized_params:
+            print(f"\n⚡ Newly initialized ({len(newly_initialized_params)} parameters):")
+            for param in newly_initialized_params:
+                print(f"  • {param}")
+
+        if shape_mismatch_params:
+            print(f"\n⚠ Shape mismatches - kept newly initialized ({len(shape_mismatch_params)} parameters):")
+            for param in shape_mismatch_params:
+                print(f"  • {param}")
+
+        print("=" * 70 + "\n")
+
+    # Freeze if original was frozen
+    if hasattr(target_params, 'unfreeze'):
+        return freeze(merged)
+    return merged
+
+
 class TrainingConfig:
     """Configuration for training the DCT Pose Transformer."""
 
@@ -90,6 +189,9 @@ class TrainingConfig:
 
         # Stage 3: End-to-end training
         stage3_epochs: int = 30,
+
+        # Stage 4: End-to-end training with input uncertainty
+        stage4_epochs: int = 10,
 
         # Data settings
         data_path: str = "../datasets",
@@ -127,6 +229,7 @@ class TrainingConfig:
         self.stage1_epochs = stage1_epochs
         self.stage2_epochs = stage2_epochs
         self.stage3_epochs = stage3_epochs
+        self.stage4_epochs = stage4_epochs
 
         # Data settings
         self.data_path = data_path
@@ -474,6 +577,15 @@ def train_epoch(
                 lambda_weight=1.0,
                 freeze_backbone=False
             )
+        elif stage == 4:
+            # Stage 4: Train entire model end-to-end with input uncertainty
+            state, metrics = train_step(
+                state=state,
+                batch=(input_pose, target_pose),
+                use_uncertainty_head=True,
+                lambda_weight=1.0,
+                freeze_backbone=False
+            )
 
         epoch_metrics.append(metrics)
 
@@ -548,6 +660,7 @@ def load_checkpoint(
     checkpoint_dir: str,
     step: Optional[int] = None,
     stage: Optional[int] = None,
+    allow_partial: bool = False,
 ) -> TrainState:
     """Load checkpoint using Orbax.
 
@@ -556,6 +669,7 @@ def load_checkpoint(
         checkpoint_dir: Base checkpoint directory
         step: Specific step to load (if None, finds latest)
         stage: Specific stage to load from (if None, searches all stages for latest)
+        allow_partial: If True, allow loading even when structures don't match exactly
 
     Returns:
         Restored training state
@@ -567,7 +681,7 @@ def load_checkpoint(
         latest_step = -1
         latest_stage = None
 
-        for s in [1, 2, 3]:
+        for s in [1, 2, 3, 4]:
             stage_dir = os.path.join(checkpoint_dir, f"stage_{s}")
             if not os.path.exists(stage_dir):
                 continue
@@ -601,10 +715,39 @@ def load_checkpoint(
             step = max(steps)
 
     checkpoint_path = os.path.join(checkpoint_dir, f"stage_{stage}", f"checkpoint_{step}")
-    restored_state = checkpointer.restore(checkpoint_path, item=state)
 
-    print(f"Loaded checkpoint from {checkpoint_path}")
-    return restored_state
+    if allow_partial:
+        # Try to load with structure matching, if it fails, do partial restore
+        try:
+            restored_state = checkpointer.restore(checkpoint_path, item=state)
+            print(f"✓ Loaded checkpoint from {checkpoint_path}")
+            print(f"  All parameters loaded successfully (exact structure match)")
+            return restored_state
+        except (ValueError, KeyError) as e:
+            print(f"\n⚠ Checkpoint structure mismatch detected")
+            print(f"  Attempting partial restore from {checkpoint_path}")
+            error_msg = str(e)
+            if len(error_msg) > 300:
+                print(f"  Error (truncated): {error_msg[:300]}...")
+            else:
+                print(f"  Error: {error_msg}")
+
+            # Load the raw checkpoint data
+            raw_checkpoint = checkpointer.restore(checkpoint_path)
+
+            # Merge only the parameters that match
+            if 'params' in raw_checkpoint:
+                print(f"\n  Merging compatible parameters...")
+                merged_params = merge_params(raw_checkpoint['params'], state.params, verbose=True)
+                restored_state = state.replace(params=merged_params)
+                print(f"✓ Partial restore completed from {checkpoint_path}\n")
+                return restored_state
+            else:
+                raise ValueError(f"Could not find 'params' in checkpoint at {checkpoint_path}")
+    else:
+        restored_state = checkpointer.restore(checkpoint_path, item=state)
+        print(f"Loaded checkpoint from {checkpoint_path}")
+        return restored_state
 
 
 def save_model_pickle(
@@ -697,6 +840,36 @@ def verify_frozen_params(state_before: TrainState, state_after: TrainState, stag
     )
 
 
+def load_dataloaders_for_stage(
+    stage: int,
+    config: TrainingConfig,
+):
+    """Load appropriate dataloaders for a training stage.
+
+    Args:
+        stage: Training stage (1-4)
+        config: Training configuration
+
+    Returns:
+        tuple: (train_loader, valid_loader, test_loader)
+    """
+    if stage <= 3:
+        dataset_name = "Human36mMotionDataset3D"
+    else:
+        dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
+
+    print(f"Loading dataset: {dataset_name}")
+    train_loader, valid_loader, test_loader = dataloader_from_string(
+        dataset_name,
+        batch_size=config.batch_size,
+        shuffle=True,
+        seed=config.seed,
+        download=False,
+        data_path=config.data_path,
+    )
+    return train_loader, valid_loader, test_loader
+
+
 def train_stage(
     state: TrainState,
     train_loader,
@@ -716,11 +889,17 @@ def train_stage(
         verify_freezing: If True, verify parameter freezing after first batch (for debugging)
         trial: Optional Optuna trial for hyperparameter optimization
     """
-    stage_names = {1: "Pose Only", 2: "Uncertainty Head (Frozen Backbone)", 3: "End-to-End"}
+    stage_names = {
+        1: "Pose Only",
+        2: "Uncertainty Head (Frozen Backbone)",
+        3: "End-to-End",
+        4: "End-to-End with Input Uncertainty"
+    }
     freeze_info = {
         1: "Training: All parameters",
         2: "Training: ONLY uncertainty_head | Frozen: transformer, decoders, embeddings",
-        3: "Training: All parameters"
+        3: "Training: All parameters",
+        4: "Training: All parameters | Dataset: WITH input uncertainties (dim=156)"
     }
 
     print(f"\n{'=' * 60}")
@@ -1060,6 +1239,7 @@ def main(args):
             stage1_epochs=args.stage1_epochs,
             stage2_epochs=args.stage2_epochs,
             stage3_epochs=args.stage3_epochs,
+            stage4_epochs=args.stage4_epochs,
             data_path=args.data_path,
             seed=args.seed,
             run_id=run_id,
@@ -1102,7 +1282,7 @@ def main(args):
     if args.resume:
         try:
             load_stage = args.stage - 1 if args.stage > 1 else None
-            state = load_checkpoint(state, checkpoint_dir, stage=load_stage)
+            state = load_checkpoint(state, checkpoint_dir, stage=load_stage, allow_partial=True)
             print("Resumed from checkpoint")
         except Exception as e:
             print(f"Could not load checkpoint: {e}")
@@ -1153,6 +1333,75 @@ def main(args):
             lr_fn=lr_fn,
         )
 
+    if args.stage <= 4:
+        print("\n" + "=" * 60)
+        print("STAGE 4: End-to-End Training with Input Uncertainty")
+        print("=" * 60)
+
+        # Step 1: Load dataset with uncertainty
+        print("\nStep 1: Loading uncertainty dataset...")
+        train_loader_stage4, valid_loader_stage4, test_loader_stage4 = load_dataloaders_for_stage(
+            stage=4,
+            config=config
+        )
+
+        # Step 2: Create new config with updated input_dim
+        print("\nStep 2: Creating Stage 4 configuration...")
+        input_dim_stage4 = N_JOINTS * 3 + N_JOINTS * 9  # 39 + 117 = 156
+        config_stage4 = TrainingConfig.from_dict({
+            **config.to_dict(),
+            'input_dim': input_dim_stage4
+        })
+        print(f"  Stage 3 input_dim: {config.input_dim}")
+        print(f"  Stage 4 input_dim: {input_dim_stage4}")
+
+        # Step 3: Initialize new model with input_dim=156
+        print("\nStep 3: Initializing model with input_dim=156...")
+        state_stage4, lr_fn_stage4 = create_train_state(
+            rng, config_stage4, steps_per_epoch, config.stage4_epochs
+        )
+
+        # Step 4: Load Stage 3 checkpoint
+        print("\nStep 4: Loading Stage 3 checkpoint...")
+        try:
+            # state_stage3 = load_checkpoint(
+            #     state, checkpoint_dir, stage=3, step=None
+            # )
+            # print("  Stage 3 checkpoint loaded successfully")
+
+            # Step 5: Transfer parameters
+            print("\nStep 5: Transferring parameters from Stage 3 to Stage 4...")
+
+            # Merge parameters: use Stage 3 weights where available, keep Stage 4's new params
+            merged_params = merge_params(state.params, state_stage4.params, verbose=True)
+            state_stage4 = state_stage4.replace(params=merged_params)
+            print("✓ Parameters transferred successfully")
+
+        except Exception as e:
+            print(f"  ⚠ Warning: Could not load Stage 3 checkpoint: {e}")
+            print("  Proceeding with randomly initialized weights")
+
+        # Step 6: Update optimizer for Stage 4
+        print("\nStep 6: Creating learning rate schedule for Stage 4...")
+        state_stage4, lr_fn_stage4 = update_optimizer_for_stage(
+            state_stage4, config_stage4, steps_per_epoch, config.stage4_epochs
+        )
+
+        # Step 7: Train Stage 4
+        print("\nStep 7: Starting Stage 4 training...")
+        state = train_stage(
+            state_stage4,
+            train_loader_stage4,
+            valid_loader_stage4,
+            stage=4,
+            n_epochs=config.stage4_epochs,
+            config=config_stage4,
+            checkpoint_dir=checkpoint_dir,
+            lr_fn=lr_fn_stage4,
+        )
+
+        print("\nStage 4 training completed!")
+
     # Final evaluation on test set
     print("\nFinal evaluation on test set...")
     test_metrics = evaluate(state, test_loader, epoch=0)
@@ -1171,8 +1420,8 @@ if __name__ == "__main__":
     # Run configuration
     parser.add_argument("--run_id", type=str, default=None,
                         help="Unique run identifier (defaults to wandb run id or timestamp)")
-    parser.add_argument("--stage", type=int, default=1, choices=[1, 2, 3],
-                        help="Training stage to start from (1, 2, or 3)")
+    parser.add_argument("--stage", type=int, default=1, choices=[1, 2, 3, 4],
+                        help="Training stage to start from (1, 2, 3, or 4)")
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
     parser.add_argument("--new_config", action="store_true",
                         help="Create new config even if one exists")
@@ -1201,12 +1450,14 @@ if __name__ == "__main__":
     parser.add_argument("--lr_warmup_epochs", type=int, default=5,
                         help="Number of warmup epochs for learning rate")
     parser.add_argument("--lr_min_factor", type=float, default=0.01,
-                        help="Minimum LR as fraction of initial LR (e.g., 0.01 = 1%)")
+                        help="Minimum LR as fraction of initial LR (e.g., 0.01 = 1%%)")
 
     # Stage epochs
     parser.add_argument("--stage1_epochs", type=int, default=50)
     parser.add_argument("--stage2_epochs", type=int, default=20)
     parser.add_argument("--stage3_epochs", type=int, default=30)
+    parser.add_argument("--stage4_epochs", type=int, default=10,
+                        help="Number of epochs for Stage 4 (end-to-end with input uncertainty)")
 
     # Data
     parser.add_argument("--data_path", type=str, default="../datasets")
