@@ -843,12 +843,14 @@ def verify_frozen_params(state_before: TrainState, state_after: TrainState, stag
 def load_dataloaders_for_stage(
     stage: int,
     config: TrainingConfig,
+    n_samples: Optional[int] = None,
 ):
     """Load appropriate dataloaders for a training stage.
 
     Args:
         stage: Training stage (1-4)
         config: Training configuration
+        n_samples: Optional number of samples to limit dataset size (for debugging)
 
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
@@ -866,6 +868,7 @@ def load_dataloaders_for_stage(
         seed=config.seed,
         download=False,
         data_path=config.data_path,
+        n_samples=n_samples
     )
     return train_loader, valid_loader, test_loader
 
@@ -1033,14 +1036,9 @@ def objective(trial: optuna.Trial, base_args) -> float:
 
     # Load data
     print("Loading data...")
-    dataset_name = "Human36mMotionDataset3D"
-    train_loader, valid_loader, test_loader = dataloader_from_string(
-        dataset_name,
-        batch_size=config.batch_size,
-        shuffle=True,
-        seed=config.seed,
-        download=False,
-        data_path=config.data_path,
+    train_loader, valid_loader, test_loader = load_dataloaders_for_stage(
+        stage=1,
+        config=config
     )
 
     # Calculate steps per epoch for learning rate scheduling
@@ -1260,14 +1258,10 @@ def main(args):
 
     # Load data
     print("Loading data...")
-    dataset_name = "Human36mMotionDataset3D"
-    train_loader, valid_loader, test_loader = dataloader_from_string(
-        dataset_name,
-        batch_size=config.batch_size,
-        shuffle=True,
-        seed=config.seed,
-        download=False,
-        data_path=config.data_path,
+    train_loader, valid_loader, test_loader = load_dataloaders_for_stage(
+        stage=1,
+        config=config,
+        n_samples=args.n_samples  # For debugging with limited samples
     )
 
     # Calculate steps per epoch for learning rate scheduling
@@ -1342,7 +1336,8 @@ def main(args):
         print("\nStep 1: Loading uncertainty dataset...")
         train_loader_stage4, valid_loader_stage4, test_loader_stage4 = load_dataloaders_for_stage(
             stage=4,
-            config=config
+            config=config,
+            n_samples=args.n_samples  # For debugging with limited samples
         )
 
         # Step 2: Create new config with updated input_dim
@@ -1440,10 +1435,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_grad_norm", type=float, default=0.01)
 
     # Learning rate scheduling
-    parser.add_argument("--use_lr_schedule", action="store_true", default=True,
+    parser.add_argument("--use_lr_schedule", action="store_true", default=False,
                         help="Use learning rate scheduling")
-    parser.add_argument("--no_lr_schedule", dest="use_lr_schedule", action="store_false",
-                        help="Disable learning rate scheduling")
     parser.add_argument("--lr_schedule_type", type=str, default="cosine",
                         choices=["cosine", "exponential"],
                         help="Type of LR schedule: cosine or exponential")
@@ -1462,6 +1455,8 @@ if __name__ == "__main__":
     # Data
     parser.add_argument("--data_path", type=str, default="../datasets")
     parser.add_argument("--seed", type=int, default=420)
+    parser.add_argument("--n_samples", type=int, default=None,
+                        help="Number of samples to use from dataset (for debugging)")
 
     # Weights & Biases
     parser.add_argument("--wandb_project", type=str, default="motion-prediction")

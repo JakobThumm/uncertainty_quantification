@@ -150,6 +150,25 @@ We have two things:
         --> This would require further investigation but our model is better, so I guess it is okay.
     - [x] Investigate the uncertainty coverage for the 3D Pose estimation in pytorch vs. Jax.
     - [ ] Investigate prediction accuracy 3D motion prediction in pytorch vs. Jax.
+        Pytorch all validation data, model = 
+            Overall MPJPE: 23.79 mm
+            Per-Time Errors:
+            Time point 1 error =    6.37 mm
+            Time point 2 error =    7.10 mm
+            Time point 3 error =   10.23 mm
+            Time point 4 error =   14.71 mm
+            Time point 5 error =   19.68 mm
+            Time point 6 error =   24.78 mm
+            Time point 7 error =   30.14 mm
+            Time point 8 error =   35.72 mm
+            Time point 9 error =   41.48 mm
+            Time point 10 error =   47.65 mm
+            Uncertainty Coverage Stats:
+              Overall coverage within 1 std: 95.64%
+              Overall coverage within 2 std: 98.59%
+              Overall coverage within 3 std: 99.47%
+              Overall coverage within 4 std: 99.78%
+        
         Jax all validation data, trained model after stage 3:
             Overall MPJPE: 55.37 mm, Std: 57.21 mm
             Per-Time Errors:
