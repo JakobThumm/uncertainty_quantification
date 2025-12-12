@@ -85,7 +85,7 @@ def evaluate_pose_estimation_full_3d(ground_truth, estimated_pose, estimated_cov
     mpjpe = np.mean(np.linalg.norm(delta, axis=1))
 
     num_joints = len(ground_truth)
-    mahalanobis = np.zeros(num_joints)
+    mahalanobis_squared = np.zeros(num_joints)
 
     # Add a small epsilon for numerical stability
     epsilon = 1e-6
@@ -104,29 +104,25 @@ def evaluate_pose_estimation_full_3d(ground_truth, estimated_pose, estimated_cov
             # If inversion fails, use pseudoinverse
             inv_cov = np.linalg.pinv(cov_stable)
 
-        # Compute Mahalanobis distance: sqrt(delta^T * inv_cov * delta)
-        # For chi-squared comparison, we use the squared distance
-        mahalanobis[i] = np.sqrt(delta[i].T @ inv_cov @ delta[i])
+        mahalanobis_squared[i] = delta[i].T @ inv_cov @ delta[i]
 
-    # Define chi-squared thresholds for 3 degrees of freedom (3D points)
-    # thresholds = [chi2.ppf(0.68, df=3),   # 1 std
-    #               chi2.ppf(0.95, df=3),   # 2 std
-    #               chi2.ppf(0.9973, df=3), # 3 std
-    #               chi2.ppf(0.99994, df=3)]# 4 std
-    thresholds = [1, 2, 3, 4]
+    thresholds = [chi2.ppf(0.68, df=3),
+                  chi2.ppf(0.95, df=3),
+                  chi2.ppf(0.9973, df=3),
+                  chi2.ppf(0.99994, df=3)]
 
     # Determine which keypoints fall within each threshold
-    within_std = [mahalanobis <= threshold for threshold in thresholds]
+    within_std = [mahalanobis_squared <= threshold for threshold in thresholds]
 
     # Count the number of keypoints within each threshold
     counts = {f'within_{i + 1}std': np.sum(within) for i, within in enumerate(within_std)}
 
     # Prepare detailed results per joint
     joint_results = []
-    for i, dist in enumerate(mahalanobis):
+    for i, dist in enumerate(mahalanobis_squared):
         joint_result = {
             'joint_index': i,
-            'mahalanobis_distance': dist,
+            'mahalanobis_distance': np.sqrt(dist),
             'within_1std': dist <= thresholds[0],
             'within_2std': dist <= thresholds[1],
             'within_3std': dist <= thresholds[2],

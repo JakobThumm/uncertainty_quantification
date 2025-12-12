@@ -116,7 +116,12 @@ We have two things:
             Results Marian Pytorch on 3 validation files (yolo threshold = 0.8):
               Total frames processed: 6545
               Total joints evaluated: 85085
-              Average MPJPE: 82.64 mm
+              Average MPJPE: 82.64 mm (On GT 2D data -> 3D triangulation = 3.67 mm)
+              Average percentage of keypoints within 1 std: 2.54%
+              Average percentage of keypoints within 2 std: 16.95%
+              Average percentage of keypoints within 3 std: 42.86%
+              Average percentage of keypoints within 4 std: 61.47%
+              ---
               Average percentage of keypoints within 1 std: 26.80%
               Average percentage of keypoints within 2 std: 53.92%
               Average percentage of keypoints within 3 std: 72.74%
