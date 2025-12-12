@@ -67,8 +67,8 @@ def main():
     # Load dataset
     print("\nLoading H36M dataset...")
     data_path = os.path.join(root_dir, args.data_path)  # , "H36M", "extracted")
-    dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
-    # dataset_name = "Human36mMotionDataset3D"
+    # dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
+    dataset_name = "Human36mMotionDataset3D"
     train_loader, valid_loader, test_loader = dataloader_from_string(
         dataset_name,
         batch_size=BATCH_SIZE,
@@ -91,7 +91,7 @@ def main():
         device=device,
     )
     coverage_stats = evaluate_uncertainty_coverage_with_covariance(
-        pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices, std_multipliers=[1, 2, 3, 4]
+        pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices
     )
 
     predictions = predictions.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
@@ -111,6 +111,11 @@ def main():
     print("\nPer-Joint Errors:")
     for i, error in enumerate(per_joint_errors):
         print(f"Joint {i + 1} error = {error:7.2f} mm")
+
+    print("\nUncertainty Coverage Stats:")
+    for mult in [1, 2, 3, 4]:
+        overall_cov = coverage_stats[f"overall_within_{mult}std"]
+        print(f"  Overall coverage within {mult} std: {overall_cov * 100:.2f}%")
 
     # >>> Test set <<<
     print("\n" + "=" * 60)
@@ -124,7 +129,7 @@ def main():
         device=device,
     )
     coverage_stats = evaluate_uncertainty_coverage_with_covariance(
-        pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices, std_multipliers=[1, 2, 3, 4]
+        pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices
     )
 
     predictions = predictions.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
@@ -144,6 +149,11 @@ def main():
     print("\nPer-Joint Errors:")
     for i, error in enumerate(per_joint_errors):
         print(f"Joint {i + 1} error = {error:7.2f} mm")
+
+    print("\nUncertainty Coverage Stats:")
+    for mult in [1, 2, 3, 4]:
+        overall_cov = coverage_stats[f"overall_within_{mult}std"]
+        print(f"  Overall coverage within {mult} std: {overall_cov * 100:.2f}%")
 
     # Visualize a few samples
     print("\n" + "=" * 60)

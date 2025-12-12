@@ -101,10 +101,11 @@ def evaluate_uncertainty_coverage_jax(pred_poses, true_poses, L, std_multipliers
     return results
 
 
-def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_matrices, std_multipliers=[1, 2, 3, 4]):
+def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_matrices):
     """
     Modified to evaluate coverage per frame
     """
+    from scipy.stats import chi2
     # Convert to numpy for easier manipulation
     pred_poses = np.asarray(pred_poses)
     true_poses = np.asarray(true_poses)
@@ -116,6 +117,7 @@ def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_ma
         3: 0.997,  # 99.7% for 3 standard deviations
         4: 0.9999,  # 99.99% for 4 standard deviations
     }
+    thresholds = [chi2.ppf(expected_coverage[i + 1], df=3) for i in range(4)]
 
     batch_size, n_frames, total_dims = pred_poses.shape
     n_joints = total_dims // 3
@@ -123,14 +125,6 @@ def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_ma
     # Reshape poses
     pred_poses = pred_poses.reshape(batch_size, n_frames, n_joints, 3)
     true_poses = true_poses.reshape(batch_size, n_frames, n_joints, 3)
-
-    # Initialize results dictionary
-    coverage_stats = {
-        "per_joint": {joint: {mult: 0.0 for mult in std_multipliers} for joint in range(n_joints)},
-        "overall": {mult: 0.0 for mult in std_multipliers},
-        "per_frame": {frame: {mult: 0.0 for mult in std_multipliers} for frame in range(n_frames)},
-        "expected": {mult: expected_coverage[mult] for mult in std_multipliers},
-    }
 
     # Compute errors (B, T, J, 3)
     errors = true_poses - pred_poses
@@ -150,7 +144,7 @@ def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_ma
         whitened_errors = np.linalg.solve(L, errors_reshaped)
 
         # Compute Mahalanobis distances
-        mahalanobis_distances = np.sqrt(np.sum(whitened_errors**2, axis=3)).squeeze()
+        mahalanobis_distances_squared = np.sum(whitened_errors**2, axis=3).squeeze()  # Shape: (B, T, J)
 
     except np.linalg.LinAlgError:
         print("Warning: Cholesky decomposition failed, adding more regularization")
@@ -159,24 +153,19 @@ def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_ma
         L = np.linalg.cholesky(cov_matrices)
         errors_reshaped = errors.reshape(batch_size, n_frames, n_joints, 3, 1)
         whitened_errors = np.linalg.solve(L, errors_reshaped)
-        mahalanobis_distances = np.sqrt(np.sum(whitened_errors**2, axis=3)).squeeze()
+        mahalanobis_distances_squared = np.sum(whitened_errors**2, axis=3).squeeze()
 
-    # Initialize per-frame coverage stats
-    frame_coverage_stats = {frame: {mult: 0.0 for mult in std_multipliers} for frame in range(n_frames)}
+    within_stds = [mahalanobis_distances_squared <= threshold for threshold in thresholds]
+    # Compute per-joint coverage
+    within_std_joint = [within_std.mean(axis=(0, 1)) for within_std in within_stds]  # List of arrays shape (J,)
+    within_std_frame = [within_std.mean(axis=(0, 2)) for within_std in within_stds]  # List of arrays shape (T,)
+    overall_coverage = [within_std.mean() for within_std in within_stds]  # List of scalars
 
-    # Compute coverage per frame
-    for frame in range(n_frames):
-        for mult in std_multipliers:
-            frame_coverage = (mahalanobis_distances[:, frame, :] <= mult).mean()
-            frame_coverage_stats[frame][mult] = frame_coverage
-
-    print("\nPer-frame coverage statistics:")
-    for frame in range(n_frames):
-        print(f"\nFrame {frame + 1}:")
-        for mult in std_multipliers:
-            expected = expected_coverage[mult]
-            actual = frame_coverage_stats[frame][mult]
-            error = abs(actual - expected)
-            print(f"{mult}σ - Actual: {actual:.1%}, Expected: {expected:.1%}, Error: {error:.1%}")
+    # Create results dictionary
+    coverage_stats = {}
+    for i in range(len(within_stds)):
+        coverage_stats[f'overall_within_{i + 1}std'] = overall_coverage[i]
+        coverage_stats[f'per_joint_within_{i + 1}std'] = within_std_joint[i]
+        coverage_stats[f'per_frame_within_{i + 1}std'] = within_std_frame[i]
 
     return coverage_stats

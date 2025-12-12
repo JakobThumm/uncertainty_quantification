@@ -106,10 +106,10 @@ def evaluate_pose_estimation_full_3d(ground_truth, estimated_pose, estimated_cov
 
         mahalanobis_squared[i] = delta[i].T @ inv_cov @ delta[i]
 
-    thresholds = [chi2.ppf(0.68, df=3),
-                  chi2.ppf(0.95, df=3),
-                  chi2.ppf(0.9973, df=3),
-                  chi2.ppf(0.99994, df=3)]
+    thresholds = [chi2.ppf(0.682, df=3),
+                  chi2.ppf(0.954, df=3),
+                  chi2.ppf(0.997, df=3),
+                  chi2.ppf(0.9999, df=3)]
 
     # Determine which keypoints fall within each threshold
     within_std = [mahalanobis_squared <= threshold for threshold in thresholds]
@@ -621,7 +621,7 @@ def main():
         print("\nOverall Evaluation Results:")
         print(f"Total frames processed: {total_frames}")
         print(f"Total joints evaluated: {total_joints}")
-        print(f"Average MPJPE: {average_mpjpe:.2f} pixels")
+        print(f"Average MPJPE: {average_mpjpe:.2f} mm")
         print(f"Average percentage of keypoints within 1 std: {avg_within_1std:.2f}%")
         print(f"Average percentage of keypoints within 2 std: {avg_within_2std:.2f}%")
         print(f"Average percentage of keypoints within 3 std: {avg_within_3std:.2f}%")

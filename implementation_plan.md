@@ -93,43 +93,96 @@ We have two things:
       - [x] Create evaluation
  6. Debug prediction accuracies Pytorch vs. Jax
     - [x] Investigate prediction accuracy 2D Pose estimation in pytorch vs. Jax.
-            =====> The yolov5s network seems to be much better at human detection.
-                   Maybe use that model instead of yolov11n.
-            Results Marian Pytorch on 3 validation files (yolo threshold = 0.8):
-              Total frames processed: 4881
-              Total joints evaluated: 63453
-              Average MPJPE: 7.64 pixels
-              Average percentage of keypoints within 1 std: 73.14%
-              Average percentage of keypoints within 2 std: 91.45%
-              Average percentage of keypoints within 3 std: 97.50%
-              Average percentage of keypoints within 4 std: 99.17%
-            Results Jax on 3 validation files (yolo threshold = 0.3)
-              Total frames processed: 4988
-              Total joints evaluated: 64844
-              Average MPJPE: 7.83
-              Average percentage of keypoints within 1 std: 73.08%
-              Average percentage of keypoints within 2 std: 92.45%
-              Average percentage of keypoints within 3 std: 97.51%
-              Average percentage of keypoints within 4 std: 99.14%
+        =====> The yolov5s network seems to be much better at human detection.
+                Maybe use that model instead of yolov11n.
+        Results Marian Pytorch on 3 validation files (yolo threshold = 0.8) (Model: estimation_model_finetuned_on_h36m.pth):
+            Total frames processed: 4881
+            Total joints evaluated: 63453
+            Average MPJPE: 7.64 pixels
+            Average percentage of keypoints within 1 std: 73.14%
+            Average percentage of keypoints within 2 std: 91.45%
+            Average percentage of keypoints within 3 std: 97.50%
+            Average percentage of keypoints within 4 std: 99.17%
+        Results Jax on 3 validation files (yolo threshold = 0.3) (Model: jax_resnet50_regressflow)
+            Total frames processed: 4988
+            Total joints evaluated: 64844
+            Average MPJPE: 7.83
+            Average percentage of keypoints within 1 std: 73.08%
+            Average percentage of keypoints within 2 std: 92.45%
+            Average percentage of keypoints within 3 std: 97.51%
+            Average percentage of keypoints within 4 std: 99.14%
+        ==> The models estimation_model_finetuned_on_h36m.pth and jax_resnet50_regressflow seem to match.
+        Results Jax on 3 validation files (yolo threshold = 0.3) (Model: finetuned_h36m_regressflow_with_unc)
+            Total frames processed: 4783
+            Total joints evaluated: 62179
+            Average MPJPE: 7.70
+            Average percentage of keypoints within 1 std: 70.91%
+            Average percentage of keypoints within 2 std: 90.88%
+            Average percentage of keypoints within 3 std: 96.87%
+            Average percentage of keypoints within 4 std: 98.85%
+        ==> Here, the accuracy of the jax_resnet50_regressflow and finetuned_h36m_regressflow_with_unc roughly match.
     - [x] Investigate the uncertainty coverage for the 2D Pose estimation in pytorch vs. Jax.
     - [ ] Investigate prediction accuracy 3D Pose estimation in pytorch vs. Jax.
-            Results Marian Pytorch on 3 validation files (yolo threshold = 0.8):
-              Total frames processed: 6545
-              Total joints evaluated: 85085
-              Average MPJPE: 82.64 mm (On GT 2D data -> 3D triangulation = 3.67 mm)
-              Average percentage of keypoints within 1 std: 2.54%
-              Average percentage of keypoints within 2 std: 16.95%
-              Average percentage of keypoints within 3 std: 42.86%
-              Average percentage of keypoints within 4 std: 61.47%
-              ---
-              Average percentage of keypoints within 1 std: 26.80%
-              Average percentage of keypoints within 2 std: 53.92%
-              Average percentage of keypoints within 3 std: 72.74%
-              Average percentage of keypoints within 4 std: 82.48%
-            Results Jax on 3 validation files (yolo threshold = 0.3)
-              
-    - [ ] Investigate the uncertainty coverage for the 3D Pose estimation in pytorch vs. Jax.
+        Results Marian Pytorch on 10 validation files with 1000 max_frames (yolo threshold = 0.8) (Model: estimation_model_finetuned_on_h36m.pth):
+        Actions: ['Discussion 1', 'Sitting 1', 'SittingDown 1', 'Posing 1', 'Eating', 'SittingDown', 'Smoking 2', 'Directions', 'Purchases 1', 'Waiting']
+            Total frames processed: 10000
+            Total joints evaluated: 130000
+            Average MPJPE: 201.17 mm
+            Average Pixel MPJPE: 11.56 pixels
+            Average percentage of keypoints within 1 std: 43.36%
+            Average percentage of keypoints within 2 std: 69.78%
+            Average percentage of keypoints within 3 std: 83.08%
+            Average percentage of keypoints within 4 std: 88.10%
+            Average percentage of 2D keypoints within 1 std: 53.26%
+            Average percentage of 2D keypoints within 2 std: 78.51%
+            Average percentage of 2D keypoints within 3 std: 88.64%
+            Average percentage of 2D keypoints within 4 std: 91.56%
+        Results Jax on 3 validation files (yolo threshold = 0.3) (Model: finetuned_h36m_regressflow_with_unc)
+        Actions: ['Discussion 1', 'Sitting 1', 'SittingDown 1', 'Posing 1', 'Eating', 'SittingDown', 'Smoking 2', 'Directions', 'Purchases 1', 'Waiting']
+            Total frames processed: 9959
+            Total joints evaluated: 129467
+            Average MPJPE: 31.79 mm
+            Average percentage of keypoints within 1 std: 45.30%
+            Average percentage of keypoints within 2 std: 73.19%
+            Average percentage of keypoints within 3 std: 88.06%
+            Average percentage of keypoints within 4 std: 94.34%
+        --> Findings: finetuned_h36m_regressflow_with_unc seems to be much better than estimation_model_finetuned_on_h36m! The actions are the same.
+        --> This would require further investigation but our model is better, so I guess it is okay.
+    - [x] Investigate the uncertainty coverage for the 3D Pose estimation in pytorch vs. Jax.
     - [ ] Investigate prediction accuracy 3D motion prediction in pytorch vs. Jax.
+        Jax all validation data, trained model after stage 3:
+            Overall MPJPE: 55.37 mm, Std: 57.21 mm
+            Per-Time Errors:
+            Time point 1 error =   41.71 mm
+            Time point 2 error =   41.50 mm
+            Time point 3 error =   42.04 mm
+            Time point 4 error =   44.46 mm
+            Time point 5 error =   48.67 mm
+            Time point 6 error =   54.36 mm
+            Time point 7 error =   60.29 mm
+            Time point 8 error =   67.02 mm
+            Time point 9 error =   72.76 mm
+            Time point 10 error =   80.86 mm
+            Per-Joint Errors:
+            Joint 1 error =   53.84 mm
+            Joint 2 error =   49.87 mm
+            Joint 3 error =   47.07 mm
+            Joint 4 error =   71.11 mm
+            Joint 5 error =   66.25 mm
+            Joint 6 error =   95.89 mm
+            Joint 7 error =   91.17 mm
+            Joint 8 error =   37.35 mm
+            Joint 9 error =   35.16 mm
+            Joint 10 error =   40.51 mm
+            Joint 11 error =   40.31 mm
+            Joint 12 error =   44.57 mm
+            Joint 13 error =   46.68 mm
+            Uncertainty Coverage Stats:
+              Overall coverage within 1 std: 41.21%
+              Overall coverage within 2 std: 56.98%
+              Overall coverage within 3 std: 68.79%
+              Overall coverage within 4 std: 77.41%
+        ==> Model did not learn correct covariance matrices.
     - [ ] Investigate the uncertainty coverage for the 3D motion prediction in pytorch vs. Jax.
  7. Full single-human pipeline
     - First, find out how the current bounding box algorithm works in Marians code. E.g., Experiment 4. There, he did real-world tests, so it should include some bounding box algorithm.
