@@ -57,6 +57,92 @@ SPLIT = {
 }
 
 
+def evaluate_pose_estimation_full_3d(ground_truth, estimated_pose, estimated_covariance):
+    """
+    Evaluate 3D pose estimation accuracy using Mahalanobis distance and confidence intervals.
+
+    Computes how many estimated joints fall within different standard deviation intervals
+    of their corresponding ground truth positions, taking into account 3D uncertainty and covariance.
+
+    Args:
+        ground_truth (np.ndarray): Ground truth pose of shape (num_joints, 3)
+        estimated_pose (np.ndarray): Estimated pose of shape (num_joints, 3)
+        estimated_covariance (np.ndarray): Covariance matrices for each joint of shape (num_joints, 3, 3)
+
+    Returns:
+        dict: Dictionary containing:
+            - mpjpe: Mean per joint position error in 3D space
+            - counts: Number of joints within each standard deviation interval
+            - joint_results: Detailed results for each joint
+            - num_joints: Total number of joints evaluated
+    """
+    from scipy.stats import chi2
+
+    # Calculate the difference between ground truth and estimated pose
+    delta = ground_truth - estimated_pose  # Shape: (num_joints, 3)
+
+    # Calculate MPJPE (Mean Per Joint Position Error)
+    mpjpe = np.mean(np.linalg.norm(delta, axis=1))
+
+    num_joints = len(ground_truth)
+    mahalanobis = np.zeros(num_joints)
+
+    # Add a small epsilon for numerical stability
+    epsilon = 1e-6
+
+    # Compute the Mahalanobis distance for each joint
+    for i in range(num_joints):
+        cov = estimated_covariance[i]  # Shape: (3, 3)
+
+        # Add epsilon to diagonal for numerical stability
+        cov_stable = cov + epsilon * np.eye(3)
+
+        # Compute the inverse of the covariance matrix
+        try:
+            inv_cov = np.linalg.inv(cov_stable)
+        except np.linalg.LinAlgError:
+            # If inversion fails, use pseudoinverse
+            inv_cov = np.linalg.pinv(cov_stable)
+
+        # Compute Mahalanobis distance: sqrt(delta^T * inv_cov * delta)
+        # For chi-squared comparison, we use the squared distance
+        mahalanobis[i] = np.sqrt(delta[i].T @ inv_cov @ delta[i])
+
+    # Define chi-squared thresholds for 3 degrees of freedom (3D points)
+    # thresholds = [chi2.ppf(0.68, df=3),   # 1 std
+    #               chi2.ppf(0.95, df=3),   # 2 std
+    #               chi2.ppf(0.9973, df=3), # 3 std
+    #               chi2.ppf(0.99994, df=3)]# 4 std
+    thresholds = [1, 2, 3, 4]
+
+    # Determine which keypoints fall within each threshold
+    within_std = [mahalanobis <= threshold for threshold in thresholds]
+
+    # Count the number of keypoints within each threshold
+    counts = {f'within_{i + 1}std': np.sum(within) for i, within in enumerate(within_std)}
+
+    # Prepare detailed results per joint
+    joint_results = []
+    for i, dist in enumerate(mahalanobis):
+        joint_result = {
+            'joint_index': i,
+            'mahalanobis_distance': dist,
+            'within_1std': dist <= thresholds[0],
+            'within_2std': dist <= thresholds[1],
+            'within_3std': dist <= thresholds[2],
+            'within_4std': dist <= thresholds[3]
+        }
+        joint_results.append(joint_result)
+
+    return {
+        'mpjpe': mpjpe,
+        'counts': counts,
+        'joint_results': joint_results,
+        'num_joints': num_joints
+    }
+
+
+
 def create_video_frame(frames, poses_3d, covariances_3d, frame_idx, common_width, common_height):
     """
     Create a single video frame combining 2D camera views and 3D pose visualization.
@@ -284,8 +370,11 @@ def main():
     parser.add_argument('--max_frames', type=int, default=10000000000, help='Maximum number of frames to process')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection on left camera')
     parser.add_argument('--output_dir', type=str, default='results/pose_3d', help='Output directory for results')
+    parser.add_argument('--max_files', type=int, default=None, help='Maximum number of files to load from dataset (for testing)')
+    parser.add_argument('--visualize', action='store_true', help='Enable visualization of results')
 
     args = parser.parse_args()
+    visualize_frame_number = 12
 
     print("=" * 60)
     print("3D Pose Estimation - JAX Implementation")
@@ -298,51 +387,64 @@ def main():
     split = args.split
     camera_ids = args.camera_ids
 
-    try:
-        # Initialize models
-        print("\nInitializing models...")
+    # Initialize models
+    print("\nInitializing models...")
 
-        # Initialize JAX pose estimation model with uncertainty estimation
-        models_dir = os.path.join(root_dir, args.model_save_path, "H36M", "RegressFlow", "seed_420")
-        checkpoint_path_jax = os.path.join(models_dir, args.run_name)
-        pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
-        print("Using RegressFlowWithAleatoric model for uncertainty estimation")
+    # Initialize JAX pose estimation model with uncertainty estimation
+    models_dir = os.path.join(root_dir, args.model_save_path, "H36M", "RegressFlow", "seed_420")
+    checkpoint_path_jax = os.path.join(models_dir, args.run_name)
+    pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
+    print("Using RegressFlowWithAleatoric model for uncertainty estimation")
 
-        # Initialize YOLO human detector
-        human_detector, device_torch = initialize_human_detector('cuda')
+    # Initialize YOLO human detector
+    human_detector, device_torch = initialize_human_detector('cuda')
 
-        print("Models initialized successfully!")
+    print("Models initialized successfully!")
 
-        # Load OOD score functions if enabled
-        score_fn = None
-        if args.enable_ood:
-            if args.base_key is None:
-                print("\nWARNING: OOD detection enabled but no base_key provided. Skipping OOD detection.")
-                print("Use --base_key to specify the cache key for OOD score functions.")
-            else:
-                print(f"\nLoading OOD score functions with cache key: {args.base_key}")
-                score_fn, _, _, _ = load_score_functions(args.cache_dir, args.base_key)
-                print("OOD score functions loaded successfully!")
-                print(f"Using OOD threshold: {args.ood_threshold:.6f}")
+    # Load OOD score functions if enabled
+    score_fn = None
+    if args.enable_ood:
+        if args.base_key is None:
+            print("\nWARNING: OOD detection enabled but no base_key provided. Skipping OOD detection.")
+            print("Use --base_key to specify the cache key for OOD score functions.")
+        else:
+            print(f"\nLoading OOD score functions with cache key: {args.base_key}")
+            score_fn, _, _, _ = load_score_functions(args.cache_dir, args.base_key)
+            print("OOD score functions loaded successfully!")
+            print(f"Using OOD threshold: {args.ood_threshold:.6f}")
 
-        # Load camera parameters
-        camera_parameters_path = os.path.join(models_dir, 'camera-parameters.json')
-        if not os.path.exists(camera_parameters_path):
-            print(f"Warning: Camera parameters file not found at {camera_parameters_path}")
-            print("Please ensure the camera-parameters.json file is available in the models directory")
-            return
+    # Load camera parameters
+    camera_parameters_path = os.path.join(models_dir, 'camera-parameters.json')
+    if not os.path.exists(camera_parameters_path):
+        print(f"Warning: Camera parameters file not found at {camera_parameters_path}")
+        print("Please ensure the camera-parameters.json file is available in the models directory")
+        return
 
-        # Create dataset
-        dataset = Human36mDatasetTwoCameras(base_directory, split, camera_ids=camera_ids)
+    # Create dataset
+    dataset = Human36mDatasetTwoCameras(base_directory, split, camera_ids=camera_ids, max_files=args.max_files)
 
-        if len(dataset) == 0:
-            print("No data found. Please check the dataset path and camera IDs.")
-            return
+    if len(dataset) == 0:
+        print("No data found. Please check the dataset path and camera IDs.")
+        return
 
-        print(f"Dataset loaded with {len(dataset)} samples")
+    print(f"Dataset loaded with {len(dataset)} samples")
 
-        # Get a sample from the dataset
-        sample_idx = 0  # Use first sample
+    all_3d_points = []
+    all_3d_gt_points = []
+    all_3d_covariances = []
+    all_frame_pairs = []  # Store frame pairs for video creation
+    all_ood_scores = []  # Store OOD scores from left camera
+    all_is_ood = []  # Store OOD classifications
+    
+    total_mpjpe = 0.0
+    total_frames = 0
+    total_joints = 0
+    total_within_1std = 0
+    total_within_2std = 0
+    total_within_3std = 0
+    total_within_4std = 0
+
+    for sample_idx in range(len(dataset)):
         sample = dataset[sample_idx]
         video_paths = sample['video_paths']
         pose_sequence = np.array(sample['pose_sequence'])
@@ -351,20 +453,8 @@ def main():
         intrinsics, extrinsics, projection_matrices = load_camera_parameters(camera_parameters_path, subject, camera_ids)
         validate_projection_matrices(projection_matrices[camera_ids[0]], projection_matrices[camera_ids[1]])
 
-        visualize_frame_number = 12
-
-        # Set up the 3D plot
-        fig = plt.figure(figsize=(8, 6))
-        ax = fig.add_subplot(111, projection='3d')
-
         # Process a limited number of frames for testing
         frames_to_process = min(args.max_frames, len(pose_sequence), len(sample["all_camera_frames"][0]))
-        all_3d_points = []
-        all_3d_gt_points = pose_sequence[:frames_to_process]
-        all_3d_covariances = []
-        all_frame_pairs = []  # Store frame pairs for video creation
-        all_ood_scores = []  # Store OOD scores from left camera
-        all_is_ood = []  # Store OOD classifications
 
         print(f"\nProcessing {frames_to_process} frames...")
         if args.enable_ood and score_fn is not None:
@@ -434,81 +524,115 @@ def main():
             all_is_ood.append(is_ood_left)
 
             # Triangulate 3D points if both poses are available
-            if poses_cam1 is not None and poses_cam2 is not None:
-                # Create joint covariance matrices
-                C_joint_list = []
-                for i in range(13):
-                    C_joint = create_joint_covariance(
-                        mapped_uncertainty_cam1=uncertainties_cam1[i],
-                        mapped_covariance_cam1=cov_cam1[i, 0, 1],
-                        mapped_uncertainty_cam2=uncertainties_cam2[i],
-                        mapped_covariance_cam2=cov_cam2[i, 0, 1],
-                        cross_covariance=np.zeros((2, 2))  # Assume zero cross-covariance
-                    )
-                    C_joint_list.append(C_joint)
-
-                P1 = projection_matrices[camera_ids[0]]
-                P2 = projection_matrices[camera_ids[1]]
-                points_3d, C_3d_all = triangulate_points_with_covariance(
-                    poses_cam1, poses_cam2, P1, P2, C_joint_list
+            if poses_cam1 is None or poses_cam2 is None:
+                continue
+            # Create joint covariance matrices
+            C_joint_list = []
+            for i in range(13):
+                C_joint = create_joint_covariance(
+                    mapped_uncertainty_cam1=uncertainties_cam1[i],
+                    mapped_covariance_cam1=cov_cam1[i, 0, 1],
+                    mapped_uncertainty_cam2=uncertainties_cam2[i],
+                    mapped_covariance_cam2=cov_cam2[i, 0, 1],
+                    cross_covariance=np.zeros((2, 2))  # Assume zero cross-covariance
                 )
+                C_joint_list.append(C_joint)
 
-                all_3d_points.append(points_3d)
-                all_3d_covariances.append(C_3d_all)
+            P1 = projection_matrices[camera_ids[0]]
+            P2 = projection_matrices[camera_ids[1]]
+            points_3d, C_3d_all = triangulate_points_with_covariance(
+                poses_cam1, poses_cam2, P1, P2, C_joint_list
+            )
 
-                # Visualize 3D pose for a sample frame
-                if frame_idx == visualize_frame_number:
-                    draw_3d_pose_with_covariance(
-                        ax, all_3d_points[frame_idx], all_3d_covariances[frame_idx],
-                        CONNECTIONS_13, scale=1.0, color='g'
-                    )
-                    draw_3d_pose_with_covariance(
-                        ax, all_3d_gt_points[frame_idx], all_3d_covariances[frame_idx],
-                        CONNECTIONS_13, scale=1.0, color='b'
-                    )
-                    os.makedirs("visualizations/3D_pose_estimation", exist_ok=True)
-                    plt.savefig(f"visualizations/3D_pose_estimation/3d_pose_estimation_{subject}_{action}_frame_{frame_idx}.png", dpi=150, bbox_inches='tight')
-                    print(f"Sample 3D pose visualization saved as: visualizations/3D_pose_estimation/3d_pose_estimation_{subject}_{action}_frame_{frame_idx}.png")
+            all_3d_points.append(points_3d)
+            all_3d_covariances.append(C_3d_all)
+            all_3d_gt_points.append(pose_sequence[frame_idx])
 
-                    result_image_left = visualize_single_pose_on_image(
-                        image=frames[0], gt_pose=poses_cam1, pred_pose=poses_cam1, pred_uncertainties=uncertainties_cam1, show_uncertainty=False
-                    )
-                    # Save the visualization
-                    cv2.imwrite(f"visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_left.png", result_image_left)
-                    print(f"Sample 2D pose visualization saved as: visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_left.png")
+            evaluation = evaluate_pose_estimation_full_3d(
+                ground_truth=pose_sequence[frame_idx],
+                estimated_pose=points_3d,
+                estimated_covariance=C_3d_all
+            )
 
-                    result_image_right = visualize_single_pose_on_image(
-                        image=frames[1], gt_pose=poses_cam2, pred_pose=poses_cam2, pred_uncertainties=uncertainties_cam2, show_uncertainty=False
-                    )
-                    # Save the visualization
-                    cv2.imwrite(f"visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_right.png", result_image_right)
-                    print(f"Sample 2D pose visualization saved as: visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_right.png")
-                    stop=0
-            else:
-                all_3d_points.append(np.zeros((13, 3)))
-                all_3d_covariances.append(np.zeros((13, 3, 3)))
+            # Update counters
+            total_frames += 1
+            total_mpjpe += evaluation['mpjpe']
+            total_joints += evaluation['num_joints']
+            total_within_1std += evaluation['counts']['within_1std']
+            total_within_2std += evaluation['counts']['within_2std']
+            total_within_3std += evaluation['counts']['within_3std']
+            total_within_4std += evaluation['counts']['within_4std']
 
-        print(f"\n3D pose estimation completed!")
-        print(f"Processed {len(all_3d_points)} frames")
+            # Visualize 3D pose for a sample frame
+            if not args.visualize or frame_idx != visualize_frame_number:
+                continue
+            # Set up the 3D plot
+            fig = plt.figure(figsize=(8, 6))
+            ax = fig.add_subplot(111, projection='3d')
+            draw_3d_pose_with_covariance(
+                ax, all_3d_points[frame_idx], all_3d_covariances[frame_idx],
+                CONNECTIONS_13, scale=1.0, color='g'
+            )
+            draw_3d_pose_with_covariance(
+                ax, all_3d_gt_points[frame_idx], all_3d_covariances[frame_idx],
+                CONNECTIONS_13, scale=1.0, color='b'
+            )
+            os.makedirs("visualizations/3D_pose_estimation", exist_ok=True)
+            plt.savefig(f"visualizations/3D_pose_estimation/3d_pose_estimation_{subject}_{action}_frame_{frame_idx}.png", dpi=150, bbox_inches='tight')
+            print(f"Sample 3D pose visualization saved as: visualizations/3D_pose_estimation/3d_pose_estimation_{subject}_{action}_frame_{frame_idx}.png")
 
-        # Print OOD statistics if enabled
-        if args.enable_ood and score_fn is not None:
-            all_ood_scores_arr = np.array(all_ood_scores)
-            all_is_ood_arr = np.array(all_is_ood)
-            print(f"\nOOD Detection Statistics (Left Camera):")
-            print(f"  Mean OOD score: {all_ood_scores_arr.mean():.4f}")
-            print(f"  Std OOD score: {all_ood_scores_arr.std():.4f}")
-            print(f"  Classified as OOD: {all_is_ood_arr.sum()} / {len(all_is_ood_arr)} ({100*all_is_ood_arr.mean():.1f}%)")
-            print(f"  OOD threshold used: {args.ood_threshold:.4f}")
+            result_image_left = visualize_single_pose_on_image(
+                image=frames[0], gt_pose=poses_cam1, pred_pose=poses_cam1, pred_uncertainties=uncertainties_cam1, show_uncertainty=False
+            )
+            # Save the visualization
+            cv2.imwrite(f"visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_left.png", result_image_left)
+            print(f"Sample 2D pose visualization saved as: visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_left.png")
 
-        # Convert to numpy arrays
-        all_3d_points = np.array(all_3d_points)  # Shape: (num_frames, 13, 3)
-        all_3d_covariances = np.array(all_3d_covariances)  # Shape: (num_frames, 13, 3, 3)
+            result_image_right = visualize_single_pose_on_image(
+                image=frames[1], gt_pose=poses_cam2, pred_pose=poses_cam2, pred_uncertainties=uncertainties_cam2, show_uncertainty=False
+            )
+            # Save the visualization
+            cv2.imwrite(f"visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_right.png", result_image_right)
+            print(f"Sample 2D pose visualization saved as: visualizations/3D_pose_estimation/2d_pose_estimation_{subject}_{action}_frame_{frame_idx}_right.png")
+            stop=0
+    # End of frame processing loop
+    print(f"\n3D pose estimation completed!")
+    print(f"Processed {len(all_3d_points)} frames")
 
-        mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(predictions=np.array(all_3d_points)[np.newaxis, :], targets=all_3d_gt_points[np.newaxis, :])
-        print(f"MPJPE = {mpjpe:.2f}")
-        print(f"per_joint_errors = {per_joint_errors}")
+    # Print OOD statistics if enabled
+    if args.enable_ood and score_fn is not None:
+        all_ood_scores_arr = np.array(all_ood_scores)
+        all_is_ood_arr = np.array(all_is_ood)
+        print(f"\nOOD Detection Statistics (Left Camera):")
+        print(f"  Mean OOD score: {all_ood_scores_arr.mean():.4f}")
+        print(f"  Std OOD score: {all_ood_scores_arr.std():.4f}")
+        print(f"  Classified as OOD: {all_is_ood_arr.sum()} / {len(all_is_ood_arr)} ({100*all_is_ood_arr.mean():.1f}%)")
+        print(f"  OOD threshold used: {args.ood_threshold:.4f}")
 
+    # Convert to numpy arrays
+    all_3d_points = np.array(all_3d_points)  # Shape: (num_frames, 13, 3)
+    all_3d_covariances = np.array(all_3d_covariances)  # Shape: (num_frames, 13, 3, 3)
+    all_3d_gt_points = np.array(all_3d_gt_points)  # Shape: (num_frames, 13, 3)
+
+    # Print evaluation results
+    if total_frames > 0:
+        average_mpjpe = total_mpjpe / total_frames
+        avg_within_1std = (total_within_1std / total_joints) * 100
+        avg_within_2std = (total_within_2std / total_joints) * 100
+        avg_within_3std = (total_within_3std / total_joints) * 100
+        avg_within_4std = (total_within_4std / total_joints) * 100
+
+        print("\nOverall Evaluation Results:")
+        print(f"Total frames processed: {total_frames}")
+        print(f"Total joints evaluated: {total_joints}")
+        print(f"Average MPJPE: {average_mpjpe:.2f} pixels")
+        print(f"Average percentage of keypoints within 1 std: {avg_within_1std:.2f}%")
+        print(f"Average percentage of keypoints within 2 std: {avg_within_2std:.2f}%")
+        print(f"Average percentage of keypoints within 3 std: {avg_within_3std:.2f}%")
+        print(f"Average percentage of keypoints within 4 std: {avg_within_4std:.2f}%")
+
+    if args.visualize:
+        print("\nGenerating visualizations...")
         # Compute mean positions across joints for each frame
         mean_3d_points = np.mean(all_3d_points, axis=1)  # Shape: (num_frames, 3)
 
@@ -543,17 +667,12 @@ def main():
 
         plt.show()
 
-        print("\n" + "=" * 60)
-        print("3D POSE ESTIMATION COMPLETED SUCCESSFULLY!")
-        print("Videos generated:")
-        print("  - 3d_pose_estimation_video.mp4: Combined 2D views + 3D poses")
-        print("  - 3d_trajectory_video.mp4: 3D pose evolution over time")
-        print("=" * 60)
-
-    except Exception as e:
-        print(f"\nError during 3D pose estimation: {e}")
-        import traceback
-        traceback.print_exc()
+    print("\n" + "=" * 60)
+    print("3D POSE ESTIMATION COMPLETED SUCCESSFULLY!")
+    print("Videos generated:")
+    print("  - 3d_pose_estimation_video.mp4: Combined 2D views + 3D poses")
+    print("  - 3d_trajectory_video.mp4: 3D pose evolution over time")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

@@ -436,8 +436,9 @@ class Human36mDatasetTwoCameras:
     Handles loading of pose sequences and corresponding video frames from two camera views
     for stereo triangulation.
     """
-    def __init__(self, base_directory, split='train', camera_ids=['55011271', '60457274']):
+    def __init__(self, base_directory, split='train', camera_ids=['55011271', '60457274'], max_files=None):
         self.camera_ids = camera_ids
+        self.max_files = max_files
         self.data = self.load_data(base_directory, split, camera_ids)
         self.base_directory = base_directory
 
@@ -450,6 +451,8 @@ class Human36mDatasetTwoCameras:
             pose_files = [f for f in os.listdir(poses_dir) if f.endswith('.cdf')]
 
             for pose_file in pose_files:
+                if self.max_files and len(all_data) >= self.max_files:
+                    break
                 pose_path = os.path.join(poses_dir, pose_file)
                 action = os.path.splitext(pose_file)[0]
 

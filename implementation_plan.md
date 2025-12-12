@@ -93,6 +93,8 @@ We have two things:
       - [x] Create evaluation
  6. Debug prediction accuracies Pytorch vs. Jax
     - [x] Investigate prediction accuracy 2D Pose estimation in pytorch vs. Jax.
+            =====> The yolov5s network seems to be much better at human detection.
+                   Maybe use that model instead of yolov11n.
             Results Marian Pytorch on 3 validation files (yolo threshold = 0.8):
               Total frames processed: 4881
               Total joints evaluated: 63453
@@ -111,6 +113,16 @@ We have two things:
               Average percentage of keypoints within 4 std: 99.14%
     - [x] Investigate the uncertainty coverage for the 2D Pose estimation in pytorch vs. Jax.
     - [ ] Investigate prediction accuracy 3D Pose estimation in pytorch vs. Jax.
+            Results Marian Pytorch on 3 validation files (yolo threshold = 0.8):
+              Total frames processed: 6545
+              Total joints evaluated: 85085
+              Average MPJPE: 82.64 mm
+              Average percentage of keypoints within 1 std: 26.80%
+              Average percentage of keypoints within 2 std: 53.92%
+              Average percentage of keypoints within 3 std: 72.74%
+              Average percentage of keypoints within 4 std: 82.48%
+            Results Jax on 3 validation files (yolo threshold = 0.3)
+              
     - [ ] Investigate the uncertainty coverage for the 3D Pose estimation in pytorch vs. Jax.
     - [ ] Investigate prediction accuracy 3D motion prediction in pytorch vs. Jax.
     - [ ] Investigate the uncertainty coverage for the 3D motion prediction in pytorch vs. Jax.
