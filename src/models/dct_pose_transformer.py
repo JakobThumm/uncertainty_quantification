@@ -17,7 +17,7 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
 
 def pose_prediction_loss(pred_poses, target_poses):
     """Simple MSE loss for pose predictions."""
-    return jnp.mean(jnp.abs(pred_poses - target_poses))
+    return jnp.mean(jnp.square(pred_poses - target_poses))
 
 
 def gaussian_nll_from_cholesky(y_pred, y_true, L, include_const=True, lambda_var=0.001, lambda_cov=0.01):
@@ -112,14 +112,14 @@ class FrequencyAwareAttention(nn.Module):
             qkv_features=self.d_model,
             out_features=self.d_model,
             name="mha",
-            normalize_qk=False,  # Enables training with higher LR.
-            force_fp32_for_softmax=True,  # Better numerical stability for mixed precision data (prob. not needed)
+            # normalize_qk=False,  # Enables training with higher LR.
+            # force_fp32_for_softmax=True,  # Better numerical stability for mixed precision data (prob. not needed)
             kernel_init=nn.initializers.xavier_uniform(),  # Kernel initialization
-            out_kernel_init=nn.initializers.zeros,  # Output kernel init
+            # out_kernel_init=nn.initializers.zeros,  # Output kernel init
             # attention_fn=flash_attention,  # Drop-in replacement
             # qk_attn_weights_einsum_cls=lambda: quantized_einsum,
             # attn_weights_value_einsum_cls=lambda: quantized_einsum,
-            precision=jax.lax.Precision.HIGHEST,  # vs DEFAULT or HIGH
+            # precision=jax.lax.Precision.HIGHEST,  # vs DEFAULT or HIGH
         )
 
         # Self-attention: query = key = value

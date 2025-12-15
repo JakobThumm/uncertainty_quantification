@@ -360,10 +360,22 @@ def create_train_state(
     lr_schedule, lr_fn = get_lr_schedule_for_stage(config, steps_per_epoch, stage_epochs, learning_rate)
 
     # Create optimizer
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(config.max_grad_norm),
-        optax.adamw(lr_schedule, weight_decay=config.weight_decay),
-    )
+    if config.max_grad_norm is not None:
+        if config.weight_decay is not None:
+            optimizer = optax.chain(
+                optax.clip_by_global_norm(config.max_grad_norm),
+                optax.adamw(lr_schedule, weight_decay=config.weight_decay),
+            )
+        else:
+            optimizer = optax.chain(
+                optax.clip_by_global_norm(config.max_grad_norm),
+                optax.adam(lr_schedule),
+            )
+    else:
+        if config.weight_decay is not None:
+            optimizer = optax.adamw(lr_schedule, weight_decay=config.weight_decay)
+        else:
+            optimizer = optax.adam(lr_schedule)
 
     state = TrainState.create(
         apply_fn=model.apply,
@@ -1273,6 +1285,27 @@ def main(args):
     # Initialize with Stage 1 parameters
     state, lr_fn = create_train_state(rng, config, steps_per_epoch, config.stage1_epochs)
 
+    # Load initial weights from pickle file if provided
+    if args.init_weights_path:
+        print(f"\nLoading initial weights from {args.init_weights_path}")
+        try:
+            with open(args.init_weights_path, 'rb') as f:
+                transferred_data = pickle.load(f)
+
+            if 'params' in transferred_data:
+                transferred_params = transferred_data['params']
+                print("Successfully loaded transferred parameters")
+
+                # Use merge_params to handle potential structure differences
+                merged_params = merge_params(transferred_params, state.params, verbose=True)
+                state = state.replace(params=merged_params)
+                print("✓ Initial weights loaded and applied successfully\n")
+            else:
+                print(f"Warning: 'params' not found in pickle file, skipping weight initialization")
+        except Exception as e:
+            print(f"Error loading initial weights: {e}")
+            print("Proceeding with random initialization")
+
     if args.resume:
         try:
             load_stage = args.stage - 1 if args.stage > 1 else None
@@ -1420,6 +1453,8 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
     parser.add_argument("--new_config", action="store_true",
                         help="Create new config even if one exists")
+    parser.add_argument("--init_weights_path", type=str, default=None,
+                        help="Path to pickle file with initial weights (e.g., transferred PyTorch weights)")
 
     # Model hyperparameters
     parser.add_argument("--d_model", type=int, default=128)
@@ -1431,8 +1466,8 @@ if __name__ == "__main__":
     # Training hyperparameters
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
-    parser.add_argument("--weight_decay", type=float, default=1e-6)
-    parser.add_argument("--max_grad_norm", type=float, default=0.01)
+    parser.add_argument("--weight_decay", type=float, default=None)
+    parser.add_argument("--max_grad_norm", type=float, default=None)
 
     # Learning rate scheduling
     parser.add_argument("--use_lr_schedule", action="store_true", default=False,
