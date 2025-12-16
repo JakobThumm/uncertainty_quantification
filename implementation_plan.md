@@ -226,9 +226,11 @@ We have two things:
  7. Full single-human pipeline (finish set up)
     - First, find out how the current bounding box algorithm works in Marians code. E.g., Experiment 4. There, he did real-world tests, so it should include some bounding box algorithm.
     - Implement the full pipeline based on the code of Experiment 4 plus the new OOD detection. Everything in JAX.
-    - [ ] Train okay performing network in Jax
-    - [ ] Use that network for OOD detection
-    - [ ] Hopefully: Marian finally provides correct pytorch network
+    - [x] Train okay performing network in Jax (run id r24f9uig)
+    - [x] Transfer weights from good working motion prediction model (model_13_joints_with_uncert)
+    - [x] Train motion prediction network in Jax starting from pytorch weights (run id 17bg6nyk) -> good performance
+    - [x] Use that network for OOD detection
+    - [x] Hopefully: Marian finally provides correct pytorch network
     - [ ] Build on script for creating motion dataset to create full 3D pipeline
     - [ ] Adapt pipeline for RGBD camera
     - [ ] Write batched evaluation script that evaluates pose estimation

@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 from flax.core import freeze, unfreeze
 
-from src.models.dct_pose_transformer import DCTPoseTransformer
+from src.models.dct_pose_transformer_pytorch_attn import DCTPoseTransformer
 
 
 jax.config.update("jax_enable_x64", True)
@@ -76,10 +76,11 @@ def transfer_layernorm(flax_params, path, torch_weight, torch_bias, desc):
     _assign(flax_params, path + ["bias"], _to_jax(torch_bias), f"{desc}.bias")
 
 
-def transfer_multihead_attention(flax_params, path, torch_mha_state_dict, desc, num_heads):
+def transfer_multihead_attention_jax_attention(flax_params, path, torch_mha_state_dict, desc, num_heads):
     """
     Transfer PyTorch MultiheadAttention to Flax MultiHeadDotProductAttention.
 
+    This is the version for src.models.dct_pose_transformer separate Q, K, V projections.
     PyTorch stores: in_proj_weight, in_proj_bias, out_proj.weight, out_proj.bias
     Flax stores: query.kernel, key.kernel, value.kernel, out.kernel (with multi-head structure)
     """
@@ -133,6 +134,43 @@ def transfer_multihead_attention(flax_params, path, torch_mha_state_dict, desc, 
     _assign(flax_params, path + ["out", "bias"], _to_jax(out_proj_bias), f"{desc}.out.bias")
 
 
+def transfer_pytorch_multihead_attention(flax_params, path, torch_mha_state_dict, desc):
+    """
+    Transfer PyTorch MultiheadAttention to PyTorchMultiheadAttention (1-to-1 transfer).
+
+    This is the version for src.models.dct_pose_transformer_pytorch_attn.
+
+    This version directly copies the combined in_proj and out_proj weights without splitting.
+    PyTorch stores: in_proj_weight, in_proj_bias, out_proj.weight, out_proj.bias
+    JAX stores: in_proj.kernel, in_proj.bias, out_proj.kernel, out_proj.bias
+    """
+    # Transfer in_proj (combined Q, K, V projection)
+    # PyTorch: (3 * embed_dim, embed_dim), Flax: (embed_dim, 3 * embed_dim)
+    in_proj_weight = torch_mha_state_dict["in_proj_weight"]
+    in_proj_bias = torch_mha_state_dict["in_proj_bias"]
+
+    transfer_linear(
+        flax_params,
+        path + ["in_proj"],
+        in_proj_weight,
+        in_proj_bias,
+        f"{desc}.in_proj"
+    )
+
+    # Transfer out_proj
+    # PyTorch: (embed_dim, embed_dim), Flax: (embed_dim, embed_dim)
+    out_proj_weight = torch_mha_state_dict["out_proj.weight"]
+    out_proj_bias = torch_mha_state_dict["out_proj.bias"]
+
+    transfer_linear(
+        flax_params,
+        path + ["out_proj"],
+        out_proj_weight,
+        out_proj_bias,
+        f"{desc}.out_proj"
+    )
+
+
 def transfer_uncertainty_embedding(flax_params, torch_state_dict):
     """Transfer UncertaintyEmbedding module weights (Experiment3 simple architecture)."""
     print("\n  Transferring UncertaintyEmbedding...")
@@ -182,8 +220,8 @@ def transfer_uncertainty_embedding(flax_params, torch_state_dict):
     print("    ✓ UncertaintyEmbedding transferred")
 
 
-def transfer_uncertainty_head(flax_params, torch_state_dict):
-    """Transfer UncertaintyHead module weights."""
+def transfer_uncertainty_head(flax_params, torch_state_dict, transfer_uncertainty_input_embedding=True):
+    """Transfer UncertaintyHead module weights (only MLP path, no uncertainty_processor)."""
     print("\n  Transferring UncertaintyHead...")
 
     # Main MLP path
@@ -209,21 +247,21 @@ def transfer_uncertainty_head(flax_params, torch_state_dict):
         "uncertainty_head.mlp.4",
     )
 
-    # Uncertainty processor path
-    transfer_linear(
-        flax_params,
-        ["uncertainty_head", "unc_proc_0"],
-        torch_state_dict["uncertainty_head.uncertainty_processor.0.weight"],
-        torch_state_dict["uncertainty_head.uncertainty_processor.0.bias"],
-        "uncertainty_head.uncertainty_processor.0",
-    )
-    transfer_linear(
-        flax_params,
-        ["uncertainty_head", "unc_proc_1"],
-        torch_state_dict["uncertainty_head.uncertainty_processor.2.weight"],
-        torch_state_dict["uncertainty_head.uncertainty_processor.2.bias"],
-        "uncertainty_head.uncertainty_processor.2",
-    )
+    if transfer_uncertainty_input_embedding:
+        transfer_linear(
+            flax_params,
+            ["uncertainty_head", "unc_proc_0"],
+            torch_state_dict["uncertainty_head.uncertainty_processor.0.weight"],
+            torch_state_dict["uncertainty_head.uncertainty_processor.0.bias"],
+            "uncertainty_head.uncertainty_processor.0",
+        )
+        transfer_linear(
+            flax_params,
+            ["uncertainty_head", "unc_proc_1"],
+            torch_state_dict["uncertainty_head.uncertainty_processor.2.weight"],
+            torch_state_dict["uncertainty_head.uncertainty_processor.2.bias"],
+            "uncertainty_head.uncertainty_processor.2",
+        )
 
     # Uncertainty weight parameter
     _assign(
@@ -233,10 +271,8 @@ def transfer_uncertainty_head(flax_params, torch_state_dict):
         "uncertainty_head.uncertainty_weight",
     )
 
-    print("    ✓ UncertaintyHead transferred")
 
-
-def transfer_dct_pose_transformer(torch_state_dict, flax_variables, nhead=4, num_layers=2):
+def transfer_dct_pose_transformer(torch_state_dict, flax_variables, nhead=4, num_layers=2, transfer_uncertainty_input_embedding=True):
     """
     Transfer all weights from PyTorch DCTPoseTransformer to Flax version.
     """
@@ -253,7 +289,10 @@ def transfer_dct_pose_transformer(torch_state_dict, flax_variables, nhead=4, num
     )
 
     # Frequency positional embedding
-    _assign(params, ["freq_pos_embed"], _to_jax(sd["freq_pos_embed"]), "freq_pos_embed")
+    # PyTorch: (seq_len, 1, d_model), Flax: (1, seq_len, d_model)
+    freq_pos_embed_torch = sd["freq_pos_embed"]
+    freq_pos_embed_jax = _to_jax(freq_pos_embed_torch.permute(1, 0, 2))  # (50, 1, 128) -> (1, 50, 128)
+    _assign(params, ["freq_pos_embed"], freq_pos_embed_jax, "freq_pos_embed")
 
     # Transformer blocks
     for i in range(num_layers):
@@ -270,15 +309,15 @@ def transfer_dct_pose_transformer(torch_state_dict, flax_variables, nhead=4, num
             f"{block_prefix}.freq_attn.freq_weights",
         )
 
-        # Multi-head attention
+        # Multi-head attention (PyTorch-compatible version)
         mha_state = {
             "in_proj_weight": sd[f"{block_prefix}.freq_attn.mha.in_proj_weight"],
             "in_proj_bias": sd[f"{block_prefix}.freq_attn.mha.in_proj_bias"],
             "out_proj.weight": sd[f"{block_prefix}.freq_attn.mha.out_proj.weight"],
             "out_proj.bias": sd[f"{block_prefix}.freq_attn.mha.out_proj.bias"],
         }
-        transfer_multihead_attention(
-            params, [flax_block_prefix, "freq_attn", "mha"], mha_state, f"{block_prefix}.freq_attn.mha", nhead
+        transfer_pytorch_multihead_attention(
+            params, [flax_block_prefix, "freq_attn", "pytorch_mha"], mha_state, f"{block_prefix}.freq_attn.mha"
         )
 
         # Layer norms
@@ -338,8 +377,11 @@ def transfer_dct_pose_transformer(torch_state_dict, flax_variables, nhead=4, num
     )
 
     # Transfer uncertainty components
-    transfer_uncertainty_embedding(params, sd)
-    transfer_uncertainty_head(params, sd)
+    # NOTE: Skipping uncertainty_embedding transfer because the PyTorch checkpoint
+    # has a different structure (simple uncertainty_embed) than the JAX model
+    # (which has cov_encoder and joint_encoder). The structures are incompatible.
+    # transfer_uncertainty_embedding(params, sd)
+    transfer_uncertainty_head(params, sd, transfer_uncertainty_input_embedding=transfer_uncertainty_input_embedding)
 
     return freeze(params)
 
@@ -351,9 +393,12 @@ def main():
     import os
 
     # Configuration
-    pytorch_model_path = os.path.join(root_dir, "marian_code/Experiment4/model_checkpoint_prediction_transformer_end_to_end.pth")
+    # pytorch_model_path = os.path.join(root_dir, "marian_code/Experiment4/model_checkpoint_prediction_transformer_end_to_end.pth")
+    pytorch_model_path = os.path.join(root_dir, "marian_code/Experiment1/13_Joints/checkpoints/model_13_joints_with_uncert.pth")
     # pytorch_model_path = os.path.join(root_dir, "jax_hmp_files/transformer_model.pth")
-    output_path = os.path.join(root_dir, "human_pose_pipeline/models/motion_prediction/dct_pose_transformer.pickle")
+    output_path = os.path.join(root_dir, "human_pose_pipeline/models/motion_prediction/dct_pose_transformer_transferred.pickle")
+
+    transfer_uncertainty_input_embedding = False
 
     # Model parameters
     input_dim = 39
@@ -378,9 +423,13 @@ def main():
 
     print(f"   ✓ Loaded {len(torch_state_dict)} parameter tensors")
 
-    # Verify uncertainty_embedding exists
+    # Check uncertainty_embedding structure
     unc_emb_keys = [k for k in torch_state_dict.keys() if "uncertainty_embedding" in k]
-    print(f"   ✓ Found {len(unc_emb_keys)} uncertainty_embedding parameters")
+    print(f"   ℹ Found {len(unc_emb_keys)} uncertainty_embedding parameters (will NOT be transferred due to structure mismatch)")
+
+    # Check uncertainty_head
+    unc_head_keys = [k for k in torch_state_dict.keys() if "uncertainty_head" in k]
+    print(f"   ✓ Found {len(unc_head_keys)} uncertainty_head parameters (will be transferred)")
 
     # Initialize Flax model
     print(f"\n2. Initializing JAX/Flax model")
@@ -395,14 +444,11 @@ def main():
     )
 
     rng = jax.random.PRNGKey(0)
-    # Initialize with dummy input INCLUDING uncertainty to ensure all params are created
-    # Experiment3 architecture:
-    # - Poses: [batch, seq_len, 39]
-    # - Uncertainty: [batch, seq_len, 117] where 117 = 13 joints * 9 (3x3 covariance)
-    # Total input: [batch, seq_len, 156]
-    uncertainty_dim = 13 * 3 * 3  # 117
-    dummy_x_with_unc = jnp.zeros((2, seq_len, input_dim + uncertainty_dim), dtype=jnp.float64)
-    flax_variables = flax_model.init(rng, dummy_x_with_unc, train=False)
+    # Initialize with dummy input WITHOUT uncertainty since we're not transferring
+    # uncertainty_embedding weights (structure incompatibility)
+    # Input: [batch, seq_len, 39] (poses only)
+    dummy_x = jnp.zeros((2, seq_len, input_dim), dtype=jnp.float64)
+    flax_variables = flax_model.init(rng, dummy_x, train=False)
 
     print(f"   ✓ Initialized Flax model")
     print(f"   Top-level param keys: {list(flax_variables['params'].keys())}")
@@ -411,7 +457,8 @@ def main():
     print(f"\n3. Transferring weights...")
     try:
         flax_params = transfer_dct_pose_transformer(
-            torch_state_dict, flax_variables, nhead=nhead, num_layers=num_layers
+            torch_state_dict, flax_variables, nhead=nhead, num_layers=num_layers,
+            transfer_uncertainty_input_embedding=transfer_uncertainty_input_embedding
         )
         print("\n   ✓ Weight transfer completed successfully!")
     except Exception as e:

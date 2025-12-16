@@ -1,3 +1,4 @@
+import os
 import pickle
 import json
 import dataclasses
@@ -17,7 +18,7 @@ from src.models import (
     VAN,
     SwinTransformer,
 )
-from src.models.dct_pose_transformer import DCTPoseTransformer
+from src.models.dct_pose_transformer_pytorch_attn import DCTPoseTransformer
 from src.models import ViT
 from human_pose_pipeline.motion_prediction.h36m_settings import (
     N_JOINTS,
@@ -382,7 +383,14 @@ def pretrained_model_from_string(
 ):
     if n_samples is not None:
         dataset_name += f"_samples{n_samples}"
-    args_file_path = f"{save_path}/{dataset_name}/{model_name}/seed_{seed}/{run_name}_args.json"
+    base_path = f"{save_path}/{dataset_name}/{model_name}/seed_{seed}/"
+    args_file_path = f"{base_path}/{run_name}_args.json"
+    if not os.path.exists(args_file_path):
+        base_path = save_path
+        args_file_path = f"{base_path}/{run_name}_args.json"
+        if not os.path.exists(args_file_path):
+            raise FileNotFoundError(f"File {args_file_path} not found")
+
     args_dict = json.load(open(args_file_path, "r"))
 
     extra_args = {
@@ -394,7 +402,11 @@ def pretrained_model_from_string(
 
     model = model_from_string(args_dict["model"], args_dict["output_dim"], **extra_args)
 
-    params_file_path = f"{save_path}/{dataset_name}/{model_name}/seed_{seed}/{run_name}_params.pickle"
+    params_file_path = f"{base_path}/{run_name}_params.pickle"
+    if not os.path.exists(params_file_path):
+        params_file_path = f"{base_path}/{run_name}.pickle"
+        if not os.path.exists(params_file_path):
+            raise FileNotFoundError(f"File {params_file_path} not found")
     params_dict = pickle.load(open(params_file_path, "rb"))
     params_dict.pop("model")
 
