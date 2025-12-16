@@ -4,6 +4,9 @@ This script evaluates both the JAX and PyTorch motion prediction models on the e
 validation and test data to ensure fair comparison.
 """
 
+# Change between Marian Pytorch Experiment 1 and Experiment 4 version
+EXPERIMENT_1 = False
+
 import os
 import sys
 import argparse
@@ -17,10 +20,16 @@ from tqdm import tqdm
 from human_pose_pipeline.pose_estimation.inference_helper import initialize_jax_models
 
 # Add marian_code directory to path for PyTorch model imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../marian_code/Experiment1/13_Joints"))
-
-# PyTorch model imports
-from model_prediction_transformer import DCTPoseTransformer
+if EXPERIMENT_1:
+    # DCT Pose Transformer of Experiment 1
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../marian_code/Experiment1/13_Joints"))
+    # PyTorch model imports
+    from model_prediction_transformer import DCTPoseTransformer
+else:
+    # DCT Pose Transformer of Experiment 4
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../marian_code/Experiment4"))
+    # PyTorch model imports
+    from model_prediction import DCTPoseTransformer
 
 # Dataset imports
 from src.datasets import dataloader_from_string
@@ -102,7 +111,7 @@ def evaluate_jax_model(jax_fn, params, batch_stats, dataset_loader, device):
     return np.array(predictions), np.array(targets), np.array(covariance_matrices)
 
 
-def evaluate_pytorch_model(model, dataset_loader, device, dct_m, idct_m):
+def evaluate_pytorch_model(model, dataset_loader, device, dct_m, idct_m, has_uncertainty_input=False):
     """Evaluate PyTorch model on dataset.
 
     Args:
@@ -129,20 +138,42 @@ def evaluate_pytorch_model(model, dataset_loader, device, dct_m, idct_m):
             input_pose = batch[0].to(device)
             target_pose = batch[1].to(device)
 
+            if has_uncertainty_input:
+                n_joints = input_pose.shape[-1] // 12
+                input_data = input_pose
+                input_pose = input_data[:, :, :3 * n_joints]
+                # The input uncertainty doesn't work yet for the pytorch model
+                # input_uncertainty = input_data[:, :, 3 * n_joints:].reshape(
+                #     input_pose.shape[0], input_pose.shape[1], n_joints, 3, 3
+                # )
+                input_uncertainty = None
+            else:
+                n_joints = input_pose.shape[-1] // 3
+                input_uncertainty = None
+
             # Apply DCT and normalize (PyTorch preprocessing)
-            input_pose_dct = torch.matmul(input_pose.transpose(1, 2), dct_m.transpose(0, 1)).transpose(1, 2)
-            input_pose_dct = input_pose_dct / 1000
+            if EXPERIMENT_1:
+                input_pose_dct = torch.matmul(input_pose.transpose(1, 2), dct_m.transpose(0, 1)).transpose(1, 2)
+                input_pose_model = input_pose_dct / 1000
+            else:
+                input_pose_model = input_pose.reshape(input_pose.shape[0], input_pose.shape[1], n_joints, 3)
 
             # Forward pass
-            pred_poses, (log_vars, raw_covs) = model(input_pose_dct)
+            if EXPERIMENT_1:
+                pred_poses, (log_vars, raw_covs) = model(input_pose_model, input_uncertainty=input_uncertainty)
+            else:
+                pred_poses, log_vars, raw_covs = model(input_pose_model, input_uncertainty=input_uncertainty)
 
             # Denormalize and apply IDCT
-            pred_poses = pred_poses * 1000
-            pred_poses = torch.matmul(pred_poses.transpose(1, 2), idct_m.transpose(0, 1)).transpose(1, 2)
+            if EXPERIMENT_1:
+                pred_poses = pred_poses * 1000
+                pred_poses = torch.matmul(pred_poses.transpose(1, 2), idct_m.transpose(0, 1)).transpose(1, 2)
 
-            # Add offset from last input frame
-            offset = input_pose[:, -1:, :]
-            pred_poses = pred_poses[:, :PREDICTION_HORIZON_LENGTH, :] + offset
+                # Add offset from last input frame
+                offset = input_pose[:, -1:, :]
+                pred_poses = pred_poses[:, :PREDICTION_HORIZON_LENGTH, :] + offset
+            else:
+                pred_poses = pred_poses[:, :PREDICTION_HORIZON_LENGTH, ...]
 
             # Build covariance matrices from Cholesky decomposition
             variance = torch.exp(log_vars)
@@ -256,6 +287,11 @@ def main():
         default="model_comparison_results.txt",
         help="File to save comparison results"
     )
+    parser.add_argument(
+        "--test_uncertain_input",
+        action="store_true",
+        help="Test the uncertain input instead of ground truth input"
+    )
 
     args = parser.parse_args()
 
@@ -290,7 +326,10 @@ def main():
             f"Please ensure the H36M dataset is properly extracted."
         )
 
-    dataset_name = "Human36mMotionDataset3D"
+    if args.test_uncertain_input:
+        dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
+    else:
+        dataset_name = "Human36mMotionDataset3D"
 
     train_loader, valid_loader, test_loader = dataloader_from_string(
         dataset_name,
@@ -340,10 +379,25 @@ def main():
     if not os.path.exists(pytorch_model_path):
         raise FileNotFoundError(f"PyTorch model not found at {pytorch_model_path}")
 
-    pytorch_model = DCTPoseTransformer(input_dim=39, seq_len=50)
-    pytorch_model.load_state_dict(torch.load(pytorch_model_path, map_location=device))
-    pytorch_model.to(device)
-    pytorch_model.eval()
+    print("Initializing 3D prediction model...")
+    if EXPERIMENT_1:
+        # For Experiment 1 version
+        pytorch_model = DCTPoseTransformer(input_dim=39, seq_len=50)
+        pytorch_model.load_state_dict(torch.load(pytorch_model_path, map_location=device))
+        pytorch_model.to(device)
+        pytorch_model.eval()
+    else:
+        # For Experiment 4 version
+        pytorch_model = DCTPoseTransformer(
+            d_model=128,
+            nhead=4,
+            num_layers=2,
+            seq_len=50,
+            seq_len_output=10
+        ).to(device)
+        checkpoint = torch.load(pytorch_model_path, map_location=device)
+        pytorch_model.load_state_dict(checkpoint, strict=False)
+        pytorch_model.eval()
     print("PyTorch model loaded successfully!")
 
     # Get DCT matrices for PyTorch model
@@ -369,7 +423,7 @@ def main():
 
     # Evaluate PyTorch model
     pytorch_val_preds, pytorch_val_targets, pytorch_val_covs = evaluate_pytorch_model(
-        pytorch_model, valid_loader, device, dct_m, idct_m
+        pytorch_model, valid_loader, device, dct_m, idct_m, args.test_uncertain_input
     )
     pytorch_val_results = print_results(
         pytorch_val_preds, pytorch_val_targets, pytorch_val_covs, "PyTorch Model", "Validation"
@@ -392,7 +446,7 @@ def main():
 
     # Evaluate PyTorch model
     pytorch_test_preds, pytorch_test_targets, pytorch_test_covs = evaluate_pytorch_model(
-        pytorch_model, test_loader, device, dct_m, idct_m
+        pytorch_model, test_loader, device, dct_m, idct_m, args.test_uncertain_input
     )
     pytorch_test_results = print_results(
         pytorch_test_preds, pytorch_test_targets, pytorch_test_covs, "PyTorch Model", "Test"
