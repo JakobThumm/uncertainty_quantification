@@ -34,7 +34,6 @@ import orbax.checkpoint
 import numpy as np
 import wandb
 import optuna
-from optuna.trial import TrialState
 
 from src.models.dct_pose_transformer_pytorch_attn import (
     DCTPoseTransformer,
