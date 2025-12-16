@@ -150,7 +150,7 @@ We have two things:
         --> This would require further investigation but our model is better, so I guess it is okay.
     - [x] Investigate the uncertainty coverage for the 3D Pose estimation in pytorch vs. Jax.
     - [ ] Investigate prediction accuracy 3D motion prediction in pytorch vs. Jax.
-        Pytorch all validation data, model = 
+        Pytorch all validation data, model = model_13_joints_with_uncert
             Overall MPJPE: 23.79 mm
             Per-Time Errors:
             Time point 1 error =    6.37 mm
@@ -163,11 +163,31 @@ We have two things:
             Time point 8 error =   35.72 mm
             Time point 9 error =   41.48 mm
             Time point 10 error =   47.65 mm
-            Uncertainty Coverage Stats:
-              Overall coverage within 1 std: 95.64%
-              Overall coverage within 2 std: 98.59%
-              Overall coverage within 3 std: 99.47%
-              Overall coverage within 4 std: 99.78%
+            Overall Coverage:
+              Level      Percentage   Expected    
+              1σ          95.64%        68.00%
+              2σ          98.59%        95.00%
+              3σ          99.47%        99.73%
+              4σ          99.78%        99.99%
+        Model = model_13_joints_calibrated_uncert.pth
+            Validation MPJPE: 33.31 mm
+            Validation MPJPE per frame:
+              Frame +1 (t+40ms): 9.71 mm
+              Frame +2 (t+80ms): 13.49 mm
+              Frame +3 (t+120ms): 18.15 mm
+              Frame +4 (t+160ms): 23.80 mm
+              Frame +5 (t+200ms): 29.53 mm
+              Frame +6 (t+240ms): 35.52 mm
+              Frame +7 (t+280ms): 41.50 mm
+              Frame +8 (t+320ms): 47.59 mm
+              Frame +9 (t+360ms): 53.71 mm
+              Frame +10 (t+400ms): 60.08 mm
+            Overall Coverage:
+              Level      Percentage   Expected    
+              1σ          95.50%        68.00%
+              2σ          98.65%        95.00%
+              3σ          99.55%        99.73%
+              4σ          99.83%        99.99%
         
         Jax all validation data, trained model after stage 3:
             Overall MPJPE: 55.37 mm, Std: 57.21 mm
@@ -203,11 +223,23 @@ We have two things:
               Overall coverage within 4 std: 77.41%
         ==> Model did not learn correct covariance matrices.
     - [ ] Investigate the uncertainty coverage for the 3D motion prediction in pytorch vs. Jax.
- 7. Full single-human pipeline
+ 7. Full single-human pipeline (finish set up)
     - First, find out how the current bounding box algorithm works in Marians code. E.g., Experiment 4. There, he did real-world tests, so it should include some bounding box algorithm.
     - Implement the full pipeline based on the code of Experiment 4 plus the new OOD detection. Everything in JAX.
-    - [ ] Implement motion prediction model that takes uncertainty as input
-    - [ ] Write script that performs pose estimation with uncertainty + motion prediction with uncertainty with input from pose estimation
+    - [ ] Train okay performing network in Jax
+    - [ ] Use that network for OOD detection
+    - [ ] Hopefully: Marian finally provides correct pytorch network
+    - [ ] Build on script for creating motion dataset to create full 3D pipeline
+    - [ ] Adapt pipeline for RGBD camera
+    - [ ] Write batched evaluation script that evaluates pose estimation
+      - [ ] 2D pose estimation, MPJPE, coverage
+      - [ ] 3D pose estimation, MPJPE, coverage
+      - [ ] OOD detection evaluation
+    - [ ] Write batched evaluation script that evaluates motion prediction 
+      - [ ] From ground truth measurements, MPJPE, coverage, per-action data
+      - [ ] From estimated pose dataset, Write batched evaluation script that evaluates
+      - [ ] OOD detection evaluation
+    - [ ] Write bash script that runs all evaluations sequentially
  8. Extend to multi-human
     - Write code to detect all humans in the scene.
     - We want to 
