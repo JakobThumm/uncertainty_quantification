@@ -88,12 +88,13 @@ class FrequencyAwareAttention(nn.Module):
     nhead: int
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, deterministic: bool = True):
         """
         Apply frequency-weighted attention to input sequence.
 
         Args:
-            x: Input sequence [seq_len, batch_size, d_model]
+            x: Input sequence [batch_size, seq_len, d_model]
+            deterministic: If False, applies dropout
 
         Returns:
             Attention output with same shape as input
@@ -102,7 +103,7 @@ class FrequencyAwareAttention(nn.Module):
         freq_weights = self.param("freq_weights", nn.initializers.ones, (1, 1, self.d_model))
 
         weighted_x = x * freq_weights
-        
+
         # Potential improvements, not tested.
         # from flash_attention_jax import flash_attention
         # from aqt import quantized_einsum
@@ -123,7 +124,7 @@ class FrequencyAwareAttention(nn.Module):
         )
 
         # Self-attention: query = key = value
-        attn_output = mha(weighted_x, weighted_x, weighted_x, deterministic=True)
+        attn_output = mha(weighted_x, weighted_x, weighted_x, deterministic=deterministic)
 
         return attn_output
 
@@ -139,12 +140,13 @@ class DCTPoseTransformerBlock(nn.Module):
     dim_feedforward: int = 1024
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, deterministic: bool = True):
         """
         Process input through attention and frequency-specific networks.
 
         Args:
-            x: Input features [seq_len, batch_size, d_model]
+            x: Input features [batch_size, seq_len, d_model]
+            deterministic: If False, applies dropout
 
         Returns:
             Processed features with same shape as input
@@ -154,7 +156,7 @@ class DCTPoseTransformerBlock(nn.Module):
         norm1_x = norm1(x)
 
         freq_attn = FrequencyAwareAttention(self.d_model, self.nhead, name="freq_attn")
-        attn_output = freq_attn(norm1_x)
+        attn_output = freq_attn(norm1_x, deterministic=deterministic)
         x = x + attn_output
 
         # Layer normalization
@@ -292,17 +294,17 @@ class UncertaintyHead(nn.Module):
         Predict uncertainty parameters from features and optional explicit uncertainties.
 
         Args:
-            features: Pose features [seq_len, batch_size, d_model]
+            features: Pose features [batch_size, seq_len, d_model]
             uncertainty_features: Optional explicit uncertainty features
 
         Returns:
             tuple: (variance parameters, covariance parameters)
         """
-        batch_size = features.shape[1]
+        batch_size = features.shape[0]
         params_per_joint = self.coords_per_joint * 2
 
         # Flatten features [batch_size, seq_len * d_model]
-        flattened = jnp.transpose(features, (1, 0, 2)).reshape(batch_size, -1)
+        flattened = features.reshape(batch_size, -1)
 
         # MLP for processing pose features
         x = self.mlp_0(flattened)
@@ -313,7 +315,7 @@ class UncertaintyHead(nn.Module):
 
         if uncertainty_features is not None:
             # Process explicit uncertainties
-            uncertainty_flat = jnp.transpose(uncertainty_features, (1, 0, 2)).reshape(batch_size, -1)
+            uncertainty_flat = uncertainty_features.reshape(batch_size, -1)
             x_unc = self.unc_proc_0(uncertainty_flat)
             x_unc = nn.relu(x_unc)
             processed_uncertainty = self.unc_proc_1(x_unc)
@@ -382,11 +384,11 @@ class UncertaintyHeadCov(nn.Module):
         )
 
     def __call__(self, features, uncertainty_features=None):
-        batch_size = features.shape[1]
+        batch_size = features.shape[0]
         L_params_per_joint = 6
 
         # Flatten features: [B, T*D]
-        flat_feat = jnp.transpose(features, (1, 0, 2)).reshape(batch_size, -1)
+        flat_feat = features.reshape(batch_size, -1)
 
         # Pose feature branch
         x = nn.relu(self.mlp_0(flat_feat))
@@ -395,7 +397,7 @@ class UncertaintyHeadCov(nn.Module):
 
         # Optional explicit uncertainty branch
         if uncertainty_features is not None:
-            flat_unc = jnp.transpose(uncertainty_features, (1, 0, 2)).reshape(batch_size, -1)
+            flat_unc = uncertainty_features.reshape(batch_size, -1)
             u = nn.relu(self.unc_proc_0(flat_unc))
             unc_proc = self.unc_proc_1(nn.relu(u))
             w = nn.sigmoid(self.uncertainty_weight)
@@ -523,12 +525,9 @@ class DCTPoseTransformer(nn.Module):
         x = nn.LayerNorm(name="input_embed_norm")(x)
         x = nn.gelu(x)
 
-        # Transpose to [seq_len, batch_size, d_model]
-        x = jnp.transpose(x, (1, 0, 2))
-
         # Learnable frequency-based positional encoding
         freq_pos_embed = self.param(
-            "freq_pos_embed", nn.initializers.normal(stddev=1.0), (self.seq_len, 1, self.d_model)
+            "freq_pos_embed", nn.initializers.normal(stddev=1.0), (1, self.seq_len, self.d_model)
         )
         x = x + freq_pos_embed
 
@@ -544,20 +543,20 @@ class DCTPoseTransformer(nn.Module):
             input_uncertainty = input_uncertainty / (self.unit_conversion**2)
             # Process uncertainty -> [batch, seq, d_model]
             uncertainty_features = uncertainty_embedding(input_uncertainty)
-            # Transpose to match x's shape: [seq_len, batch_size, d_model]
-            uncertainty_features = jnp.transpose(uncertainty_features, (1, 0, 2))
             # Add to main features
             x = x + uncertainty_features / self.unit_conversion
+
+        # Model is deterministic in prediction mode.
+        deterministic = not train
 
         # Pass through transformer blocks
         features = []
         for i in range(self.num_layers):
             block = DCTPoseTransformerBlock(self.d_model, self.nhead, name=f"transformer_block_{i}")
-            x = block(x)
+            x = block(x, deterministic=deterministic)
             features.append(x)
 
         # Decode poses
-        x = jnp.transpose(x, (1, 0, 2))  # [batch_size, seq_len, d_model]
         half_dim = x.shape[-1] // 2
         low_freq = x[..., :half_dim]
         high_freq = x[..., half_dim:]
