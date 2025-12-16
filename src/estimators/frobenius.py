@@ -57,7 +57,7 @@ def get_frobenius_norm_difference_sequential(
         variance = variance_I - variance_P
         return variance
     return jax.lax.fori_loop(
-        0, dim_in, 
-        lambda i, temp : temp + get_norm(i), 
+        0, dim_in,
+        lambda i, temp : temp + get_norm(i),
         0.
     )

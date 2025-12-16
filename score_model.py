@@ -580,10 +580,19 @@ if __name__ == "__main__":
         if args.sketch is not None:
             experiment_name += f"_sketch_{args.sketch}_seed{args.sketch_seed}_size{args.sketch_size}"
     print(f"Saving with name -> {experiment_name}\n\n")
-    cloudpickle.dump(
-        scores_dict,
-        open(
-            f"{args.model_save_path}/{args.ID_dataset}/{args.model}/seed_{args.model_seed}/{args.run_name}_{experiment_name}.cloudpickle",
-            "wb",
-        ),
-    )
+    if os.path.exists(f"{args.model_save_path}/{args.ID_dataset}/{args.model}/seed_{args.model_seed}"):
+        cloudpickle.dump(
+            scores_dict,
+            open(
+                f"{args.model_save_path}/{args.ID_dataset}/{args.model}/seed_{args.model_seed}/{args.run_name}_{experiment_name}.cloudpickle",
+                "wb",
+            ),
+        )
+    else:
+        cloudpickle.dump(
+            scores_dict,
+            open(
+                f"{args.model_save_path}/{args.run_name}_{experiment_name}.cloudpickle",
+                "wb",
+            ),
+        )
