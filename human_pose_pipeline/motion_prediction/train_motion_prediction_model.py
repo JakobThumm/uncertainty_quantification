@@ -36,7 +36,7 @@ import wandb
 import optuna
 from optuna.trial import TrialState
 
-from src.models.dct_pose_transformer import (
+from src.models.dct_pose_transformer_pytorch_attn import (
     DCTPoseTransformer,
     pose_prediction_loss,
     gaussian_nll_from_cholesky,
