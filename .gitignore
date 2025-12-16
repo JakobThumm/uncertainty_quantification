@@ -49,3 +49,6 @@ src/ViTPose/vitpose_full_h36m_S1_S9.pth
 
 runs/
 yolo*.ptcache/
+
+yolo*.pt
+wandb/
