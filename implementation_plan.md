@@ -237,7 +237,7 @@ We have two things:
       - [x] 3D pose estimation, MPJPE, coverage
     - [ ] Adapt human_pose_pipeline/examples/pose_estimation_3D_full_eval.py to create full 3D pipeline.
     - [ ] Adapt pipeline for RGBD camera
-    - [ ] Write batched evaluation script that evaluates motion prediction 
+    - [ ] Write batched evaluation script that evaluates motion prediction (based on Motion Prediction Evaluation launch.json)
       - [ ] From ground truth measurements, MPJPE, coverage, per-action data
       - [ ] From estimated pose dataset, Write batched evaluation script that evaluates
       - [ ] OOD detection evaluation
