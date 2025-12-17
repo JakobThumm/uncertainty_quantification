@@ -122,7 +122,7 @@ We have two things:
             Average percentage of keypoints within 4 std: 98.85%
         ==> Here, the accuracy of the jax_resnet50_regressflow and finetuned_h36m_regressflow_with_unc roughly match.
     - [x] Investigate the uncertainty coverage for the 2D Pose estimation in pytorch vs. Jax.
-    - [ ] Investigate prediction accuracy 3D Pose estimation in pytorch vs. Jax.
+    - [x] Investigate prediction accuracy 3D Pose estimation in pytorch vs. Jax.
         Results Marian Pytorch on 10 validation files with 1000 max_frames (yolo threshold = 0.8) (Model: estimation_model_finetuned_on_h36m.pth):
         Actions: ['Discussion 1', 'Sitting 1', 'SittingDown 1', 'Posing 1', 'Eating', 'SittingDown', 'Smoking 2', 'Directions', 'Purchases 1', 'Waiting']
             Total frames processed: 10000
@@ -149,7 +149,7 @@ We have two things:
         --> Findings: finetuned_h36m_regressflow_with_unc seems to be much better than estimation_model_finetuned_on_h36m! The actions are the same.
         --> This would require further investigation but our model is better, so I guess it is okay.
     - [x] Investigate the uncertainty coverage for the 3D Pose estimation in pytorch vs. Jax.
-    - [ ] Investigate prediction accuracy 3D motion prediction in pytorch vs. Jax.
+    - [x] Investigate prediction accuracy 3D motion prediction in pytorch vs. Jax.
         Pytorch all validation data, model = model_13_joints_with_uncert
             Overall MPJPE: 23.79 mm
             Per-Time Errors:
@@ -222,7 +222,87 @@ We have two things:
               Overall coverage within 3 std: 68.79%
               Overall coverage within 4 std: 77.41%
         ==> Model did not learn correct covariance matrices.
-    - [ ] Investigate the uncertainty coverage for the 3D motion prediction in pytorch vs. Jax.
+    - [x] Investigate the uncertainty coverage for the 3D motion prediction in pytorch vs. Jax.
+        ================================================================================
+        JAX Model - VALIDATION RESULTS (human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle)
+        ================================================================================
+
+        Overall MPJPE: 23.38 mm, Std: 32.45 mm
+
+        Per-Time Errors:
+          Time point 1 error =    7.84 mm
+          Time point 2 error =    7.86 mm
+          Time point 3 error =   10.21 mm
+          Time point 4 error =   14.34 mm
+          Time point 5 error =   18.91 mm
+          Time point 6 error =   23.91 mm
+          Time point 7 error =   29.15 mm
+          Time point 8 error =   34.68 mm
+          Time point 9 error =   40.40 mm
+          Time point 10 error =   46.48 mm
+
+        Per-Joint Errors:
+          Joint 1 error =   20.64 mm
+          Joint 2 error =   18.61 mm
+          Joint 3 error =   18.74 mm
+          Joint 4 error =   29.19 mm
+          Joint 5 error =   28.71 mm
+          Joint 6 error =   39.55 mm
+          Joint 7 error =   38.69 mm
+          Joint 8 error =   15.56 mm
+          Joint 9 error =   15.17 mm
+          Joint 10 error =   18.40 mm
+          Joint 11 error =   18.85 mm
+          Joint 12 error =   20.29 mm
+          Joint 13 error =   21.49 mm
+
+        Uncertainty Coverage Stats:
+          Overall coverage within 1 std: 69.96%
+          Overall coverage within 2 std: 86.11%
+          Overall coverage within 3 std: 92.62%
+          Overall coverage within 4 std: 95.68%
+
+        Running PyTorch model inference...
+        100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 851/851 [00:01<00:00, 585.14it/s]
+
+        ================================================================================
+        PyTorch Model - VALIDATION RESULTS (marian_code/Experiment4/model_checkpoint_prediction_transformer_weights_from_end_to_end.pth)
+        ================================================================================
+
+        Overall MPJPE: 43.46 mm, Std: 48.34 mm
+
+        Per-Time Errors:
+          Time point 1 error =   23.69 mm
+          Time point 2 error =   26.72 mm
+          Time point 3 error =   28.96 mm
+          Time point 4 error =   34.39 mm
+          Time point 5 error =   39.21 mm
+          Time point 6 error =   44.90 mm
+          Time point 7 error =   50.34 mm
+          Time point 8 error =   56.02 mm
+          Time point 9 error =   61.96 mm
+          Time point 10 error =   68.38 mm
+
+        Per-Joint Errors:
+          Joint 1 error =   44.19 mm
+          Joint 2 error =   34.44 mm
+          Joint 3 error =   34.71 mm
+          Joint 4 error =   52.13 mm
+          Joint 5 error =   49.53 mm
+          Joint 6 error =   70.22 mm
+          Joint 7 error =   64.09 mm
+          Joint 8 error =   30.51 mm
+          Joint 9 error =   31.78 mm
+          Joint 10 error =   32.79 mm
+          Joint 11 error =   36.32 mm
+          Joint 12 error =   40.26 mm
+          Joint 13 error =   43.98 mm
+
+        Uncertainty Coverage Stats:
+          Overall coverage within 1 std: 9.58%
+          Overall coverage within 2 std: 16.08%
+          Overall coverage within 3 std: 21.84%
+          Overall coverage within 4 std: 26.88%
  7. Full single-human pipeline (finish set up)
     - First, find out how the current bounding box algorithm works in Marians code. E.g., Experiment 4. There, he did real-world tests, so it should include some bounding box algorithm.
     - Implement the full pipeline based on the code of Experiment 4 plus the new OOD detection. Everything in JAX.
