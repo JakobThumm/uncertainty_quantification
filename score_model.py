@@ -143,6 +143,7 @@ parser.add_argument("--use_proj_loss", action="store_true", required=False, defa
 
 # print more stuff
 parser.add_argument("--verbose", action="store_true", required=False, default=False)
+parser.add_argument("--test_score", action="store_true", required=False, default=False, help="Test the score function after training.")
 
 # caching intermediate computations
 parser.add_argument(
@@ -507,45 +508,47 @@ if __name__ == "__main__":
     approx_quadratic_form = None  # skip computation of approx quadratic form
     compute_true_quadratic_form = False  # skip computation of true quadratic form
     scores_dict = {"eigenvals": jnp.array(eigenval), "args_dict": args_dict, "score_fun": score_fun}
-    for distribution, loader in [("ID", ID_loader), *zip(args_dict["OOD_datasets"], OOD_loaders)]:
-        start = time.time()
-        # print("distribution:", distribution)
-        done = 0
-        scores_dict[distribution] = []
-        if approx_quadratic_form is not None:
-            scores_dict[f"{distribution}_QF"] = []
-            scores_dict[f"{distribution}_QFapprox"] = []
-
-        for batch in tqdm(loader, desc=f"Computing {distribution} scores"):
-            # if done > 200:
-            #    break
-            X = jnp.array(batch[0].numpy())
-            Y = jnp.array(batch[1].numpy())
-            # print("input:", X.shape)
-            start_batch = time.time()
-            # here you apply score_fun to a batch of datapoints
-            batch_scores = score_fun(X)
-            scores_dict[distribution].append(batch_scores)
+    
+    if args.test_score:
+        for distribution, loader in [("ID", ID_loader), *zip(args_dict["OOD_datasets"], OOD_loaders)]:
+            start = time.time()
+            # print("distribution:", distribution)
+            done = 0
+            scores_dict[distribution] = []
             if approx_quadratic_form is not None:
-                fake = approx_quadratic_form(X)
-                scores_dict[f"{distribution}_QFapprox"].append(fake)
-                if compute_true_quadratic_form and done < 1:
-                    # real is very expensive to compute, and does not depend on the score
-                    for i in range(4):
-                        small_X = X[i * 4 : (i + 1) * 4]
-                        real = quadratic_form(small_X)
-                        scores_dict[f"{distribution}_QF"].append(real)
-            # print(f"{distribution} - scores {batch_scores[0:5]}, computed in {time.time() - start:.3f}s")
-            done += X.shape[0]
-            if args.verbose:
-                print(f"{done}/{len(loader.dataset)} in {time.time() - start_batch:.3f}s")
-        print(f"Computed {distribution} scores in {time.time() - start:.3f} seconds")
+                scores_dict[f"{distribution}_QF"] = []
+                scores_dict[f"{distribution}_QFapprox"] = []
 
-        scores_dict[distribution] = jnp.concatenate(scores_dict[distribution], axis=0)
-        if approx_quadratic_form is not None:
-            scores_dict[f"{distribution}_QFapprox"] = jnp.concatenate(scores_dict[f"{distribution}_QFapprox"], axis=0)
-            if compute_true_quadratic_form:
-                scores_dict[f"{distribution}_QF"] = jnp.concatenate(scores_dict[f"{distribution}_QF"], axis=0)
+            for batch in tqdm(loader, desc=f"Computing {distribution} scores"):
+                # if done > 200:
+                #    break
+                X = jnp.array(batch[0].numpy())
+                Y = jnp.array(batch[1].numpy())
+                # print("input:", X.shape)
+                start_batch = time.time()
+                # here you apply score_fun to a batch of datapoints
+                batch_scores = score_fun(X)
+                scores_dict[distribution].append(batch_scores)
+                if approx_quadratic_form is not None:
+                    fake = approx_quadratic_form(X)
+                    scores_dict[f"{distribution}_QFapprox"].append(fake)
+                    if compute_true_quadratic_form and done < 1:
+                        # real is very expensive to compute, and does not depend on the score
+                        for i in range(4):
+                            small_X = X[i * 4 : (i + 1) * 4]
+                            real = quadratic_form(small_X)
+                            scores_dict[f"{distribution}_QF"].append(real)
+                # print(f"{distribution} - scores {batch_scores[0:5]}, computed in {time.time() - start:.3f}s")
+                done += X.shape[0]
+                if args.verbose:
+                    print(f"{done}/{len(loader.dataset)} in {time.time() - start_batch:.3f}s")
+            print(f"Computed {distribution} scores in {time.time() - start:.3f} seconds")
+
+            scores_dict[distribution] = jnp.concatenate(scores_dict[distribution], axis=0)
+            if approx_quadratic_form is not None:
+                scores_dict[f"{distribution}_QFapprox"] = jnp.concatenate(scores_dict[f"{distribution}_QFapprox"], axis=0)
+                if compute_true_quadratic_form:
+                    scores_dict[f"{distribution}_QF"] = jnp.concatenate(scores_dict[f"{distribution}_QF"], axis=0)
 
     ###################
     ### save scores ###

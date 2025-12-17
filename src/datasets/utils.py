@@ -1,3 +1,4 @@
+from typing import Optional
 import torch
 import torchvision
 import numpy as np
@@ -63,12 +64,13 @@ def get_loader(
         split_train_val_ratio: float = 1.0,
         shuffle: bool = False,
         drop_last: bool = True,
-        seed = 0,
+        seed: Optional[int] = 0,
         collate_fn = None
     ):
     torch.backends.cudnn.deterministic = True
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+    if seed is not None:
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
     if split_train_val_ratio == 1.0:
         return torch.utils.data.DataLoader(
             dataset, 
@@ -80,10 +82,14 @@ def get_loader(
             collate_fn = collate_fn
         )
     else:
+        if seed is not None:
+            generator = torch.Generator().manual_seed(seed)
+        else:
+            generator = torch.Generator()
         train_size = int(split_train_val_ratio * len(dataset))
         valid_size = len(dataset) - train_size
         dataset_train, dataset_valid = torch.utils.data.random_split(
-            dataset, (train_size, valid_size), generator=torch.Generator().manual_seed(0)
+            dataset, (train_size, valid_size), generator=generator
         )
         return (
             torch.utils.data.DataLoader(
@@ -112,12 +118,16 @@ def get_subset_loader(
         batch_size = 128,
         shuffle: bool = False,
         drop_last: bool = True,
-        seed = 0
+        seed: Optional[int] = 0
     ):
     if len(dataloader.dataset) < n_samples:
         raise ValueError(f"Can't return a subset of size {n_samples} from a dataset of size {len(dataloader.dataset)}")
+    if seed is not None:
+        generator = torch.Generator().manual_seed(seed)
+    else:
+        generator = torch.Generator()
     sub_dataset, _ = torch.utils.data.random_split(
-        dataloader.dataset, (n_samples, len(dataloader.dataset)-n_samples), generator=torch.Generator().manual_seed(seed)
+        dataloader.dataset, (n_samples, len(dataloader.dataset)-n_samples), generator=generator
     )
     return torch.utils.data.DataLoader(
                 sub_dataset, 

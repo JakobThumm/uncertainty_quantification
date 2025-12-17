@@ -549,17 +549,17 @@ def initialize_human_detector(device_torch=None):
 
 def initialize_jax_models(checkpoint_path_jax):
     """
-    Initialize and load the JAX pose estimation model.
+    Initialize and load the JAX model.
 
     Args:
-        checkpoint_path_jax (str): Path to the JAX pose estimation model parameters
+        checkpoint_path_jax (str): Path to the JAX model parameters
 
     Returns:
-        tuple: (pose_estimation_jit_fn, jax_params, jax_batch_stats)
+        tuple: (model_jit_fn, jax_params, jax_batch_stats)
     """
 
-    # Load JAX pose estimation model
-    print(f'Loading JAX pose estimation model from {checkpoint_path_jax}...')
+    # Load JAX model
+    print(f'Loading JAX model from {checkpoint_path_jax}...')
 
     # Parse the model path to extract components
     # Expected format: human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/finetuned_h36m_regressflow_pred_*
@@ -597,7 +597,7 @@ def initialize_jax_models(checkpoint_path_jax):
     params = params_dict["params"]
     batch_stats = params_dict.get("batch_stats", None)
 
-    print("JAX pose estimation model loaded successfully.")
+    print("JAX model loaded successfully.")
     print(f"  - Model type: {args_dict['model']}")
     print(f"  - Output dim: {args_dict['output_dim']}")
     print(f"  - Has batch stats: {batch_stats is not None}")
@@ -605,12 +605,12 @@ def initialize_jax_models(checkpoint_path_jax):
     # Create JIT-compiled inference function for maximum performance
     print("Compiling JIT inference function...")
     if batch_stats is not None:
-        pose_estimation_jit_fn = jax.jit(lambda p, bs, x: model.apply_test(p, bs, x))
+        model_jit_fn = jax.jit(lambda p, bs, x: model.apply_test(p, bs, x))
     else:
-        pose_estimation_jit_fn = jax.jit(lambda p, x: model.apply_test(p, x))
+        model_jit_fn = jax.jit(lambda p, x: model.apply_test(p, x))
     print("JIT compilation complete!")
 
-    return pose_estimation_jit_fn, params, batch_stats
+    return model_jit_fn, params, batch_stats
 
 
 def get_human_detector(device_torch):

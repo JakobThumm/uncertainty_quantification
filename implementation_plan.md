@@ -316,12 +316,20 @@ We have two things:
       - [ ] 2D OOD detection evaluation
       - [x] 3D pose estimation, MPJPE, coverage
     - [ ] Adapt human_pose_pipeline/examples/pose_estimation_3D_full_eval.py to create full 3D pipeline.
+      - [x] Write base pipeline
+      - [ ] Make everything Jax after YOLO
+      - [ ] JIT compile parts of the pipeline?
+      - [ ] Handle OOD cases
     - [ ] Adapt pipeline for RGBD camera
     - [ ] Write batched evaluation script that evaluates motion prediction (based on Motion Prediction Evaluation launch.json)
       - [ ] From ground truth measurements, MPJPE, coverage, per-action data
       - [ ] From estimated pose dataset, Write batched evaluation script that evaluates
       - [ ] OOD detection evaluation
     - [ ] Write bash script that runs all evaluations sequentially
+    - [ ] Investigate calibration for covariances that might lead to better coverage
+      - [ ] In Marian's thesis, adding a constant value of 10mm to the 3D pose estimation led to better coverage. Try this.
+      - [ ] Add a constant value to the 3D motion prediction uncertainty as well
+    - [ ] Unify the way models are saved and loaded. Direct paths.
  8. Extend to multi-human
     - Write code to detect all humans in the scene.
     - We want to 
@@ -330,5 +338,4 @@ We have two things:
       - (c) if more than one human is closer than a given threshold, return this as unsafe.
       - (d) determine the closest human.
       - (e) perform steps 5. - 9. with the closest human only.
- 9. Replace pytorch YOLO v5 with something JAX-based
-    - We can only run OOD on JAX models, so to perform OOD on the human detection, we need a JAX-based model.
+ 9. Integrate Lidar Sensor to validate YOLO human detection

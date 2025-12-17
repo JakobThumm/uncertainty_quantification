@@ -452,9 +452,10 @@ class DCTPoseTransformer(nn.Module):
         x = x + freq_pos_embed
 
         # Parallel uncertainty processing path
-        uncertainty_embedding = UncertaintyEmbedding(
-            self.d_model, seq_len=self.seq_len, num_joints=N_JOINTS, name="uncertainty_embedding"
-        )
+        if input_uncertainty is not None:
+            uncertainty_embedding = UncertaintyEmbedding(
+                self.d_model, seq_len=self.seq_len, num_joints=N_JOINTS, name="uncertainty_embedding"
+            )
 
         uncertainty_features = None
         if input_uncertainty is not None:

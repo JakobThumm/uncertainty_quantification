@@ -37,7 +37,7 @@ def main():
     parser.add_argument(
         "--model_save_path",
         type=str,
-        default="human_pose_pipeline/models/motion_prediction",
+        default="human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle",
         help="Path to saved models",
     )
     # parser.add_argument('--run_name', type=str, default='finetuned_h36m_regressflow_with_unc', help='Model run name')
@@ -67,8 +67,8 @@ def main():
     # Load dataset
     print("\nLoading H36M dataset...")
     data_path = os.path.join(root_dir, args.data_path)  # , "H36M", "extracted")
-    # dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
-    dataset_name = "Human36mMotionDataset3D"
+    dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
+    # dataset_name = "Human36mMotionDataset3D"
     train_loader, valid_loader, test_loader = dataloader_from_string(
         dataset_name,
         batch_size=BATCH_SIZE,

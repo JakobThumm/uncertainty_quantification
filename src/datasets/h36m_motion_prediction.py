@@ -39,6 +39,7 @@ class Human36mMotionDataset3D(Dataset):
         ood=False,
         input_uncertainty=False,
         directory_uncertain=None,
+        seed=None
     ):
         self.input_frames = input_frames
         self.predict_frames = predict_frames
@@ -58,6 +59,8 @@ class Human36mMotionDataset3D(Dataset):
         self.reduced_timestep = reduced_timestep
         self.reduced_joints = reduced_joints
         self.ood = ood
+        if seed:
+            np.random.seed(seed)
         self.input_uncertainty = input_uncertainty
 
     def load_data(self, base_directory, split):
@@ -183,7 +186,7 @@ class Human36mMotionDataset3D(Dataset):
         return [input_pose, target_pose]
 
 
-def subsample_dataset(dataset, n_samples, seed=0):
+def subsample_dataset(dataset, n_samples: int, seed: Optional[int] = 0):
     """Subsample a dataset to a specified number of samples.
 
     Args:
@@ -196,7 +199,8 @@ def subsample_dataset(dataset, n_samples, seed=0):
     """
     n_samples_train = min(n_samples, len(dataset))
     # Randomly select n_samples_train indices
-    np.random.seed(seed)
+    if seed is not None:
+        np.random.seed(seed)
     train_indices = np.random.choice(len(dataset), n_samples_train, replace=False)
     subsampled_dataset = torch.utils.data.Subset(dataset, train_indices)
     return subsampled_dataset
@@ -206,7 +210,7 @@ def get_h36m_motion_dataset_function(
     base_directory: str,
     batch_size: int = 128,
     shuffle: bool = False,
-    seed: int = 0,
+    seed: Optional[int] = None,
     split_train_val_ratio: float = 1.0,
     n_samples: Optional[int] = None,
     input_uncertainty: bool = False,
@@ -229,6 +233,7 @@ def get_h36m_motion_dataset_function(
         reduced_size: Reduced output size of only head and two hand poses.
         ood: Shuffle input poses in time dimension.
         directory_uncertain: Directory containing preprocessed uncertain data.
+        seed: Optional seed for ood data generation.
 
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
@@ -241,7 +246,8 @@ def get_h36m_motion_dataset_function(
         input_uncertainty=input_uncertainty,
         reduce_size=reduce_size,
         ood=ood,
-        directory_uncertain=directory_uncertain
+        directory_uncertain=directory_uncertain,
+        seed=seed
     )
 
     validation_dataset = Human36mMotionDataset3D(
@@ -251,7 +257,8 @@ def get_h36m_motion_dataset_function(
         input_uncertainty=input_uncertainty,
         reduce_size=reduce_size,
         ood=ood,
-        directory_uncertain=directory_uncertain
+        directory_uncertain=directory_uncertain,
+        seed=seed
     )
 
     test_dataset = Human36mMotionDataset3D(
@@ -261,7 +268,8 @@ def get_h36m_motion_dataset_function(
         input_uncertainty=input_uncertainty,
         reduce_size=reduce_size,
         ood=ood,
-        directory_uncertain=directory_uncertain
+        directory_uncertain=directory_uncertain,
+        seed=seed
     )
 
     # Subsample if n_samples is specified

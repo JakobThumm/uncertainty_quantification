@@ -149,7 +149,7 @@ def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_ma
         whitened_errors = np.linalg.solve(L, errors_reshaped)
 
         # Compute Mahalanobis distances
-        mahalanobis_distances_squared = np.sum(whitened_errors**2, axis=3).squeeze()  # Shape: (B, T, J)
+        mahalanobis_distances_squared = np.sum(whitened_errors**2, axis=3).squeeze(axis=-1)  # Shape: (B, T, J)
 
     except np.linalg.LinAlgError:
         print("Warning: Cholesky decomposition failed, adding more regularization")

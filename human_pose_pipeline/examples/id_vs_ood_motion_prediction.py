@@ -14,12 +14,15 @@ Based on id_vs_ood_pose_prediction.py but adapted for motion prediction.
 """
 
 import os
+import argparse
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import torch
 import cloudpickle
 import jax.numpy as jnp
+import jax
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
 
 from src.datasets.h36m_motion_prediction import Human36mMotionDataset3D
@@ -301,6 +304,16 @@ def visualize_sample_predictions(id_results, ood_results,
 
 def main():
     """Main function for ID vs OOD motion prediction comparison."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='ID vs OOD Motion Prediction Comparison')
+    parser.add_argument('--score_fn', type=str, required=False,
+                        help='Path to the score function pickle file')
+    parser.add_argument('--max_samples', type=int, default=640,
+                        help='Maximum number of samples to evaluate (default: 640)')
+    parser.add_argument('--results_dir', type=str, default='results/motion_prediction_grid_search',
+                        help='Directory to save results (default: results/motion_prediction_grid_search)')
+    args = parser.parse_args()
+
     print("=" * 80)
     print("ID vs OOD Motion Prediction Comparison")
     print("=" * 80)
@@ -310,7 +323,7 @@ def main():
         data_path = os.path.join(root_dir, "datasets", "H36M", "extracted")
         full_model_path = os.path.join(
             root_dir,
-            "human_pose_pipeline/models/motion_prediction/"
+            "human_pose_pipeline/models/motion_prediction/final_model/"
         )
         full_model = os.path.join(
             full_model_path,
@@ -318,14 +331,20 @@ def main():
         )
         ood_model_path = os.path.join(
             root_dir,
-            "human_pose_pipeline/models/motion_prediction/Human36mMotionReducedOutputDataset3D/DCTPoseTransformerReducedOutput/seed_420"
-        )
-        score_functions_path = os.path.join(
-            ood_model_path,
-            "Human36mMotionReducedOutputDataset3D_DCTPoseTransformerReducedOutput_n9000_dcfefa87_score_functions.cloudpickle"
+            "human_pose_pipeline/models/motion_prediction/final_model_for_ood"
         )
 
-        max_samples = 640  # Limit samples for quick testing
+        # Use score function from command line argument or default
+        if args.score_fn:
+            score_functions_path = args.score_fn
+        else:
+            # Default score function
+            score_functions_path = os.path.join(
+                ood_model_path,
+                "dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM230of256_sketch_srft_seed0_size100000.cloudpickle",
+            )
+
+        max_samples = args.max_samples  # Limit samples for quick testing
 
         # Load model
         print("\nLoading motion prediction model...")
@@ -346,8 +365,6 @@ def main():
             score_data = cloudpickle.load(f)
 
         score_fn = score_data['score_fun']
-        eigenval = score_data['eigenval']
-        print(f"Score functions loaded! Top 5 eigenvalues: {eigenval[:5]}")
 
         # Setup datasets
         print("\nSetting up datasets...")
@@ -367,7 +384,8 @@ def main():
             split='validation',
             jax_format=False,
             reduce_size=False,
-            ood=True
+            ood=True,
+            seed=0
         )
 
         print(f"ID dataset: {len(id_dataset)} samples")
@@ -402,6 +420,34 @@ def main():
         )
         print(f"AUROC: {detection_metrics['auroc']:.4f}")
         print(f"AUPRC: {detection_metrics['auprc']:.4f}")
+
+        # Save results to JSON file
+        os.makedirs(args.results_dir, exist_ok=True)
+
+        # Extract score function name from path for filename
+        score_fn_name = os.path.basename(score_functions_path).replace('.cloudpickle', '')
+        results_file = os.path.join(args.results_dir, f"{score_fn_name}_results.json")
+
+        results_to_save = {
+            'score_function': score_functions_path,
+            'score_fn_name': score_fn_name,
+            'max_samples': max_samples,
+            'auroc': float(detection_metrics['auroc']),
+            'auprc': float(detection_metrics['auprc']),
+            'id_mpjpe_mean': float(id_results['mpjpe_overall']),
+            'id_mpjpe_std': float(id_results['mpjpe_std']),
+            'id_ood_score_mean': float(np.mean(id_results['ood_scores'])),
+            'id_ood_score_std': float(np.std(id_results['ood_scores'])),
+            'ood_mpjpe_mean': float(ood_results['mpjpe_overall']),
+            'ood_mpjpe_std': float(ood_results['mpjpe_std']),
+            'ood_ood_score_mean': float(np.mean(ood_results['ood_scores'])),
+            'ood_ood_score_std': float(np.std(ood_results['ood_scores'])),
+        }
+
+        with open(results_file, 'w') as f:
+            json.dump(results_to_save, f, indent=2)
+
+        print(f"\n✓ Results saved to: {results_file}")
 
         # Create comparison visualization
         print("\n" + "=" * 80)
