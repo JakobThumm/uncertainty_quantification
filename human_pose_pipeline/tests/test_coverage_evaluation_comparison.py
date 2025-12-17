@@ -41,7 +41,7 @@ def generate_test_data(batch_size=5, n_frames=10, n_joints=13, seed=42):
     np.random.seed(seed)
 
     # Generate predicted poses
-    pred_poses = np.random.randn(batch_size, n_frames, n_joints * 3) * 100
+    pred_poses = np.random.randn(batch_size, n_frames, n_joints, 3) * 100
 
     # Generate covariance matrices (must be positive definite)
     cov_matrices = np.zeros((batch_size, n_frames, n_joints, 3, 3))
@@ -55,15 +55,13 @@ def generate_test_data(batch_size=5, n_frames=10, n_joints=13, seed=42):
 
     # Generate true poses by adding noise based on covariance
     true_poses = np.zeros_like(pred_poses)
-    pred_poses_reshaped = pred_poses.reshape(batch_size, n_frames, n_joints, 3)
-    true_poses_reshaped = true_poses.reshape(batch_size, n_frames, n_joints, 3)
 
     for b in range(batch_size):
         for t in range(n_frames):
             for j in range(n_joints):
                 # Sample from multivariate Gaussian
                 noise = np.random.multivariate_normal(np.zeros(3), cov_matrices[b, t, j])
-                true_poses_reshaped[b, t, j] = pred_poses_reshaped[b, t, j] + noise
+                true_poses[b, t, j] = true_poses[b, t, j] + noise
 
     return pred_poses, true_poses, cov_matrices
 
@@ -87,8 +85,7 @@ def test_coverage_comparison_single_frame():
     )
 
     # Run non-batched version on each frame and aggregate
-    batch_size, n_frames, _ = pred_poses.shape
-    n_joints = 13
+    batch_size, n_frames, n_joints, _ = pred_poses.shape
 
     all_counts = {
         'within_1std': 0,
@@ -100,8 +97,8 @@ def test_coverage_comparison_single_frame():
 
     for b in range(batch_size):
         for t in range(n_frames):
-            pred_single = pred_poses[b, t].reshape(n_joints, 3)
-            true_single = true_poses[b, t].reshape(n_joints, 3)
+            pred_single = pred_poses[b, t]
+            true_single = true_poses[b, t]
             cov_single = cov_matrices[b, t]
 
             nonbatched_result = evaluate_pose_estimation_full_3d(
@@ -157,8 +154,7 @@ def test_coverage_comparison_multiple_frames():
         batch_size=3, n_frames=5, n_joints=13, seed=123
     )
 
-    batch_size, n_frames, _ = pred_poses.shape
-    n_joints = 13
+    batch_size, n_frames, n_joints, _ = pred_poses.shape
 
     # Run batched version
     batched_result = evaluate_uncertainty_coverage_with_covariance(
@@ -328,8 +324,8 @@ def test_edge_cases():
     cov_matrices = np.stack([np.eye(3) * 0.01 for _ in range(n_joints)])
 
     # Reshape for batched - use batch_size=2, n_frames=2 to avoid squeeze dimension issues
-    pred_batched = np.tile(pred_pose.reshape(1, 1, n_joints * 3), (2, 2, 1))
-    true_batched = np.tile(true_pose.reshape(1, 1, n_joints * 3), (2, 2, 1))
+    pred_batched = np.tile(pred_pose.reshape(1, 1, n_joints, 3), (2, 2, 1))
+    true_batched = np.tile(true_pose.reshape(1, 1, n_joints, 3), (2, 2, 1))
     cov_batched = np.tile(cov_matrices.reshape(1, 1, n_joints, 3, 3), (2, 2, 1, 1, 1))
 
     batched_result = evaluate_uncertainty_coverage_with_covariance(
@@ -350,7 +346,7 @@ def test_edge_cases():
     true_pose = pred_pose + np.random.randn(n_joints, 3) * 100  # Large error
     cov_matrices = np.stack([np.eye(3) * 10000 for _ in range(n_joints)])
 
-    true_batched = np.tile(true_pose.reshape(1, 1, n_joints * 3), (2, 2, 1))
+    true_batched = np.tile(true_pose.reshape(1, 1, n_joints, 3), (2, 2, 1))
     cov_batched = np.tile(cov_matrices.reshape(1, 1, n_joints, 3, 3), (2, 2, 1, 1, 1))
 
     batched_result = evaluate_uncertainty_coverage_with_covariance(

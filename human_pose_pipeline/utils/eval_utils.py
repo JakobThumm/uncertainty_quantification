@@ -4,6 +4,9 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.scipy.stats import chi2
+import csv
+import os
+from pathlib import Path
 
 
 def evaluate_pose_prediction_scores_np(predictions, targets):
@@ -102,8 +105,15 @@ def evaluate_uncertainty_coverage_jax(pred_poses, true_poses, L, std_multipliers
 
 
 def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_matrices):
-    """
-    Modified to evaluate coverage per frame
+    """Evaluate the uncertainty coverage for 3D poses.
+
+    Args:
+        pred_poses: predicted 3D poses, [batch_size, n_frames, n_joints, 3]
+        true_poses: ground truth 3D poses, [batch_size, n_frames, n_joints, 3]
+        cov_matrices: predicted covariance matrices, [batch_size, n_frames, n_joints, 3, 3]
+    Returns:
+        coverage_stats dict with keys (i = 1, 2, 3, 4):
+            "overall_within_{i}std", "per_joint_within_{i}std", "per_frame_within_{i}std"
     """
     from scipy.stats import chi2
     # Convert to numpy for easier manipulation
@@ -119,12 +129,7 @@ def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_ma
     }
     thresholds = [chi2.ppf(expected_coverage[i + 1], df=3) for i in range(4)]
 
-    batch_size, n_frames, total_dims = pred_poses.shape
-    n_joints = total_dims // 3
-
-    # Reshape poses
-    pred_poses = pred_poses.reshape(batch_size, n_frames, n_joints, 3)
-    true_poses = true_poses.reshape(batch_size, n_frames, n_joints, 3)
+    batch_size, n_frames, n_joints, _ = pred_poses.shape
 
     # Compute errors (B, T, J, 3)
     errors = true_poses - pred_poses
@@ -169,3 +174,165 @@ def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_ma
         coverage_stats[f'per_frame_within_{i + 1}std'] = within_std_frame[i]
 
     return coverage_stats
+
+
+def print_mpjpe_results(
+    mpjpe,
+    per_time_errors,
+    per_joint_errors,
+    print_per_time_errors=True,
+    print_per_joint_errors=True
+):
+    """Print evaluation results."""
+    print(f"\nOverall MPJPE: {mpjpe:.2f} mm")
+
+    # Per-time errors
+    if print_per_time_errors:
+        print("\nPer-Time Errors:")
+        for i, error in enumerate(per_time_errors):
+            print(f"  Time point {i + 1} error = {error:7.2f} mm")
+
+    # Per-joint errors
+    if print_per_joint_errors:
+        print("\nPer-Joint Errors:")
+        for i, error in enumerate(per_joint_errors):
+            print(f"  Joint {i + 1} error = {error:7.2f} mm")
+
+
+def print_coverage_stats(
+    coverage_stats,
+    print_per_time_stats=True,
+    print_per_joint_stats=True
+):
+    """Print coverage statistics."""
+    print("\nUncertainty Coverage Stats:")
+    for mult in [1, 2, 3, 4]:
+        overall_cov = coverage_stats[f"overall_within_{mult}std"]
+        print(f"  Overall coverage within {mult} std: {overall_cov * 100:.2f}%")
+    if print_per_time_stats:
+        print("\nPer-Time Coverage Stats:")
+        for mult in [1, 2, 3, 4]:
+            print(f"\n  Overall coverage within {mult} std:")
+            per_frame_within = coverage_stats[f"per_frame_within_{mult}std"]
+            for i, percent_within in enumerate(per_frame_within):
+                print(f"    Frame {i}: {percent_within * 100:.2f}%")
+    if print_per_joint_stats:
+        print("\nPer-Joint Coverage Stats:")
+        for mult in [1, 2, 3, 4]:
+            print(f"\n  Overall coverage within {mult} std:")
+            per_joint_within = coverage_stats[f"per_joint_within_{mult}std"]
+            for i, percent_within in enumerate(per_joint_within):
+                print(f"    Joint {i}: {percent_within * 100:.2f}%")
+
+
+def save_mpjpe_results(
+    mpjpe,
+    per_time_errors,
+    per_joint_errors,
+    split="test",
+    output_dir="results/motion_prediction"
+):
+    """Save MPJPE evaluation results to CSV files.
+
+    Args:
+        mpjpe: Overall MPJPE value
+        per_time_errors: Per-time MPJPE errors, shape [T]
+        per_joint_errors: Per-joint MPJPE errors, shape [J]
+        split: Split name (e.g., 'train', 'val', 'test')
+        output_dir: Output directory for CSV files
+    """
+    # Create output directory if it doesn't exist
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Save overall MPJPE results
+    overall_file = os.path.join(output_dir, f"mpjpe_results_{split}.csv")
+    with open(overall_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['metric', 'value'])
+        writer.writerow(['overall_mpjpe_mm', f'{mpjpe:.2f}'])
+    print(f"Saved overall MPJPE results to {overall_file}")
+
+    # Save per-time MPJPE results
+    per_time_file = os.path.join(output_dir, f"per_time_mpjpe_results_{split}.csv")
+    with open(per_time_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['time_point', 'mpjpe_mm'])
+        for i, error in enumerate(per_time_errors):
+            writer.writerow([i + 1, f'{error:.2f}'])
+    print(f"Saved per-time MPJPE results to {per_time_file}")
+
+    # Save per-joint MPJPE results
+    per_joint_file = os.path.join(output_dir, f"per_joint_mpjpe_results_{split}.csv")
+    with open(per_joint_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['joint', 'mpjpe_mm'])
+        for i, error in enumerate(per_joint_errors):
+            writer.writerow([i + 1, f'{error:.2f}'])
+    print(f"Saved per-joint MPJPE results to {per_joint_file}")
+
+
+def save_coverage_stats(
+    coverage_stats,
+    split="test",
+    output_dir="results/motion_prediction"
+):
+    """Save uncertainty coverage statistics to CSV files.
+
+    Args:
+        coverage_stats: Dictionary containing coverage statistics with keys:
+            - 'overall_within_{i}std': Overall coverage for i standard deviations
+            - 'per_frame_within_{i}std': Per-frame coverage, shape [T]
+            - 'per_joint_within_{i}std': Per-joint coverage, shape [J]
+        split: Split name (e.g., 'train', 'val', 'test')
+        output_dir: Output directory for CSV files
+    """
+    # Create output directory if it doesn't exist
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Save overall coverage stats
+    overall_file = os.path.join(output_dir, f"coverage_results_{split}.csv")
+    with open(overall_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['std_multiplier', 'coverage_percent'])
+        for mult in [1, 2, 3, 4]:
+            overall_cov = coverage_stats[f"overall_within_{mult}std"]
+            writer.writerow([mult, f'{overall_cov * 100:.2f}'])
+    print(f"Saved overall coverage results to {overall_file}")
+
+    # Save per-time coverage stats
+    per_time_file = os.path.join(output_dir, f"per_time_coverage_results_{split}.csv")
+    with open(per_time_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        # Header: time_point, coverage_1std, coverage_2std, coverage_3std, coverage_4std
+        writer.writerow(['time_point', 'coverage_1std_percent', 'coverage_2std_percent',
+                        'coverage_3std_percent', 'coverage_4std_percent'])
+
+        # Get the length of per-frame arrays
+        n_frames = len(coverage_stats['per_frame_within_1std'])
+
+        for i in range(n_frames):
+            row = [i + 1]
+            for mult in [1, 2, 3, 4]:
+                per_frame_within = coverage_stats[f"per_frame_within_{mult}std"]
+                row.append(f'{per_frame_within[i] * 100:.2f}')
+            writer.writerow(row)
+    print(f"Saved per-time coverage results to {per_time_file}")
+
+    # Save per-joint coverage stats
+    per_joint_file = os.path.join(output_dir, f"per_joint_coverage_results_{split}.csv")
+    with open(per_joint_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        # Header: joint, coverage_1std, coverage_2std, coverage_3std, coverage_4std
+        writer.writerow(['joint', 'coverage_1std_percent', 'coverage_2std_percent',
+                        'coverage_3std_percent', 'coverage_4std_percent'])
+
+        # Get the length of per-joint arrays
+        n_joints = len(coverage_stats['per_joint_within_1std'])
+
+        for i in range(n_joints):
+            row = [i + 1]
+            for mult in [1, 2, 3, 4]:
+                per_joint_within = coverage_stats[f"per_joint_within_{mult}std"]
+                row.append(f'{per_joint_within[i] * 100:.2f}')
+            writer.writerow(row)
+    print(f"Saved per-joint coverage results to {per_joint_file}")

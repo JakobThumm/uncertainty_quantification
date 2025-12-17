@@ -410,8 +410,11 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
 
     Args:
         frames: Input frame images from the left and right camera. Shape: [2*B, H, W, C].
-                The first B elements correspond to the left camera,
-                the next B elements correspond to the right camera.
+                The %2 = 0 elements correspond to the left camera,
+                The %2 = 1 elements correspond to the right camera.
+                Will be converted with jnp.reshape(B, 2, ...), so that
+                  left_images = fames[:, 0] and
+                  right_images = fames[:, 1]
         projection_matrices: The two camera projection matrices for triangulation
         pose_estimation_jit_fn: JIT-compiled pose estimation function
         params: JAX model parameters
@@ -480,19 +483,26 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
     del frames
 
     # Take the first detected person
-    left_pose = batch_prediction['keypoints'][:B]
-    left_uncertainty = batch_prediction['uncertainties'][:B]  # [B, 13, 2]
-    left_covariance_matrix = batch_prediction['covariance_matrix'][:B]  # [B, 13, 2, 2]
-    left_ood_score = batch_prediction['ood_score'][:B]
-    left_is_ood = batch_prediction['is_ood'][:B]
-    left_human_detected = batch_prediction['mask'][:B]
+    both_pose = batch_prediction['keypoints'].reshape(B, 2, 13, 2)
+    both_uncertainty = batch_prediction['uncertainties'].reshape(B, 2, 13, 2)  # [B, 13, 2]
+    both_covariance_matrix = batch_prediction['covariance_matrix'].reshape(B, 2, 13, 2, 2)  # [B, 13, 2, 2]
+    both_ood_score = batch_prediction['ood_score'].reshape(B, 2)
+    both_is_ood = batch_prediction['is_ood'].reshape(B, 2)
+    both_human_detected = batch_prediction['mask'].reshape(B, 2)
+    # Left
+    left_pose = both_pose[:, 0]
+    left_uncertainty = both_uncertainty[:, 0]
+    left_covariance_matrix = both_covariance_matrix[:, 0]
+    left_ood_score = both_ood_score[:, 0]
+    left_is_ood = both_is_ood[:, 0]
+    left_human_detected = both_human_detected[:, 0]
     # Right
-    right_pose = batch_prediction['keypoints'][B:]
-    right_uncertainty = batch_prediction['uncertainties'][B:]
-    right_covariance_matrix = batch_prediction['covariance_matrix'][B:]
-    right_ood_score = batch_prediction['ood_score'][B:]
-    right_is_ood = batch_prediction['is_ood'][B:]
-    right_human_detected = batch_prediction['mask'][B:]
+    right_pose = both_pose[:, 1]
+    right_uncertainty = both_uncertainty[:, 1]
+    right_covariance_matrix = both_covariance_matrix[:, 1]
+    right_ood_score = both_ood_score[:, 1]
+    right_is_ood = both_is_ood[:, 1]
+    right_human_detected = both_human_detected[:, 1]
     is_ood = torch.logical_or(left_is_ood, right_is_ood)
     ood_score = torch.max(left_ood_score, right_ood_score)
     human_detected = torch.logical_and(left_human_detected, right_human_detected)

@@ -19,7 +19,14 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_np
+from human_pose_pipeline.utils.eval_utils import (
+    evaluate_pose_prediction_scores_np,
+    evaluate_uncertainty_coverage_with_covariance,
+    print_coverage_stats,
+    print_mpjpe_results,
+    save_coverage_stats,
+    save_mpjpe_results
+)
 from src.datasets.h36m import Human36mDatasetSequenceTwoCameras, SPLIT, Human36mDatasetTwoCameras
 from src.ood_scores.lm_lanczos import load_score_functions
 from human_pose_pipeline.pose_estimation.inference_helper import (
@@ -36,7 +43,7 @@ from human_pose_pipeline.pose_estimation.triangulation_helper import (
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     MIRROR_13_JOINT_MODEL_MAP,
     YOLO_CONFIDENCE_THRESHOLD,
-    OOD_THRESHOLD
+    OOD_THRESHOLD,
 )
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -164,11 +171,11 @@ def main():
             # Process frames from both cameras
             left_frames = all_camera_frames[0][frame_idx:frame_idx + current_batch_size]
             right_frames = all_camera_frames[1][frame_idx:frame_idx + current_batch_size]
-            # Append right frames to the left frames list
-            both_frames = left_frames + right_frames
+            # Interleave left and right frames
+            interleaved_frames = [x for pair in zip(left_frames, right_frames) for x in pair]
 
             points_3d, C_3d_all, ood_score, is_ood = process_frame_3d(
-                frames=both_frames,
+                frames=interleaved_frames,
                 projection_matrices=projection_matrices,
                 pose_estimation_jit_fn=pose_estimation_jit_fn,
                 params=params,
@@ -225,14 +232,22 @@ def main():
     all_gt_points = all_gt_points[all_good_indices]
     num_frames = all_3d_points.shape[0]
 
+    all_3d_points = all_3d_points.reshape(1, num_frames, 13, 3)
+    all_gt_points = all_gt_points.reshape(1, num_frames, 13, 3)
+
     mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(
-        predictions=np.reshape(all_3d_points, [1, num_frames, 13, 3]),
-        targets=np.reshape(all_gt_points, [1, num_frames, 13, 3]),
+        predictions=all_3d_points,
+        targets=all_gt_points,
     )
-    print(f"MPJPE = {mpjpe:.2f}")
-    print(f"per_joint_errors = {per_joint_errors}")
-    print(f"Over the time errors = {per_time_errors}")
-    stop = 0
+    coverage_stats = evaluate_uncertainty_coverage_with_covariance(
+        pred_poses=all_3d_points,
+        true_poses=all_gt_points,
+        cov_matrices=all_3d_covariances
+    )
+    print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
+    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split)
+    print_coverage_stats(coverage_stats)
+    save_coverage_stats(coverage_stats, split=split)
 
 
 if __name__ == "__main__":
