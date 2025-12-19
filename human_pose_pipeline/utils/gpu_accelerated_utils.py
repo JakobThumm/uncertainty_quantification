@@ -317,7 +317,7 @@ def resize_image_batched_gpu(
     B, C, original_height, original_width = image_tensor.shape
     target_width, target_height = target_size
 
-    # Resize using bilinear interpolation (similar to LANCZOS but faster on GPU)
+    # Resize using bilinear interpolation
     resized_tensor = F.interpolate(
         image_tensor, size=(target_height, target_width), mode="bilinear", align_corners=False
     )
