@@ -326,11 +326,11 @@ We have two things:
       - [ ] From estimated pose dataset, Write batched evaluation script that evaluates
       - [ ] OOD detection evaluation
     - [ ] Write bash script that runs all evaluations sequentially
+    - [ ] Unify the way models are saved and loaded. Direct paths.
+ 8. Calibrate the covariance predictions. The estimated variances are a bit too small, which might be easily fixable by increasing them by a constant small value.
     - [ ] Investigate calibration for covariances that might lead to better coverage
       - [ ] In Marian's thesis, adding a constant value of 10mm to the 3D pose estimation led to better coverage. Try this.
       - [ ] Add a constant value to the 3D motion prediction uncertainty as well
-    - [ ] Unify the way models are saved and loaded. Direct paths.
- 8. Calibrate the covariance predictions. The estimated variances are a bit too small, which might be easily fixable by increasing them by a constant small value.
  9. Communication between robot PC and GPU workstation.
  10. Support the D435i RGBD camera instead of triangulation.
  11. Real-world tests on the Panda in our lab.

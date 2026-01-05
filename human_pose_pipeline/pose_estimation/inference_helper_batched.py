@@ -607,10 +607,6 @@ def fill_pose_buffer(
         predicted_points = motion_prediction_buffer[0]
         predicted_covariance = motion_uncertainty_buffer[0]
 
-    if jnp.all(predicted_points == 0.0):
-        # No valid prediction possible
-        return points_3d_buffer, covariance_buffer, pose_valid_buffer, False
-
     # Shift buffers and add new prediction
     points_3d_buffer = jnp.roll(points_3d_buffer, shift=-1, axis=0)
     covariance_buffer = jnp.roll(covariance_buffer, shift=-1, axis=0)
@@ -619,7 +615,9 @@ def fill_pose_buffer(
     covariance_buffer = covariance_buffer.at[-1].set(predicted_covariance)
     pose_valid_buffer = pose_valid_buffer.at[-1].set(is_valid)
 
-    return points_3d_buffer, covariance_buffer, pose_valid_buffer, True
+    pose_buffer_good = bool(jnp.all(1 - jnp.all(points_3d_buffer == 0.0, axis=[1, 2])))
+
+    return points_3d_buffer, covariance_buffer, pose_valid_buffer, pose_buffer_good
 
 
 def update_motion_prediction_buffer(

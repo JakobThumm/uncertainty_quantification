@@ -164,6 +164,7 @@ def main():
     motions_ood_scores = []
     motions_is_ood = []
     motions_is_valid = []
+    pose_buffers_good = []
     n_sequences = min(len(dataset), args.max_sequences)
     for sample in dataset:
         if counter >= n_sequences:
@@ -276,13 +277,22 @@ def main():
                     pose_valid_buffer=pose_valid_buffer,
                     n_correct_poses_required=N_CORRECT_POSES_REQUIRED
                 )
-                # Store motion predictions
-                motions_predicted.append(motion_predicted)
-                motions_cov_predicted.append(motion_cov_predicted)
-                motions_gt.append(pose_sequence[frame_idx + 1 : frame_idx + PREDICTION_HORIZON_LENGTH + 1])
-                motions_ood_scores.append(motion_ood_score)
-                motions_is_ood.append(motion_is_ood)
-                motions_is_valid.append(valid_motion)
+            else:
+                motion_predicted = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
+                motion_cov_predicted = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
+                motion_ood_score = 0.0
+                valid_motion = False
+                motion_is_ood = False
+                motion_prediction_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
+                motion_uncertainty_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
+            # Store motion predictions
+            motions_predicted.append(motion_predicted)
+            motions_cov_predicted.append(motion_cov_predicted)
+            motions_gt.append(pose_sequence[frame_idx + 1 : frame_idx + PREDICTION_HORIZON_LENGTH + 1])
+            motions_ood_scores.append(motion_ood_score)
+            motions_is_ood.append(motion_is_ood)
+            motions_is_valid.append(valid_motion)
+            pose_buffers_good.append(pose_buffer_good)
 
             # Remove GPU tensors to free memory
             # del points_3d, C_3d_all, ood_score, is_ood
@@ -301,9 +311,6 @@ def main():
     motions_predicted = jnp.concatenate(motions_predicted, axis=0)
     motions_cov_predicted = jnp.concatenate(motions_cov_predicted, axis=0)
     motions_gt = jnp.array(motions_gt)
-    motions_ood_scores = np.array(motions_ood_scores)
-    motions_is_ood = np.array(motions_is_ood)
-    motions_is_valid = np.array(motions_is_valid)
 
     # Move to cpu and numpy
     poses_3d_estimated_np = poses_3d_estimated.cpu().numpy()
@@ -315,9 +322,10 @@ def main():
     motions_predicted_np = np.array(motions_predicted)
     motions_cov_predicted_np = np.array(motions_cov_predicted)
     motions_gt_np = np.array(motions_gt)
-    motions_ood_scores_np = np.array(motions_ood_scores)
-    motions_is_ood_np = np.array(motions_is_ood)
+    motions_ood_scores = np.array(motions_ood_scores)
+    motions_is_ood = np.array(motions_is_ood)
     motions_is_valid = np.array(motions_is_valid)
+    pose_buffers_good = np.array(pose_buffers_good)
 
     # Evaluate 3D pose estimation MPJPE and coverage
     print("================================")
