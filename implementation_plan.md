@@ -319,7 +319,7 @@ We have two things:
       - [x] Write base pipeline
       - [-] Make everything Jax after YOLO -> not more efficient for some reason.
       - [-] JIT compile parts of the pipeline?  -> not more efficient for some reason.
-    - [ ] Ensure correct frequency: Motion pipeline relies on certain input frequency, make sure to subsample if needed.
+    - [x] Ensure correct frequency: Motion pipeline relies on certain input frequency, make sure to subsample if needed.
     - [x] Handle OOD cases: As the motion prediction requires 2 seconds of pose histories, simply discarding any OOD inputs is not enough.      However, we can use the motion prediction data from previous timesteps to substitute for OOD poses.
     - [ ] Write batched evaluation script that evaluates motion prediction (based on Motion Prediction Evaluation launch.json)
       - [ ] From ground truth measurements, MPJPE, coverage, per-action data

@@ -10,6 +10,8 @@ def predict_poses(
     params,
     batch_stats,
     dataset_loader,
+    motion_ood_score_fn=None,
+    ood_threshold=np.inf,
     max_batches=np.inf,
     device="cuda"
 ):
@@ -20,16 +22,22 @@ def predict_poses(
         params: Model parameters.
         batch_stats: Batch statistics for the model (if any).
         dataset_loader: DataLoader for the dataset.
+        motion_ood_score_fn: Optional scoring function to detect OOD inputs.
+        ood_threshold: Threshold for OOD detection.
         max_batches: Maximum number of batches to process.
         device: Device to run the computations on.
     Returns:
         predictions: Predicted poses. Shape: (num_samples, pred_horizon, n_joints * 3)
         targets: Ground truth poses. Shape: (num_samples, pred_horizon, n_joints * 3)
         covariance_matrices: Covariance matrices of the predictions. Shape: (num_samples, pred_horizon, n_joints * 3, n_joints * 3)
+        ood_scores: OOD scores. Shape: (num_samples)
+        is_oods: OOD detected. Shape: (num_samples)
     """
     predictions = []
     targets = []
     covariance_matrices = []
+    ood_scores = []
+    is_oods = []
 
     print("\nRunning model inference...")
 
@@ -57,14 +65,23 @@ def predict_poses(
             pred_poses, (cov, L) = motion_prediction_jit_fn(params, input_pose)
         t1 = time()
         # print(f"  Processed batch {i + 1} in {(t1 - t0) * 1000:.2f} ms")
+        if motion_ood_score_fn is not None:
+            motion_ood_score = motion_ood_score_fn(input_pose)
+        else:
+            motion_ood_score = jnp.zeros(input_pose.shape[0], dtype=jnp.float32)
+        motion_is_ood = motion_ood_score > ood_threshold
         predictions.append(pred_poses)
         targets.append(target_pose)
         covariance_matrices.append(cov)
+        ood_scores.append(motion_ood_score)
+        is_oods.append(motion_is_ood)
 
     predictions = jnp.concatenate(predictions, axis=0)
     targets = jnp.concatenate(targets, axis=0)
     covariance_matrices = jnp.concatenate(covariance_matrices, axis=0)
-    return predictions, targets, covariance_matrices
+    ood_scores = jnp.concatenate(ood_scores, axis=0)
+    is_oods = jnp.concatenate(is_oods, axis=0)
+    return predictions, targets, covariance_matrices, ood_scores, is_oods
 
 
 def compute_covariance_matrices(log_var, raw_cov):

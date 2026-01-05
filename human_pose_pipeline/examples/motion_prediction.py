@@ -6,6 +6,7 @@ import argparse
 import numpy as np
 from sympy import per
 import torch
+import cloudpickle
 from torch.utils.data import DataLoader
 import jax.numpy as jnp
 from tqdm import tqdm
@@ -20,7 +21,8 @@ from human_pose_pipeline.pose_estimation.h36m_settings import CONNECTIONS_13
 from human_pose_pipeline.motion_prediction.h36m_settings import (
     INPUT_HORIZON_LENGTH,
     PREDICTION_HORIZON_LENGTH,
-    N_JOINTS
+    N_JOINTS,
+    OOD_THRESHOLD
 )
 from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores_np as evaluate_scores
 
@@ -40,13 +42,17 @@ def main():
         default="human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle",
         help="Path to saved models",
     )
+    parser.add_argument('--split', type=str, default='validation', help='train, validation, or test')
     # parser.add_argument('--run_name', type=str, default='finetuned_h36m_regressflow_with_unc', help='Model run name')
     # parser.add_argument('--ood_threshold', type=float, default=OOD_THRESHOLD, help='OOD threshold')
     # parser.add_argument('--subject', type=str, default='S1', help='Subject ID (e.g., S1, S6)')
     # parser.add_argument('--action', type=str, default='WalkingDog', help='Action to visualize')
     # parser.add_argument('--camera_ids', type=str, nargs=2, default=['55011271', '60457274'], help='Camera IDs')
     # parser.add_argument('--max_frames', type=int, default=100, help='Maximum number of frames to process')
-    # parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection on left camera')
+    parser.add_argument('--results_dir', type=str, default='results/motion_prediction',
+                        help='Directory to save results (default: results/motion_prediction)')
+    parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection on left camera')
+    parser.add_argument('--motion_score_fn_path', type=str, default='human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle', help="Path to the OOD score function for the motion prediction.")
     parser.add_argument(
         "--output_dir", type=str, default="results/motion_prediction", help="Output directory for results"
     )
@@ -64,6 +70,19 @@ def main():
     model_path = os.path.join(root_dir, args.model_save_path)
     motion_prediction_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax=model_path)
 
+    print("\nLoading OOD score functions...")
+    pose_ood_score_fn = None
+    motion_ood_score_fn = None
+    if args.enable_ood:
+        if not os.path.exists(args.motion_score_fn_path):
+            raise FileNotFoundError(
+                f"Motion model score functions file not found: {args.motion_score_fn_path}\n"
+                f"Please run score_model.py first to generate the score functions."
+            )
+        with open(args.motion_score_fn_path, 'rb') as f:
+            motion_score_data = cloudpickle.load(f)
+            motion_ood_score_fn = motion_score_data['score_fun']
+
     # Load dataset
     print("\nLoading H36M dataset...")
     data_path = os.path.join(root_dir, args.data_path)  # , "H36M", "extracted")
@@ -77,57 +96,47 @@ def main():
         download=False,  # False
         data_path=data_path,
     )
+    if args.split == "train":
+        data_loader = train_loader
+    elif args.split == "validation":
+        data_loader = valid_loader
+    elif args.split == "test":
+        data_loader = test_loader
+    else:
+        raise NotImplementedError(f"Split {args.split} unknown.")
     # print(f"Loaded {len(dataset)} sequences.")
 
-    # >>> Validation set <<<
+    # >>> Test dataset <<<
     print("\n" + "=" * 60)
-    print("EVALUATION RESULTS")
+    print(f"RESULTS for split {args.split}")
     print("=" * 60)
-    predictions, targets, covariance_matrices = predict_poses(
+    predictions, targets, covariance_matrices, ood_scores, is_oods = predict_poses(
         motion_prediction_jit_fn=motion_prediction_jit_fn,
         params=params,
         batch_stats=batch_stats,
-        dataset_loader=valid_loader,
+        dataset_loader=data_loader,
         device=device,
     )
     predictions = predictions.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
     targets = targets.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
-    coverage_stats = evaluate_uncertainty_coverage_with_covariance(
-        pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices
+
+    # Save all data
+    results_cloudpickle_file = os.path.join(
+        args.results_dir, f"motion_prediction_results_{args.split}.cloudpickle"
     )
-    mpjpe, std_score, per_time_errors, per_time_stds, per_joint_errors, per_joint_std = evaluate_scores(
-        predictions, targets
-    )
 
-    print(f"\nOverall MPJPE: {mpjpe:.2f} mm, Std: {std_score:.2f} mm")
+    motion_prediction_results = {
+        'predictions': predictions,
+        'targets': targets,
+        'covariance_matrices': covariance_matrices,
+        'ood_scores': ood_scores,
+        'is_oods': is_oods
+    }
 
-    # Per-joint errors
-    print("\nPer-Time Errors:")
-    for i, error in enumerate(per_time_errors):
-        print(f"Time point {i + 1} error = {error:7.2f} mm")
+    with open(results_cloudpickle_file, 'wb') as f:
+        cloudpickle.dump(motion_prediction_results, f)
+        print(f"Saved results to {results_cloudpickle_file}")
 
-    print("\nPer-Joint Errors:")
-    for i, error in enumerate(per_joint_errors):
-        print(f"Joint {i + 1} error = {error:7.2f} mm")
-
-    print("\nUncertainty Coverage Stats:")
-    for mult in [1, 2, 3, 4]:
-        overall_cov = coverage_stats[f"overall_within_{mult}std"]
-        print(f"  Overall coverage within {mult} std: {overall_cov * 100:.2f}%")
-
-    # >>> Test set <<<
-    print("\n" + "=" * 60)
-    print("TEST RESULTS")
-    print("=" * 60)
-    predictions, targets, covariance_matrices = predict_poses(
-        motion_prediction_jit_fn=motion_prediction_jit_fn,
-        params=params,
-        batch_stats=batch_stats,
-        dataset_loader=test_loader,
-        device=device,
-    )
-    predictions = predictions.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
-    targets = targets.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
     coverage_stats = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices
     )

@@ -73,7 +73,7 @@ def main():
     parser.add_argument('--action', type=str, default='WalkingDog', help='Action to visualize')
     parser.add_argument('--camera_ids', type=str, nargs=2, default=['55011271', '60457274'], help='Camera IDs')
     parser.add_argument('--max_sequences', type=int, default=10000000000, help='Maximum number of sequences to process')
-    parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection on left camera')
+    parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection')
     parser.add_argument('--output_dir', type=str, default='results/pose_3d', help='Output directory for results')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use (cuda or cpu)')
 
@@ -268,7 +268,7 @@ def main():
                     motion_ood_score = 0.0
                 motion_predicted = motion_predicted.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)[0]
                 motion_cov_predicted = motion_cov_predicted[0]
-                motion_is_ood = motion_ood_score > MOTION_OOD_THRESHOLD
+                motion_is_ood = bool(motion_ood_score > MOTION_OOD_THRESHOLD)
                 # Update motion prediction buffer
                 motion_prediction_buffer, motion_uncertainty_buffer, valid_motion = update_motion_prediction_buffer(
                     motion_prediction_buffer=motion_prediction_buffer,
@@ -282,7 +282,7 @@ def main():
             else:
                 motion_predicted = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
                 motion_cov_predicted = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
-                motion_ood_score = 0.0
+                motion_ood_score = jnp.zeros([1])
                 valid_motion = False
                 motion_is_ood = False
                 motion_prediction_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
@@ -306,14 +306,12 @@ def main():
     print("Full pipeline completed!")
     print(f"Processed {num_frames} frames")
 
-    poses_3d_estimated = torch.concatenate(poses_3d_estimated, dim=0)
-    poses_3d_cov_estimated = torch.concatenate(poses_3d_cov_estimated, dim=0)
-    poses_3d_gt = jnp.concatenate(poses_3d_gt, axis=0)
-    poses_3d_ood_scores = torch.concatenate(poses_3d_ood_scores, dim=0)
-    poses_3d_is_ood = torch.concatenate(poses_3d_is_ood, dim=0)
-    poses_3d_human_detected = torch.concatenate(poses_3d_human_detected, dim=0)
-    motions_predicted = jnp.concatenate(motions_predicted, axis=0)
-    motions_cov_predicted = jnp.concatenate(motions_cov_predicted, axis=0)
+    poses_3d_estimated = torch.stack(poses_3d_estimated, dim=0)
+    poses_3d_cov_estimated = torch.stack(poses_3d_cov_estimated, dim=0)
+    poses_3d_gt = jnp.stack(poses_3d_gt, axis=0)
+    poses_3d_ood_scores = torch.stack(poses_3d_ood_scores, dim=0)
+    motions_predicted = jnp.stack(motions_predicted, axis=0)
+    motions_cov_predicted = jnp.stack(motions_cov_predicted, axis=0)
     motions_gt = jnp.array(motions_gt)
 
     # Move to cpu and numpy
@@ -321,8 +319,8 @@ def main():
     poses_3d_cov_estimated_np = poses_3d_cov_estimated.cpu().numpy()
     poses_3d_gt_np = np.array(poses_3d_gt)
     poses_3d_ood_scores_np = poses_3d_ood_scores.cpu().numpy()
-    poses_3d_is_ood_np = poses_3d_is_ood.cpu().numpy()
-    poses_3d_human_detected_np = poses_3d_human_detected.cpu().numpy()
+    poses_3d_is_ood = np.array(poses_3d_is_ood)
+    poses_3d_human_detected = np.array(poses_3d_human_detected)
     motions_predicted_np = np.array(motions_predicted)
     motions_cov_predicted_np = np.array(motions_cov_predicted)
     motions_gt_np = np.array(motions_gt)
