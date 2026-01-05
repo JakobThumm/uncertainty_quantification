@@ -311,9 +311,9 @@ We have two things:
     - [x] Train motion prediction network in Jax starting from pytorch weights (run id 17bg6nyk) -> good performance
     - [x] Use that network for OOD detection
     - [x] Hopefully: Marian finally provides correct pytorch network
-    - [ ] Adapt human_pose_pipeline/examples/pose_estimation_3D_full_eval.py to perform the evaluation in a fully batched fashion.
-      - [ ] 2D pose estimation, MPJPE, coverage
-      - [ ] 2D OOD detection evaluation
+    - [x] Adapt human_pose_pipeline/examples/pose_estimation_3D_full_eval.py to perform the evaluation in a fully batched fashion.
+      - [x] 2D pose estimation, MPJPE, coverage
+      - [x] 2D OOD detection evaluation
       - [x] 3D pose estimation, MPJPE, coverage
     - [x] Adapt human_pose_pipeline/examples/pose_estimation_3D_full_eval.py to create full 3D pipeline.
       - [x] Write base pipeline

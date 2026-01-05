@@ -194,7 +194,9 @@ def main():
         motion_uncertainty_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
 
         # Iterate through frames in a batched manner
-        for frame_idx in tqdm(range(frames_to_process), f"Evaluating sequence {counter}/{n_sequences} of split {split}."):
+        frame_counter = 0
+        # Subsample every second frame to match motion prediction frequency.
+        for frame_idx in tqdm(range(0, frames_to_process, 2), f"Evaluating sequence {counter}/{n_sequences} of split {split}."):
             # Interleave left and right frames
             interleaved_frames = [
                 all_camera_frames[0][frame_idx],
@@ -242,7 +244,7 @@ def main():
             poses_3d_human_detected.append(human_detected)
 
             # If enough datapoints, predict motion
-            if frame_idx >= INPUT_HORIZON_LENGTH - 1 and pose_buffer_good:
+            if frame_counter >= INPUT_HORIZON_LENGTH - 1 and pose_buffer_good:
                 pose_input = points_3d_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
                 motion_prediction_input = jnp.concatenate([
                     pose_input,
@@ -293,6 +295,8 @@ def main():
             motions_is_ood.append(motion_is_ood)
             motions_is_valid.append(valid_motion)
             pose_buffers_good.append(pose_buffer_good)
+
+            frame_counter += 1
 
             # Remove GPU tensors to free memory
             # del points_3d, C_3d_all, ood_score, is_ood
