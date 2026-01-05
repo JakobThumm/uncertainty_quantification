@@ -8,7 +8,7 @@ Based on Marian's Inference_Helper.py but adapted for JAX instead of PyTorch.
 import json
 import pickle
 from time import time
-from typing import Union
+from typing import Tuple, Union
 from matplotlib.pylab import f
 import numpy as np
 import jax
@@ -401,10 +401,12 @@ def process_frame_2d(frames, pose_estimation_jit_fn, params, batch_stats, human_
     return pose_estimations
 
 
-def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
-                     mirror_map, score_fn=None,
-                     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
-                     num_output_joints=17, use_gpu_acceleration=True, verbose=True, device='cpu'):
+def process_frame_3d(
+    frames, projection_matrices, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
+    mirror_map, score_fn=None,
+    human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
+    num_output_joints=17, use_gpu_acceleration=True, verbose=True, device='cpu'
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool]: 
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -430,16 +432,11 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
         device: Device to place output tensors on ('cpu' or 'cuda')
 
     Returns:
-        List[Dict]: List of dictionaries containing for each detected person:
-            - 'keypoints': Joint coordinates [[x1,y1], [x2,y2], ...]
-            - 'uncertainties': Standard deviations
-            - 'covariance': Covariance values
-            - 'covariance_matrix': Per-joint 2x2 covariance matrices
-            - 'bbox': Bounding box in the YOLO image frame [x1, y1, x2, y2]
-            - 'center': Center of the bounding box in the YOLO image frame [x, y]
-            - 'scale': Width and height of the bounding box in the YOLO image frame [w, h]
-            - 'ood_score': OOD score for the detected person (0 if no score_fn provided)
-            - 'is_ood': Boolean indicating if the person is classified as OOD based on the threshold (False if no score_fn provided)
+        - points_3d: 3D joint coordinates
+        - C_3d_all: 3D covariance matrices
+        - ood_score: OOD score for the detected person (0 if no score_fn provided)
+        - is_ood: Boolean indicating if the person is classified as OOD based on the threshold (False if no score_fn provided)
+        - human_detected: Boolean indicating if a human was detected in the frame
     """
     assert len(frames) >= 2
     assert len(frames) % 2 == 0
@@ -526,7 +523,7 @@ def process_frame_3d(frames, projection_matrices, pose_estimation_jit_fn, params
     points_3d, C_3d_all = triangulate_points_with_covariance_batched(
         left_pose, right_pose, P1, P2, C_2D
     )
-    return points_3d, C_3d_all, ood_score, is_ood, human_detected
+    return points_3d, C_3d_all, ood_score, bool(is_ood), bool(human_detected)
 
 
 def detect_humans(
@@ -571,3 +568,98 @@ def detect_humans(
                     mask[idx] = 1
                     break
     return person_boxes, mask
+
+
+def fill_pose_buffer(
+    points_3d_buffer: jnp.ndarray,
+    covariance_buffer: jnp.ndarray,
+    pose_valid_buffer: jnp.ndarray,
+    points_3d: jnp.ndarray,
+    covariance: jnp.ndarray,
+    is_valid: bool,
+    motion_prediction_buffer: jnp.ndarray,
+    motion_uncertainty_buffer: jnp.ndarray
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, bool]:
+    """Fill the pose buffer with the latest 3D points and covariance, handling OOD cases.
+
+    Args:
+        points_3d_buffer: Buffer of 3D points [input_horizon_length, num_joints, 3]
+        covariance_buffer: Buffer of covariance matrices [input_horizon_length, num_joints, 3, 3]
+        pose_valid_buffer: Buffer indicating which poses are successful estimations from images (True) and
+            which are taken from the motion prediction (False)
+        points_3d: Latest 3D points [num_joints, 3]
+        covariance: Latest covariance matrices [num_joints, 3, 3]
+        is_valid: Boolean indicating if the latest pose estimation was valid
+        motion_prediction_buffer: Buffer of motion predictions [prediction_horizon_length, num_joints, 3]
+        motion_uncertainty_buffer: Buffer of motion uncertainties [prediction_horizon_length, num_joints, 3, 3]
+
+    Returns:
+        - Updated points_3d_buffer
+        - Updated covariance_buffer
+        - Updated pose_valid_buffer
+        - Boolean indicating if a prediction is possible.
+    """
+    if is_valid:
+        predicted_points = points_3d
+        predicted_covariance = covariance
+    else:
+        # Use motion prediction from buffer instead of current OOD prediction
+        predicted_points = motion_prediction_buffer[0]
+        predicted_covariance = motion_uncertainty_buffer[0]
+
+    if jnp.all(predicted_points == 0.0):
+        # No valid prediction possible
+        return points_3d_buffer, covariance_buffer, pose_valid_buffer, False
+
+    # Shift buffers and add new prediction
+    points_3d_buffer = jnp.roll(points_3d_buffer, shift=-1, axis=0)
+    covariance_buffer = jnp.roll(covariance_buffer, shift=-1, axis=0)
+    pose_valid_buffer = jnp.roll(pose_valid_buffer, shift=-1, axis=0)
+    points_3d_buffer = points_3d_buffer.at[-1].set(predicted_points)
+    covariance_buffer = covariance_buffer.at[-1].set(predicted_covariance)
+    pose_valid_buffer = pose_valid_buffer.at[-1].set(is_valid)
+
+    return points_3d_buffer, covariance_buffer, pose_valid_buffer, True
+
+
+def update_motion_prediction_buffer(
+    motion_prediction_buffer: jnp.ndarray,
+    motion_uncertainty_buffer: jnp.ndarray,
+    predicted_motion: jnp.ndarray,
+    predicted_motion_uncertainty: jnp.ndarray,
+    is_ood: bool,
+    pose_valid_buffer: jnp.ndarray,
+    n_correct_poses_required: int = 3
+) -> Tuple[jnp.ndarray, jnp.ndarray, bool]:
+    """Update the motion prediction buffer based on the latest 3D points and OOD status.
+
+    If the latest prediction is OOD, shift the buffer and set the last motion to all zeros.
+    Otherwise, use the predicted motion.
+
+    Args:
+        motion_prediction_buffer: Buffer of motion predictions [prediction_horizon_length, num_joints, 3]
+        motion_uncertainty_buffer: Buffer of motion uncertainties [prediction_horizon_length, num_joints, 3, 3]
+        predicted_motion: Predicted human motion [prediction_horizon_length, num_joints, 3]
+        predicted_motion_uncertainty: Predicted human motion uncertainty [prediction_horizon_length, num_joints, 3, 3]
+        is_ood: Boolean indicating if the latest prediction is OOD
+        last_pose_valid: Boolean indicating if the most recent pose was valid
+        pose_valid_buffer: Buffer indicating which poses are successful estimations from images (True) and
+            which are taken from the motion prediction (False)
+        n_correct_poses_required: Number of consecutive correct poses required to resume normal motion updates
+
+    Returns:
+        - Updated motion_prediction_buffer
+        - Updated motion_uncertainty_buffer
+        - Indicator if the predicted motion was used (True) or the motion prediction was rotated (False).
+    """
+    if not is_ood and jnp.all(pose_valid_buffer[-n_correct_poses_required:] == 1):
+        # Use predicted motion
+        return predicted_motion, predicted_motion_uncertainty, True
+    else:
+        # Shift buffers and set last motion to all zeros
+        motion_prediction_buffer = jnp.roll(motion_prediction_buffer, shift=-1, axis=0)
+        motion_uncertainty_buffer = jnp.roll(motion_uncertainty_buffer, shift=-1, axis=0)
+        motion_prediction_buffer = motion_prediction_buffer.at[-1].set(jnp.zeros_like(motion_prediction_buffer[-1]))
+        motion_uncertainty_buffer = motion_uncertainty_buffer.at[-1].set(jnp.zeros_like(motion_uncertainty_buffer[-1]))
+
+    return motion_prediction_buffer, motion_uncertainty_buffer, False

@@ -31,7 +31,9 @@ from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_human_detector,
 )
 from human_pose_pipeline.pose_estimation.inference_helper_batched import (
-    process_frame_3d
+    process_frame_3d,
+    fill_pose_buffer,
+    update_motion_prediction_buffer
 )
 from human_pose_pipeline.pose_estimation.triangulation_helper import (
     load_camera_parameters
@@ -46,7 +48,8 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
     INPUT_HORIZON_LENGTH,
     PREDICTION_HORIZON_LENGTH,
     N_JOINTS,
-    OOD_THRESHOLD as MOTION_OOD_THRESHOLD
+    OOD_THRESHOLD as MOTION_OOD_THRESHOLD,
+    N_CORRECT_POSES_REQUIRED
 )
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -65,7 +68,7 @@ def main():
     parser.add_argument('--motion_model_save_path', type=str, default='human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle', help='Path to saved motion model')
     parser.add_argument('--pose_run_name', type=str, default='jax_resnet50_regressflow', help='Pose model run name')
     parser.add_argument('--pose_base_key', type=str, default=None, help='Base key for loading the pose estimation OOD score functions')
-    parser.add_argument('--motion_score_fn_path', type=str, default='human_pose_pipeline/models/motion_prediction/final_model_for_ood/human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM360of400_sketch_srft_seed0_size10000.cloudpickle', help="Path to the OOD score function for the motion prediction.")
+    parser.add_argument('--motion_score_fn_path', type=str, default='human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle', help="Path to the OOD score function for the motion prediction.")
     parser.add_argument('--split', type=str, default='validation', help='train, validation, or test')
     parser.add_argument('--action', type=str, default='WalkingDog', help='Action to visualize')
     parser.add_argument('--camera_ids', type=str, nargs=2, default=['55011271', '60457274'], help='Camera IDs')
@@ -160,6 +163,7 @@ def main():
     motions_gt = []
     motions_ood_scores = []
     motions_is_ood = []
+    motions_is_valid = []
     n_sequences = min(len(dataset), args.max_sequences)
     for sample in dataset:
         if counter >= n_sequences:
@@ -183,6 +187,10 @@ def main():
 
         points_3d_buffer = jnp.zeros([INPUT_HORIZON_LENGTH, N_JOINTS, 3])
         covariance_buffer = jnp.zeros([INPUT_HORIZON_LENGTH, N_JOINTS, 3, 3])
+        pose_valid_buffer = jnp.zeros([INPUT_HORIZON_LENGTH])
+
+        motion_prediction_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
+        motion_uncertainty_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
 
         # Iterate through frames in a batched manner
         for frame_idx in tqdm(range(frames_to_process), f"Evaluating sequence {counter}/{n_sequences} of split {split}."):
@@ -207,14 +215,22 @@ def main():
                 verbose=False,
                 device=device
             )
+            # process frame 3D has a batch size of 1, remove first dimension.
+            points_3d = points_3d[0]
+            C_3d_all = C_3d_all[0]
+            # Valid prediction if not OOD and human detected
+            is_valid = (not pose_is_ood) and human_detected
 
-            # Roll buffers (moves the first element to the end of the buffer and everything else one left)
-            points_3d_buffer = jnp.roll(points_3d_buffer, -1, axis=0)
-            covariance_buffer = jnp.roll(covariance_buffer, -1, axis=0)
-            # TODO: Handle OOD case.
-            # Replace end of the buffer
-            points_3d_buffer = points_3d_buffer.at[-1].set(jnp.array(points_3d[0]))
-            covariance_buffer = covariance_buffer.at[-1].set(jnp.array(C_3d_all[0]))
+            points_3d_buffer, covariance_buffer, pose_valid_buffer, pose_buffer_good = fill_pose_buffer(
+                points_3d_buffer=points_3d_buffer,
+                covariance_buffer=covariance_buffer,
+                pose_valid_buffer=pose_valid_buffer,
+                points_3d=jnp.array(points_3d),
+                covariance=jnp.array(C_3d_all),
+                is_valid=is_valid,
+                motion_prediction_buffer=motion_prediction_buffer,
+                motion_uncertainty_buffer=motion_uncertainty_buffer,
+            )
 
             # Store pose estimations
             poses_3d_estimated.append(points_3d)
@@ -225,9 +241,10 @@ def main():
             poses_3d_human_detected.append(human_detected)
 
             # If enough datapoints, predict motion
-            if frame_idx >= INPUT_HORIZON_LENGTH - 1:
+            if frame_idx >= INPUT_HORIZON_LENGTH - 1 and pose_buffer_good:
+                pose_input = points_3d_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
                 motion_prediction_input = jnp.concatenate([
-                    points_3d_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3]),
+                    pose_input,
                     covariance_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3 * 3])
                 ], axis=-1)
                 # Model inference
@@ -243,16 +260,29 @@ def main():
                         motion_prediction_input
                     )
                 if motion_ood_score_fn is not None:
-                    motion_ood_score = motion_ood_score_fn(points_3d_buffer)
+                    motion_ood_score = motion_ood_score_fn(pose_input)
                 else:
                     motion_ood_score = 0.0
-                moiton_is_ood = motion_ood_score > MOTION_OOD_THRESHOLD
+                motion_predicted = motion_predicted.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)[0]
+                motion_cov_predicted = motion_cov_predicted[0]
+                motion_is_ood = motion_ood_score > MOTION_OOD_THRESHOLD
+                # Update motion prediction buffer
+                motion_prediction_buffer, motion_uncertainty_buffer, valid_motion = update_motion_prediction_buffer(
+                    motion_prediction_buffer=motion_prediction_buffer,
+                    motion_uncertainty_buffer=motion_uncertainty_buffer,
+                    predicted_motion=motion_predicted,
+                    predicted_motion_uncertainty=motion_cov_predicted,
+                    is_ood=motion_is_ood,
+                    pose_valid_buffer=pose_valid_buffer,
+                    n_correct_poses_required=N_CORRECT_POSES_REQUIRED
+                )
                 # Store motion predictions
-                motions_predicted.append(motion_predicted.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3))
+                motions_predicted.append(motion_predicted)
                 motions_cov_predicted.append(motion_cov_predicted)
                 motions_gt.append(pose_sequence[frame_idx + 1 : frame_idx + PREDICTION_HORIZON_LENGTH + 1])
                 motions_ood_scores.append(motion_ood_score)
-                motions_is_ood.append(moiton_is_ood)
+                motions_is_ood.append(motion_is_ood)
+                motions_is_valid.append(valid_motion)
 
             # Remove GPU tensors to free memory
             # del points_3d, C_3d_all, ood_score, is_ood
@@ -273,6 +303,7 @@ def main():
     motions_gt = jnp.array(motions_gt)
     motions_ood_scores = np.array(motions_ood_scores)
     motions_is_ood = np.array(motions_is_ood)
+    motions_is_valid = np.array(motions_is_valid)
 
     # Move to cpu and numpy
     poses_3d_estimated_np = poses_3d_estimated.cpu().numpy()
@@ -286,6 +317,7 @@ def main():
     motions_gt_np = np.array(motions_gt)
     motions_ood_scores_np = np.array(motions_ood_scores)
     motions_is_ood_np = np.array(motions_is_ood)
+    motions_is_valid = np.array(motions_is_valid)
 
     # Evaluate 3D pose estimation MPJPE and coverage
     print("================================")

@@ -315,12 +315,12 @@ We have two things:
       - [ ] 2D pose estimation, MPJPE, coverage
       - [ ] 2D OOD detection evaluation
       - [x] 3D pose estimation, MPJPE, coverage
-    - [ ] Adapt human_pose_pipeline/examples/pose_estimation_3D_full_eval.py to create full 3D pipeline.
+    - [x] Adapt human_pose_pipeline/examples/pose_estimation_3D_full_eval.py to create full 3D pipeline.
       - [x] Write base pipeline
-      - [ ] Make everything Jax after YOLO
-      - [ ] JIT compile parts of the pipeline?
-      - [ ] Handle OOD cases
-    - [ ] Adapt pipeline for RGBD camera
+      - [-] Make everything Jax after YOLO -> not more efficient for some reason.
+      - [-] JIT compile parts of the pipeline?  -> not more efficient for some reason.
+    - [ ] Ensure correct frequency: Motion pipeline relies on certain input frequency, make sure to subsample if needed.
+    - [x] Handle OOD cases: As the motion prediction requires 2 seconds of pose histories, simply discarding any OOD inputs is not enough.      However, we can use the motion prediction data from previous timesteps to substitute for OOD poses.
     - [ ] Write batched evaluation script that evaluates motion prediction (based on Motion Prediction Evaluation launch.json)
       - [ ] From ground truth measurements, MPJPE, coverage, per-action data
       - [ ] From estimated pose dataset, Write batched evaluation script that evaluates
@@ -330,7 +330,11 @@ We have two things:
       - [ ] In Marian's thesis, adding a constant value of 10mm to the 3D pose estimation led to better coverage. Try this.
       - [ ] Add a constant value to the 3D motion prediction uncertainty as well
     - [ ] Unify the way models are saved and loaded. Direct paths.
- 8. Extend to multi-human
+ 8. Calibrate the covariance predictions. The estimated variances are a bit too small, which might be easily fixable by increasing them by a constant small value.
+ 9. Communication between robot PC and GPU workstation.
+ 10. Support the D435i RGBD camera instead of triangulation.
+ 11. Real-world tests on the Panda in our lab.
+ 12. Extend to multi-human
     - Write code to detect all humans in the scene.
     - We want to 
       - (a) perform the pose estimation for all humans in the scene
@@ -338,4 +342,5 @@ We have two things:
       - (c) if more than one human is closer than a given threshold, return this as unsafe.
       - (d) determine the closest human.
       - (e) perform steps 5. - 9. with the closest human only.
- 9. Integrate Lidar Sensor to validate YOLO human detection
+    - [ ] Use YOLO for multi-person object tracking
+ 13. Integrate Lidar Sensor to validate YOLO human detection

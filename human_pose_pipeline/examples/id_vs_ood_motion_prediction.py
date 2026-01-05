@@ -449,6 +449,29 @@ def main():
 
         print(f"\n✓ Results saved to: {results_file}")
 
+        # Save OOD scores in cloudpickle format for plotting
+        scores_cloudpickle_file = os.path.join(
+            args.results_dir, f"{score_fn_name}_ood_scores.cloudpickle"
+        )
+
+        scores_for_plotting = {
+            'ID': id_results['ood_scores'],
+            'OOD (Shuffled)': ood_results['ood_scores'],
+            'score_fun': score_fn,
+            'args_dict': {
+                'score_function': score_functions_path,
+                'max_samples': max_samples,
+                'auroc': detection_metrics['auroc'],
+                'auprc': detection_metrics['auprc'],
+            }
+        }
+
+        with open(scores_cloudpickle_file, 'wb') as f:
+            cloudpickle.dump(scores_for_plotting, f)
+
+        print(f"✓ OOD scores saved to: {scores_cloudpickle_file}")
+        print(f"  Use plot_ood_scores_motion_prediction.py to visualize")
+
         # Create comparison visualization
         print("\n" + "=" * 80)
         print("CREATING VISUALIZATIONS")
