@@ -32,12 +32,14 @@ def predict_poses(
         covariance_matrices: Covariance matrices of the predictions. Shape: (num_samples, pred_horizon, n_joints * 3, n_joints * 3)
         ood_scores: OOD scores. Shape: (num_samples)
         is_oods: OOD detected. Shape: (num_samples)
+        last_input_poses: Last input pose. Shape (num_samples, n_joints, 3)
     """
     predictions = []
     targets = []
     covariance_matrices = []
     ood_scores = []
     is_oods = []
+    last_input_poses = []
 
     print("\nRunning model inference...")
 
@@ -75,13 +77,15 @@ def predict_poses(
         covariance_matrices.append(cov)
         ood_scores.append(motion_ood_score)
         is_oods.append(motion_is_ood)
+        last_input_poses.append(input_pose[:, -1, ...])
 
     predictions = jnp.concatenate(predictions, axis=0)
     targets = jnp.concatenate(targets, axis=0)
     covariance_matrices = jnp.concatenate(covariance_matrices, axis=0)
     ood_scores = jnp.concatenate(ood_scores, axis=0)
     is_oods = jnp.concatenate(is_oods, axis=0)
-    return predictions, targets, covariance_matrices, ood_scores, is_oods
+    last_input_poses = jnp.concatenate(last_input_poses, axis=0)
+    return predictions, targets, covariance_matrices, ood_scores, is_oods, last_input_poses
 
 
 def compute_covariance_matrices(log_var, raw_cov):

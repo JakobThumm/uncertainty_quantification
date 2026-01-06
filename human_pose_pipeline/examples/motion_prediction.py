@@ -28,7 +28,7 @@ from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
-BATCH_SIZE = 128
+BATCH_SIZE = 32
 
 
 def main():
@@ -93,7 +93,7 @@ def main():
         batch_size=BATCH_SIZE,
         shuffle=False,
         seed=420,
-        download=False,  # False
+        download=False,
         data_path=data_path,
     )
     if args.split == "train":
@@ -110,11 +110,13 @@ def main():
     print("\n" + "=" * 60)
     print(f"RESULTS for split {args.split}")
     print("=" * 60)
-    predictions, targets, covariance_matrices, ood_scores, is_oods = predict_poses(
+    predictions, targets, covariance_matrices, ood_scores, is_oods, last_input_poses = predict_poses(
         motion_prediction_jit_fn=motion_prediction_jit_fn,
         params=params,
         batch_stats=batch_stats,
         dataset_loader=data_loader,
+        motion_ood_score_fn=motion_ood_score_fn,
+        ood_threshold=OOD_THRESHOLD,
         device=device,
     )
     predictions = predictions.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
@@ -130,14 +132,15 @@ def main():
         'targets': targets,
         'covariance_matrices': covariance_matrices,
         'ood_scores': ood_scores,
-        'is_oods': is_oods
+        'is_oods': is_oods,
+        'last_input_poses': last_input_poses
     }
 
     with open(results_cloudpickle_file, 'wb') as f:
         cloudpickle.dump(motion_prediction_results, f)
         print(f"Saved results to {results_cloudpickle_file}")
 
-    coverage_stats = evaluate_uncertainty_coverage_with_covariance(
+    coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices
     )
     mpjpe, std_score, per_time_errors, per_time_stds, per_joint_errors, per_joint_std = evaluate_scores(

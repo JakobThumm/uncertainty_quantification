@@ -342,7 +342,7 @@ def main():
         predictions=poses_3d_estimated_np,
         targets=poses_3d_gt_np,
     )
-    coverage_stats = evaluate_uncertainty_coverage_with_covariance(
+    coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=poses_3d_estimated_np,
         true_poses=poses_3d_gt_np,
         cov_matrices=poses_3d_cov_estimated_np
@@ -360,7 +360,7 @@ def main():
         predictions=motions_predicted_np,
         targets=motions_gt_np,
     )
-    coverage_stats = evaluate_uncertainty_coverage_with_covariance(
+    coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=motions_predicted_np,
         true_poses=motions_gt_np,
         cov_matrices=motions_cov_predicted_np

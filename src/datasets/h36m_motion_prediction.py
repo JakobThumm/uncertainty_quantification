@@ -186,22 +186,26 @@ class Human36mMotionDataset3D(Dataset):
         return [input_pose, target_pose]
 
 
-def subsample_dataset(dataset, n_samples: int, seed: Optional[int] = 0):
+def subsample_dataset(dataset, n_samples: int, seed: Optional[int] = 0, shuffle: bool = True):
     """Subsample a dataset to a specified number of samples.
 
     Args:
         dataset: The original dataset (torch.utils.data.Dataset)
         n_samples: Number of samples to select
         seed: Random seed for reproducibility
+        shuffle: Choose random indices for dataset. Otherwise, data will be in order.
 
     Returns:
         Subsampled dataset (torch.utils.data.Subset)
     """
     n_samples_train = min(n_samples, len(dataset))
-    # Randomly select n_samples_train indices
-    if seed is not None:
-        np.random.seed(seed)
-    train_indices = np.random.choice(len(dataset), n_samples_train, replace=False)
+    if shuffle:
+        # Randomly select n_samples_train indices
+        if seed is not None:
+            np.random.seed(seed)
+        train_indices = np.random.choice(len(dataset), n_samples_train, replace=False)
+    else:
+        train_indices = list(range(n_samples_train))
     subsampled_dataset = torch.utils.data.Subset(dataset, train_indices)
     return subsampled_dataset
 
@@ -216,7 +220,8 @@ def get_h36m_motion_dataset_function(
     input_uncertainty: bool = False,
     reduce_size: bool = False,
     ood: bool = False,
-    directory_uncertain: Optional[str] = None
+    directory_uncertain: Optional[str] = None,
+    
 ):
     """
     Get data loaders for preprocessed H36M dataset
@@ -274,9 +279,9 @@ def get_h36m_motion_dataset_function(
 
     # Subsample if n_samples is specified
     if n_samples is not None:
-        train_dataset = subsample_dataset(train_dataset, n_samples, seed)
-        validation_dataset = subsample_dataset(validation_dataset, n_samples, seed)
-        test_dataset = subsample_dataset(test_dataset, n_samples, seed)
+        train_dataset = subsample_dataset(train_dataset, n_samples, seed, shuffle)
+        validation_dataset = subsample_dataset(validation_dataset, n_samples, seed, shuffle)
+        test_dataset = subsample_dataset(test_dataset, n_samples, seed, shuffle)
 
     # Split train dataset into train/val
     train_loader = get_loader(

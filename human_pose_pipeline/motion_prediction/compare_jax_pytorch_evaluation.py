@@ -235,7 +235,7 @@ def print_results(predictions, targets, covariances, model_name, split_name):
         print(f"  Joint {i + 1} error = {error:7.2f} mm")
 
     # Uncertainty coverage
-    coverage_stats = evaluate_uncertainty_coverage_with_covariance(
+    coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=predictions, true_poses=targets, cov_matrices=covariances
     )
 

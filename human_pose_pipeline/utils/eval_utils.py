@@ -1,9 +1,9 @@
 """Utilities for evaluating uncertainty estimates in human pose predictions."""
 
+from typing import Tuple
 import numpy as np
 import jax
 import jax.numpy as jnp
-from jax.scipy.stats import chi2
 import csv
 import os
 from pathlib import Path
@@ -71,6 +71,7 @@ def evaluate_uncertainty_coverage_jax(pred_poses, true_poses, L, std_multipliers
         List of coverage errors for each multiplier:
         error = expected_coverage - empirical_coverage
     """
+    from jax.scipy.stats import chi2
     # Diff
     diff = true_poses - pred_poses             # [B, T, J, 3]
     B, T, J, C = diff.shape
@@ -173,7 +174,7 @@ def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_ma
         coverage_stats[f'per_joint_within_{i + 1}std'] = within_std_joint[i]
         coverage_stats[f'per_frame_within_{i + 1}std'] = within_std_frame[i]
 
-    return coverage_stats
+    return coverage_stats, within_stds
 
 
 def print_mpjpe_results(
@@ -336,3 +337,105 @@ def save_coverage_stats(
                 row.append(f'{per_joint_within[i] * 100:.2f}')
             writer.writerow(row)
     print(f"Saved per-joint coverage results to {per_joint_file}")
+
+
+def compute_sara_predictions(
+    last_input_poses: np.ndarray,
+    prediction_horizon_times: list[float],
+    v_human: float = 1.6
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute the reachable set with the constant velocity model of SARA.
+
+    Args:
+        last_input_poses: pose to start at. Shape: [N, J, 3]
+        prediction_horizon_times: time horizons for the predictions. Shape: [T]
+        v_human: Maximal velocity of the human in m/s.
+    Returns:
+        - Prediction: last_input_poses repeated for all T. Shape: [N, T, J, 3]
+        - Radius: Radius of reachable set spheres with shape: [N, T, J]
+    """
+    radius = np.array([time * (v_human * 1000) for time in prediction_horizon_times])
+    radius = np.repeat(radius[np.newaxis, ...], last_input_poses.shape[0], axis=0)
+    radius = np.repeat(radius[:, :, np.newaxis], last_input_poses.shape[1], axis=2)
+    predictions = np.repeat(last_input_poses[:, np.newaxis, ...], len(prediction_horizon_times), axis=1)
+    return predictions, radius
+
+
+def simple_coverage_stats_sara(
+    predictions: np.ndarray,
+    radius: np.ndarray,
+    targets: np.ndarray
+):
+    """Compute the simple coverage statistics for a spherical reachable set.
+
+    Args:
+        predictions: predicted poses. Shape: [N, T, J, 3]
+        radius: radius of the reachable set sphere. Shape: [N, T, J]
+        targets: target poses. Shape: [N, T, J, 3]
+    Returns:
+        - coverage_stats dict with keys:
+            "overall_within_set", "per_joint_within_set", "per_frame_within_set"
+        - within set object
+    """
+    distances = np.linalg.norm(predictions - targets, axis=-1)  # Shape: [N, T, J]
+    within_set = distances <= radius
+    coverage_stats = {
+        "overall_within_set": np.mean(within_set),
+        "per_joint_within_set": np.mean(within_set, axis=(0, 1)),
+        "per_frame_within_set": np.mean(within_set, axis=(0, 2)),
+        "overall_volume": 4.0 / 3.0 * np.pi * np.pow(np.mean(radius / 1000.0), 3.0),
+        "per_joint_volume": 4.0 / 3.0 * np.pi * np.pow(np.mean(radius / 1000.0, axis=(0, 1)), 3.0),
+        "per_frame_volume": 4.0 / 3.0 * np.pi * np.pow(np.mean(radius / 1000.0, axis=(0, 2)), 3.0),
+    }
+    return coverage_stats, within_set
+
+
+def print_simple_coverage_stats_sara(
+    coverage_stats,
+    print_per_time_stats=True,
+    print_per_joint_stats=True
+):
+    """Print coverage statistics."""
+    overall_cov = coverage_stats["overall_within_set"]
+    print(f"Overall coverage within set: {overall_cov * 100:.2f}%")
+    print(f"Mean volume = {coverage_stats['overall_volume']:.4f} m^3")
+    if print_per_time_stats:
+        print("\nPer-Time Coverage Stats:")
+        per_frame_within = coverage_stats["per_frame_within_set"]
+        for i, percent_within in enumerate(per_frame_within):
+            print(f"    Frame {i}: {percent_within * 100:.2f}%")
+        print("\nPer-Time Volume [m^3]:")
+        per_frame_volume = coverage_stats["per_frame_volume"]
+        for i, volume in enumerate(per_frame_volume):
+            print(f"    Frame {i}: {volume:.4f}")
+    if print_per_joint_stats:
+        print("\nPer-Joint Coverage Stats:")
+        per_joint_within = coverage_stats["per_joint_within_set"]
+        for i, percent_within in enumerate(per_joint_within):
+            print(f"    Joint {i}: {percent_within * 100:.2f}%")
+        print("\nPer-Joint Volume [m^3]:")
+        per_joint_volume = coverage_stats["per_joint_volume"]
+        for i, volume in enumerate(per_joint_volume):
+            print(f"    Joint {i}: {volume:.4f}")
+
+
+def convert_covariance_matrices_to_set(
+    covariance_matrices: np.ndarray,
+    likelihood: float
+) -> np.ndarray:
+    """Convert the covariance matrices to a spherical set covering n_std standard deviations.
+
+    Args:
+        covariance_matrices: Cov. matrices. Shape: [N, T, J, 3, 3]
+        likelihood: Likelihood of points being in the set.
+    Returns:
+        Radius of the spherical reachable sets. Shape: [N, T, J]
+    """
+    from scipy.stats import chi2
+    # largest eigenvalue
+    lambda_max = np.max(np.linalg.eigvalsh(covariance_matrices), axis=-1)
+    # chi-square threshold for number of standard deviations in 3D
+    chi_squared_val = chi2.ppf(likelihood, df=3)
+    # sphere radius
+    radius = np.sqrt(lambda_max * chi_squared_val)
+    return radius

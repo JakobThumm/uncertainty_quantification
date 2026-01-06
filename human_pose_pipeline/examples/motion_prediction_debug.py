@@ -136,7 +136,7 @@ def main():
 
     predictions = predictions.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
     targets = targets.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
-    coverage_stats = evaluate_uncertainty_coverage_with_covariance(
+    coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices, std_multipliers=[1, 2, 3, 4]
     )
     mpjpe, std_score, per_time_errors, per_time_stds, per_joint_errors, per_joint_std = evaluate_scores(

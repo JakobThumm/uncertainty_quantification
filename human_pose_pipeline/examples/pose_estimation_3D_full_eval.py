@@ -239,7 +239,7 @@ def main():
         predictions=all_3d_points,
         targets=all_gt_points,
     )
-    coverage_stats = evaluate_uncertainty_coverage_with_covariance(
+    coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=all_3d_points,
         true_poses=all_gt_points,
         cov_matrices=all_3d_covariances

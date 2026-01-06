@@ -80,7 +80,7 @@ def test_coverage_comparison_single_frame():
     )
 
     # Run batched version on all data
-    batched_result = evaluate_uncertainty_coverage_with_covariance(
+    batched_result, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_poses, true_poses, cov_matrices
     )
 
@@ -157,7 +157,7 @@ def test_coverage_comparison_multiple_frames():
     batch_size, n_frames, n_joints, _ = pred_poses.shape
 
     # Run batched version
-    batched_result = evaluate_uncertainty_coverage_with_covariance(
+    batched_result, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_poses, true_poses, cov_matrices
     )
 
@@ -328,7 +328,7 @@ def test_edge_cases():
     true_batched = np.tile(true_pose.reshape(1, 1, n_joints, 3), (2, 2, 1))
     cov_batched = np.tile(cov_matrices.reshape(1, 1, n_joints, 3, 3), (2, 2, 1, 1, 1))
 
-    batched_result = evaluate_uncertainty_coverage_with_covariance(
+    batched_result, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_batched, true_batched, cov_batched
     )
     nonbatched_result = evaluate_pose_estimation_full_3d(
@@ -349,7 +349,7 @@ def test_edge_cases():
     true_batched = np.tile(true_pose.reshape(1, 1, n_joints, 3), (2, 2, 1))
     cov_batched = np.tile(cov_matrices.reshape(1, 1, n_joints, 3, 3), (2, 2, 1, 1, 1))
 
-    batched_result = evaluate_uncertainty_coverage_with_covariance(
+    batched_result, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_batched, true_batched, cov_batched
     )
     nonbatched_result = evaluate_pose_estimation_full_3d(
