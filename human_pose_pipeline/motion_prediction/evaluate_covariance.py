@@ -7,6 +7,7 @@ import cloudpickle
 from scipy.stats import chi2
 from pathlib import Path
 
+from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
 from human_pose_pipeline.utils.eval_utils import compute_sara_predictions, convert_covariance_matrices_to_set, evaluate_uncertainty_coverage_with_covariance, print_coverage_stats, print_simple_coverage_stats_sara, simple_coverage_stats_sara
 from human_pose_pipeline.motion_prediction.h36m_settings import OOD_THRESHOLD, PREDICTION_HORIZON_LENGTH
 
@@ -66,20 +67,16 @@ def main():
     print(f"Loaded targets shape: {targets.shape}")
     print(f"Loaded covariance matrices shape: {covariance_matrices.shape}")
 
-    # Increase covariance over time
-    constant_factor = 1.2
-    increase_factor = 0.4
-    for i in range(T):
-        covariance_matrices[:, i, ...] = (constant_factor + increase_factor * i) * covariance_matrices[:, i, ...]
-
-    # Increase covariance for joints 5, 6, 11, 12
-    hand_factor = 1.7
-    feet_factor = 1.5
-    hand_indices = [5, 6]
-    feet_indices = [11, 12]
-    covariance_matrices[:, :, hand_indices, :] *= hand_factor
-    covariance_matrices[:, :, feet_indices, :] *= feet_factor
-
+    # Increase covariance for certain times and joints
+    covariance_matrices = calibrate_covariance_matrices(
+        covariance_matrices=covariance_matrices,
+        constant_time_factor=1.2,
+        increase_time_factor=0.4,
+        hand_factor=1.7,
+        feet_factor=1.5,
+        hand_indices=[5, 6],
+        feet_indices=[11, 12]
+    )
     # Generate n_std range
     n_std_range = [1, 2, 3, 4]
 

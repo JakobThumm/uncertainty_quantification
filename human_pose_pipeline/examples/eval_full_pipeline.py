@@ -16,6 +16,7 @@ from tqdm import tqdm
 import cloudpickle
 import jax.numpy as jnp
 
+from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
 from human_pose_pipeline.utils.eval_utils import (
     evaluate_pose_prediction_scores_np,
     evaluate_uncertainty_coverage_with_covariance,
@@ -268,6 +269,9 @@ def main():
                     motion_ood_score = 0.0
                 motion_predicted = motion_predicted.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)[0]
                 motion_cov_predicted = motion_cov_predicted[0]
+                motion_cov_predicted = calibrate_covariance_matrices(
+                    covariance_matrices=motion_cov_predicted
+                )
                 motion_is_ood = bool(motion_ood_score > MOTION_OOD_THRESHOLD)
                 # Update motion prediction buffer
                 motion_prediction_buffer, motion_uncertainty_buffer, valid_motion = update_motion_prediction_buffer(

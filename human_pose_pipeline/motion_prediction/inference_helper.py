@@ -1,4 +1,6 @@
 """Helper functions for motion prediction inference."""
+from typing import Sequence, Union
+from sympy import ShapeError
 from tqdm import tqdm
 from time import time
 import jax.numpy as jnp
@@ -119,3 +121,36 @@ def compute_covariance_matrices(log_var, raw_cov):
     # Compute full covariance matrix from Cholesky factors
     cov_matrix = jnp.matmul(L, jnp.matrix_transpose(L))
     return cov_matrix
+
+
+def calibrate_covariance_matrices(
+    covariance_matrices: Union[jnp.ndarray, np.ndarray],
+    constant_time_factor: float = 1.2,
+    increase_time_factor: float = 0.4,
+    hand_factor: float = 1.7,
+    feet_factor: float = 1.5,
+    hand_indices: Sequence[int] = [5, 6],
+    feet_indices: Sequence[int] = [11, 12]
+) -> Union[jnp.ndarray, np.ndarray]:
+    if len(covariance_matrices.shape) == 5:
+        T = covariance_matrices.shape[1]
+        J = covariance_matrices.shape[2]
+        scaling_factors_joints = np.ones(J)
+        scaling_factors_joints[hand_indices] = hand_factor
+        scaling_factors_joints[feet_indices] = feet_factor
+        scaling_factors_times = (constant_time_factor + increase_time_factor * np.arange(T))[None, :, None, None, None]
+        scaling_factors_joints = scaling_factors_joints[None, None, :, None, None]
+    elif len(covariance_matrices.shape) == 4:
+        T = covariance_matrices.shape[0]
+        J = covariance_matrices.shape[1]
+        scaling_factors_joints = np.ones(J)
+        scaling_factors_joints[hand_indices] = hand_factor
+        scaling_factors_joints[feet_indices] = feet_factor
+        scaling_factors_times = (constant_time_factor + increase_time_factor * np.arange(T))[:, None, None, None]
+        scaling_factors_joints = scaling_factors_joints[None, :, None, None]
+    else:
+        raise ShapeError(f"Covaraince matrices have incorrect shape: {covariance_matrices.shape}.")
+
+    covariance_matrices = covariance_matrices * scaling_factors_times
+    covariance_matrices = covariance_matrices * scaling_factors_joints
+    return covariance_matrices
