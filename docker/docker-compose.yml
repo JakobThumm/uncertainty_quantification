@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  uncertainty-quantification:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        - USER_ID=${USER_ID:-1000}
+        - GROUP_ID=${GROUP_ID:-1000}
+        - USERNAME=${USERNAME:-user}
+    image: uncertainty-quantification:latest
+    container_name: uq-ros2-cuda
+
+    # Enable GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Mount the codebase
+    volumes:
+      - ..:/workspace:rw
+      # Optional: Mount models directory if it exists outside the repo
+      - ../../models:/models:rw
+      # Optional: Preserve bash history
+      - bash_history:/home/${USERNAME:-user}/.bash_history
+
+    # Set working directory
+    working_dir: /workspace
+
+    # Keep container running
+    stdin_open: true
+    tty: true
+
+    # Environment variables
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - DISPLAY=${DISPLAY:-}
+      - QT_X11_NO_MITSHM=1
+      - LANG=en_US.UTF-8
+      - LC_ALL=en_US.UTF-8
+      # User configuration for entrypoint
+      - LOCAL_USER_ID=${USER_ID:-1000}
+      - LOCAL_GROUP_ID=${GROUP_ID:-1000}
+      - LOCAL_USERNAME=${USERNAME:-user}
+
+    # Network mode (optional: for ROS2 communication)
+    network_mode: host
+
+    # IPC mode for shared memory (useful for ROS2)
+    ipc: host
+
+    # Optional: X11 forwarding for GUI applications (RViz, etc.)
+    # Uncomment the lines below if you need GUI support (after starting the container)
+    #   - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    #   - $HOME/.Xauthority:/home/${USERNAME:-user}/.Xauthority:rw
+
+volumes:
+  bash_history:

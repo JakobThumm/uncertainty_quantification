@@ -1,0 +1,62 @@
+# Python virtual environment
+unc/
+virtualenv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Results and models
+results/
+../models/
+*.ckpt
+*.pkl
+*.pth
+*.h5
+*.safetensors
+
+# Data
+data/
+datasets/
+*.tfrecords
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker/
+
+# Test data
+**/test_data/
+
+# Temporary files
+*.tmp
+*.bak
+tmp/
+temp/

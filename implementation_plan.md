@@ -328,10 +328,14 @@ We have two things:
     - [ ] Write bash script that runs all evaluations sequentially
     - [ ] Unify the way models are saved and loaded. Direct paths.
  8. Calibrate the covariance predictions. The estimated variances are a bit too small, which might be easily fixable by increasing them by a constant small value.
-    - [ ] Investigate calibration for covariances that might lead to better coverage
-      - [ ] In Marian's thesis, adding a constant value of 10mm to the 3D pose estimation led to better coverage. Try this.
-      - [ ] Add a constant value to the 3D motion prediction uncertainty as well
+    - [ ] Uncertainty calibration for pose estimation
+    - [x] Uncertainty calibration for motion prediction
  9. Communication between robot PC and GPU workstation.
+    - [x] Write NVidia Cuda and ROS2 Jazzy Docker container
+    - [ ] Communicate image between Laptop and Workstation
+    - [ ] Define custom messages for incoming images and outgoing predictions
+    - [ ] Write ROS2 node that runs predictions
+    - [ ] Visualize in RViz: image, predicted motion at t=X ms reachable set, predicted current pose reachable set
  10. Support the D435i RGBD camera instead of triangulation.
  11. Real-world tests on the Panda in our lab.
  12. Extend to multi-human

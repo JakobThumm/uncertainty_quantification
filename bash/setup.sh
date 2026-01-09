@@ -42,3 +42,8 @@ python3 -m pip install   "jax[cuda12-local]==0.4.34"   flax==0.10.4   orbax-chec
 python3 -m pip install --upgrade matfree==0.1.1
 # python3 -m pip install --upgrade flax
 # python -m pip install --upgrade orbax-checkpoint chex
+
+# Install the package in editable mode
+# This makes human_pose_pipeline and other modules importable
+echo "Installing package in editable mode..."
+python3 -m pip install -e .
