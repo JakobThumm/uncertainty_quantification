@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     sudo \
     gosu \
+    net-tools \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Enable Ubuntu Universe repository
@@ -46,6 +47,9 @@ RUN apt-get update && apt-get upgrade -y \
 RUN apt-get update && apt-get install -y \
     ros-jazzy-desktop \
     ros-dev-tools \
+    python3-colcon-common-extensions \
+    ros-jazzy-cv-bridge \
+    ros-jazzy-rmw-cyclonedds-cpp \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -65,12 +69,16 @@ ARG USERNAME=user
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Copy CycloneDDS configuration
+COPY docker/cyclonedds.xml /tmp/cyclonedds.xml
+
 # Install additional Python dependencies that might be needed for JAX GPU support
 RUN apt-get update && apt-get install -y \
     python3-numpy \
     python3-scipy \
     libopenblas-dev \
     liblapack-dev \
+    iputils-ping \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Set environment variables for CUDA

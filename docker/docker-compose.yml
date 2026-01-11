@@ -28,6 +28,8 @@ services:
       - ../../models:/models:rw
       # Optional: Preserve bash history
       - bash_history:/home/${USERNAME:-user}/.bash_history
+      - ./fastdds.xml:/ros2_ws/fastdds.xml:ro
+      - ./fastdds_profiles.xml:/ros2_ws/fastdds_profiles.xml:ro
 
     # Set working directory
     working_dir: /workspace
@@ -48,6 +50,13 @@ services:
       - LOCAL_USER_ID=${USER_ID:-1000}
       - LOCAL_GROUP_ID=${GROUP_ID:-1000}
       - LOCAL_USERNAME=${USERNAME:-user}
+      # ROS2 workspace configuration
+      - ROS2_WS=/workspace/ros2_ws
+      - FASTDDS_DEFAULT_PROFILES_FILE=/ros2_ws/fastdds_profiles.xml
+      - FASTRTPS_DEFAULT_PROFILES_FILE=/ros2_ws/fastdds.xml
+      - ROS_DOMAIN_ID=42
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - ROS_LOCALHOST_ONLY=0
 
     # Network mode (optional: for ROS2 communication)
     network_mode: host
