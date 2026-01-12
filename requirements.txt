@@ -13,7 +13,7 @@ seaborn==0.13.1
 pandas==1.5.2
 tqdm
 # Additional packages for human pose estimation
-opencv-python
+opencv-python~=4.10
 einops
 h5py
 easydict
