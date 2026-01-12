@@ -50,6 +50,7 @@ RUN apt-get update && apt-get install -y \
     python3-colcon-common-extensions \
     ros-jazzy-cv-bridge \
     ros-jazzy-rmw-cyclonedds-cpp \
+    ros-jazzy-rmw-zenoh-cpp \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -79,6 +80,8 @@ RUN apt-get update && apt-get install -y \
     libopenblas-dev \
     liblapack-dev \
     iputils-ping \
+    netcat-openbsd \
+    net-tools \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Set environment variables for CUDA

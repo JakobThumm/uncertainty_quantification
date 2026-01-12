@@ -28,8 +28,7 @@ services:
       - ../../models:/models:rw
       # Optional: Preserve bash history
       - bash_history:/home/${USERNAME:-user}/.bash_history
-      - ./fastdds.xml:/ros2_ws/fastdds.xml:ro
-      - ./fastdds_profiles.xml:/ros2_ws/fastdds_profiles.xml:ro
+      - ./router.json5:/ros2_ws/router.json5:ro
 
     # Set working directory
     working_dir: /workspace
@@ -52,17 +51,19 @@ services:
       - LOCAL_USERNAME=${USERNAME:-user}
       # ROS2 workspace configuration
       - ROS2_WS=/workspace/ros2_ws
-      - FASTDDS_DEFAULT_PROFILES_FILE=/ros2_ws/fastdds_profiles.xml
-      - FASTRTPS_DEFAULT_PROFILES_FILE=/ros2_ws/fastdds.xml
-      - ROS_DOMAIN_ID=42
-      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-      - ROS_LOCALHOST_ONLY=0
+      - ROS_DOMAIN_ID=1
+      # - ROS_LOCALHOST_ONLY=0
+      - RMW_IMPLEMENTATION=rmw_zenoh_cpp
+      - ZENOH_ROUTER_CONFIG_URI=/ros2_ws/router.json5
 
     # Network mode (optional: for ROS2 communication)
     network_mode: host
 
     # IPC mode for shared memory (useful for ROS2)
     ipc: host
+
+    # Start the Zenoh router
+    command: /bin/bash -c "source /opt/ros/jazzy/setup.bash && ros2 run rmw_zenoh_cpp rmw_zenohd"
 
     # Optional: X11 forwarding for GUI applications (RViz, etc.)
     # Uncomment the lines below if you need GUI support (after starting the container)
