@@ -171,6 +171,7 @@ class PosePipelineNode(Node):
 
         # Statistics
         self.frames_processed = 0
+        self.latencies = []  # Store latencies in milliseconds
         self.create_timer(10.0, self.print_statistics)
 
         self.get_logger().info(f'Pose pipeline node initialized in {self.mode} mode')
@@ -585,6 +586,18 @@ class PosePipelineNode(Node):
 
         self.pose_2d_publisher.publish(msg)
 
+        # Calculate latency: time from image capture to pose publication
+        current_time = self.get_clock().now()
+        input_time = rclpy.time.Time.from_msg(header.stamp)
+        latency_ns = (current_time - input_time).nanoseconds
+        latency_ms = latency_ns / 1e6  # Convert to milliseconds
+
+        # Store latency for statistics
+        self.latencies.append(latency_ms)
+        # Keep only last 1000 measurements to avoid memory growth
+        if len(self.latencies) > 1000:
+            self.latencies.pop(0)
+
     def _publish_pose(self, points_3d, covariance_3d, ood_score, is_ood, human_detected, header):
         """Publish 3D pose with uncertainty."""
         if Pose3D is None:
@@ -634,7 +647,15 @@ class PosePipelineNode(Node):
 
     def print_statistics(self):
         """Print processing statistics."""
-        self.get_logger().info(f'Frames processed: {self.frames_processed}')
+        stats_msg = f'Frames processed: {self.frames_processed}'
+
+        if self.latencies:
+            avg_latency = sum(self.latencies) / len(self.latencies)
+            min_latency = min(self.latencies)
+            max_latency = max(self.latencies)
+            stats_msg += f' | Latency (ms): avg={avg_latency:.1f}, min={min_latency:.1f}, max={max_latency:.1f}'
+
+        self.get_logger().info(stats_msg)
 
 
 def main(args=None):
