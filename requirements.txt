@@ -23,3 +23,6 @@ Pillow
 spacepy
 ultralytics
 wandb
+empy
+catkin_pkg
+lark

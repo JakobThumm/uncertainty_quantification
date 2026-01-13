@@ -733,10 +733,6 @@ def process_frame_3d_from_rgbd(
         - is_ood: Boolean indicating if the person is classified as OOD
         - human_detected: Boolean indicating if a human was detected
     """
-    # Debug print:
-    print(f"rgb_frames.type = {rgb_frames.type}")
-    print(f"depth_frames.type = {depth_frames.type}")
-
     # Convert frames to tensor if needed
     if not isinstance(rgb_frames, torch.Tensor):
         np_frames = np.array(rgb_frames)

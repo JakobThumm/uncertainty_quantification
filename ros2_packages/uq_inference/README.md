@@ -37,7 +37,8 @@ source install/setup.bash
 
 ```bash
 # Build uq_inference package
-colcon build --packages-select uq_inference
+colcon build --symlink-install
+sed -i 's|#!/usr/bin/python3|#!/workspace/unc/bin/python3|g' install/uq_inference/lib/uq_inference/pose_pipeline
 source install/setup.bash
 ```
 

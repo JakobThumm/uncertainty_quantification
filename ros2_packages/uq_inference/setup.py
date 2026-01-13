@@ -21,7 +21,6 @@ setup(
     maintainer_email='your.email@example.com',
     description='ROS2 package for uncertainty quantification inference on streamed images',
     license='MIT',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'image_processor = uq_inference.image_processor_node:main',

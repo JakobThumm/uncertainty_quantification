@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 ROS2 node for processing images with uncertainty quantification.
 

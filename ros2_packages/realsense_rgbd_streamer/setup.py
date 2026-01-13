@@ -21,7 +21,6 @@ setup(
     maintainer_email='your.email@example.com',
     description='RealSense RGBD camera streamer with compression support',
     license='MIT',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'rgbd_publisher = realsense_rgbd_streamer.rgbd_publisher:main',

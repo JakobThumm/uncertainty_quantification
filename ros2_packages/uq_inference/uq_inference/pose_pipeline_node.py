@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 ROS2 node for real-time human pose estimation and motion prediction.
 
@@ -61,7 +60,7 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
 )
 
 # Add the workspace root to the path
-workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
 if workspace_root not in sys.path:
     sys.path.insert(0, workspace_root)
 
