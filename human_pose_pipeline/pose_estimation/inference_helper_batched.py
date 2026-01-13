@@ -528,7 +528,7 @@ def process_frame_3d(
 
 def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device='cpu'):
     """
-    Lift 2D keypoints to 3D using depth information.
+    Lift 2D keypoints to 3D using depth information (fully vectorized).
 
     Args:
         keypoints_2d: 2D keypoint positions [B, N_joints, 2] in pixel coordinates
@@ -541,39 +541,53 @@ def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device=
         valid_depth: Boolean mask [B, N_joints] indicating valid depth readings
     """
     B, N_joints, _ = keypoints_2d.shape
+    H, W = depth_map.shape[1], depth_map.shape[2]
+
     fx = camera_intrinsics['fx']
     fy = camera_intrinsics['fy']
     cx = camera_intrinsics['cx']
     cy = camera_intrinsics['cy']
 
-    # Initialize output
-    points_3d = torch.zeros(B, N_joints, 3, device=device)
-    valid_depth = torch.zeros(B, N_joints, dtype=torch.bool, device=device)
+    # Extract u, v coordinates [B, N_joints]
+    u = keypoints_2d[:, :, 0]  # [B, N_joints]
+    v = keypoints_2d[:, :, 1]  # [B, N_joints]
 
-    for b in range(B):
-        for j in range(N_joints):
-            u = int(keypoints_2d[b, j, 0].item())
-            v = int(keypoints_2d[b, j, 1].item())
+    # Round to nearest integer for indexing
+    u_int = torch.round(u).long()
+    v_int = torch.round(v).long()
 
-            # Check bounds
-            H, W = depth_map.shape[1], depth_map.shape[2]
-            if 0 <= u < W and 0 <= v < H:
-                depth = depth_map[b, v, u]
+    # Check bounds - create validity mask [B, N_joints]
+    valid_bounds = (u_int >= 0) & (u_int < W) & (v_int >= 0) & (v_int < H)
 
-                # Check for valid depth (RealSense uses 0 for invalid)
-                if depth > 0:
-                    # Convert depth to meters if in millimeters (typical for RealSense)
-                    # Assume depth > 10 means it's in mm
-                    if depth > 10:
-                        depth = depth * 0.001
+    # Clamp indices to valid range to prevent indexing errors
+    u_clamped = torch.clamp(u_int, 0, W - 1)
+    v_clamped = torch.clamp(v_int, 0, H - 1)
 
-                    # Back-projection formula
-                    Z = depth
-                    X = (u - cx) * Z / fx
-                    Y = (v - cy) * Z / fy
+    # Create batch indices [B, N_joints]
+    batch_indices = torch.arange(B, device=device).unsqueeze(1).expand(B, N_joints)
 
-                    points_3d[b, j] = torch.tensor([X, Y, Z], device=device)
-                    valid_depth[b, j] = True
+    # Gather depth values at keypoint locations [B, N_joints]
+    # Using advanced indexing: depth_map[batch_idx, v_idx, u_idx]
+    Z = depth_map[batch_indices, v_clamped, u_clamped]
+
+    # Check for valid depth (> 0)
+    valid_depth_values = Z > 0
+
+    # Convert depth to meters if in millimeters (depth > 10 means mm)
+    Z = torch.where(Z > 10, Z * 0.001, Z)
+
+    # Back-projection formula (vectorized) [B, N_joints]
+    X = (u - cx) * Z / fx
+    Y = (v - cy) * Z / fy
+
+    # Stack into 3D points [B, N_joints, 3]
+    points_3d = torch.stack([X, Y, Z], dim=2)
+
+    # Combine validity checks [B, N_joints]
+    valid_depth = valid_bounds & valid_depth_values
+
+    # Zero out invalid points
+    points_3d = points_3d * valid_depth.unsqueeze(-1).float()
 
     return points_3d, valid_depth
 
@@ -582,7 +596,7 @@ def propagate_uncertainty_2d_to_3d(keypoints_2d, uncertainties_2d, covariance_2d
                                    depth_map, camera_intrinsics,
                                    depth_uncertainty=0.01, device='cpu'):
     """
-    Propagate 2D uncertainty to 3D using depth information and Jacobian.
+    Propagate 2D uncertainty to 3D using depth information and Jacobian (fully vectorized).
 
     Args:
         keypoints_2d: 2D keypoint positions [B, N_joints, 2]
@@ -597,62 +611,88 @@ def propagate_uncertainty_2d_to_3d(keypoints_2d, uncertainties_2d, covariance_2d
         C_3d: 3D covariance matrices [B, N_joints, 3, 3]
     """
     B, N_joints, _ = keypoints_2d.shape
+    H, W = depth_map.shape[1], depth_map.shape[2]
+
     fx = camera_intrinsics['fx']
     fy = camera_intrinsics['fy']
     cx = camera_intrinsics['cx']
     cy = camera_intrinsics['cy']
 
-    C_3d = torch.zeros(B, N_joints, 3, 3, device=device)
+    # Extract u, v coordinates [B, N_joints]
+    u = keypoints_2d[:, :, 0]
+    v = keypoints_2d[:, :, 1]
 
-    for b in range(B):
-        for j in range(N_joints):
-            u = keypoints_2d[b, j, 0].item()
-            v = keypoints_2d[b, j, 1].item()
+    # Round to nearest integer for indexing
+    u_int = torch.round(u).long()
+    v_int = torch.round(v).long()
 
-            # Get depth
-            u_int = int(u)
-            v_int = int(v)
-            H, W = depth_map.shape[1], depth_map.shape[2]
+    # Check bounds
+    valid_bounds = (u_int >= 0) & (u_int < W) & (v_int >= 0) & (v_int < H)
 
-            if 0 <= u_int < W and 0 <= v_int < H:
-                Z = depth_map[b, v_int, u_int].item()
+    # Clamp indices
+    u_clamped = torch.clamp(u_int, 0, W - 1)
+    v_clamped = torch.clamp(v_int, 0, H - 1)
 
-                # Convert to meters if needed
-                if Z > 10:
-                    Z = Z * 0.001
+    # Gather depth values [B, N_joints]
+    batch_indices = torch.arange(B, device=device).unsqueeze(1).expand(B, N_joints)
+    Z = depth_map[batch_indices, v_clamped, u_clamped]
 
-                if Z > 0:
-                    # Compute Jacobian of back-projection
-                    # X = (u - cx) * Z / fx
-                    # Y = (v - cy) * Z / fy
-                    # Z = Z
-                    # Variables: [u, v, Z]
+    # Convert depth to meters if needed
+    Z = torch.where(Z > 10, Z * 0.001, Z)
 
-                    # dX/du = Z/fx, dX/dv = 0, dX/dZ = (u - cx)/fx
-                    # dY/du = 0, dY/dv = Z/fy, dY/dZ = (v - cy)/fy
-                    # dZ/du = 0, dZ/dv = 0, dZ/dZ = 1
+    # Check for valid depth
+    valid_depth = (Z > 0) & valid_bounds
 
-                    J = torch.zeros(3, 3, device=device)
-                    J[0, 0] = Z / fx  # dX/du
-                    J[0, 2] = (u - cx) / fx  # dX/dZ
-                    J[1, 1] = Z / fy  # dY/dv
-                    J[1, 2] = (v - cy) / fy  # dY/dZ
-                    J[2, 2] = 1.0  # dZ/dZ
+    # Compute Jacobian matrices for all joints [B, N_joints, 3, 3]
+    # J = [[Z/fx,     0,         (u-cx)/fx],
+    #      [0,        Z/fy,      (v-cy)/fy],
+    #      [0,        0,         1        ]]
 
-                    # Construct input covariance [u, v, Z]
-                    sigma_u = uncertainties_2d[b, j, 0].item()
-                    sigma_v = uncertainties_2d[b, j, 1].item()
-                    cov_uv = covariance_2d[b, j].item()
+    J = torch.zeros(B, N_joints, 3, 3, device=device)
+    J[:, :, 0, 0] = Z / fx  # dX/du
+    J[:, :, 0, 2] = (u - cx) / fx  # dX/dZ
+    J[:, :, 1, 1] = Z / fy  # dY/dv
+    J[:, :, 1, 2] = (v - cy) / fy  # dY/dZ
+    J[:, :, 2, 2] = 1.0  # dZ/dZ
 
-                    C_input = torch.zeros(3, 3, device=device)
-                    C_input[0, 0] = sigma_u ** 2
-                    C_input[1, 1] = sigma_v ** 2
-                    C_input[0, 1] = cov_uv
-                    C_input[1, 0] = cov_uv
-                    C_input[2, 2] = depth_uncertainty ** 2
+    # Construct input covariance matrices [B, N_joints, 3, 3]
+    # C_input = [[σ_u²,    cov_uv,  0      ],
+    #            [cov_uv,  σ_v²,    0      ],
+    #            [0,       0,       σ_Z²   ]]
 
-                    # Propagate: C_3d = J @ C_input @ J^T
-                    C_3d[b, j] = J @ C_input @ J.T
+    sigma_u = uncertainties_2d[:, :, 0]  # [B, N_joints]
+    sigma_v = uncertainties_2d[:, :, 1]  # [B, N_joints]
+    cov_uv = covariance_2d  # [B, N_joints]
+
+    C_input = torch.zeros(B, N_joints, 3, 3, device=device)
+    C_input[:, :, 0, 0] = sigma_u ** 2
+    C_input[:, :, 1, 1] = sigma_v ** 2
+    C_input[:, :, 0, 1] = cov_uv
+    C_input[:, :, 1, 0] = cov_uv
+    C_input[:, :, 2, 2] = depth_uncertainty ** 2
+
+    # Propagate uncertainty: C_3d = J @ C_input @ J^T
+    # Using batched matrix multiplication
+    # J: [B, N_joints, 3, 3]
+    # C_input: [B, N_joints, 3, 3]
+    # Result: [B, N_joints, 3, 3]
+
+    # Reshape for batched matmul: [B*N_joints, 3, 3]
+    J_flat = J.reshape(B * N_joints, 3, 3)
+    C_input_flat = C_input.reshape(B * N_joints, 3, 3)
+
+    # Compute J @ C_input
+    temp = torch.bmm(J_flat, C_input_flat)  # [B*N_joints, 3, 3]
+
+    # Compute (J @ C_input) @ J^T
+    J_T_flat = J_flat.transpose(1, 2)  # [B*N_joints, 3, 3]
+    C_3d_flat = torch.bmm(temp, J_T_flat)  # [B*N_joints, 3, 3]
+
+    # Reshape back to [B, N_joints, 3, 3]
+    C_3d = C_3d_flat.reshape(B, N_joints, 3, 3)
+
+    # Zero out covariances for invalid joints
+    C_3d = C_3d * valid_depth.unsqueeze(-1).unsqueeze(-1).float()
 
     return C_3d
 
@@ -749,16 +789,19 @@ def process_frame_3d_from_rgbd(
         device=device
     )
 
-    # Mark invalid joints (no depth or no human detected)
-    for b in range(B):
-        if not human_detected[b]:
-            points_3d[b] = 0.0
-            C_3d_all[b] = 0.0
-        else:
-            # Zero out joints with invalid depth
-            invalid_joints = ~valid_depth[b]
-            points_3d[b, invalid_joints] = 0.0
-            C_3d_all[b, invalid_joints] = 0.0
+    # Mark invalid joints (no depth or no human detected) - Vectorized
+    # Create combined validity mask: [B, N_joints]
+    # If human not detected, all joints invalid
+    # If human detected, use valid_depth mask
+    human_detected_expanded = human_detected.unsqueeze(1)  # [B, 1]
+    combined_valid = valid_depth & human_detected_expanded  # [B, N_joints]
+
+    # Apply mask to zero out invalid joints
+    # Use broadcasting: [B, N_joints, 1] for 3D coordinates
+    points_3d = points_3d * combined_valid.unsqueeze(-1).float()
+
+    # Use broadcasting: [B, N_joints, 1, 1] for 3×3 covariance matrices
+    C_3d_all = C_3d_all * combined_valid.unsqueeze(-1).unsqueeze(-1).float()
 
     return points_3d, C_3d_all, ood_score, bool(is_ood[0]), bool(human_detected[0])
 
