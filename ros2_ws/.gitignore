@@ -1,0 +1,7 @@
+# ROS2 workspace build artifacts
+build/
+install/
+log/
+
+# Symlinks to packages (these are created at build time)
+src/*

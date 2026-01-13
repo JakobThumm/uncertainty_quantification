@@ -1,0 +1,6 @@
+rgbd_publisher:
+  ros__parameters:
+    publish_rate: 10.0
+    compress_rgb: false
+    compress_depth: false
+    camera_namespace: '/camera/camera'

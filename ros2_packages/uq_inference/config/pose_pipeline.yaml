@@ -1,0 +1,42 @@
+# Configuration for pose pipeline node
+
+pose_pipeline_node:
+  ros__parameters:
+    # Mode: 'stereo' for two RGB cameras, 'rgbd' for single RGB-D camera
+    mode: 'stereo'
+
+    # Enable out-of-distribution detection
+    enable_ood: true
+
+    # Computation device
+    device: 'cuda'  # 'cuda' or 'cpu'
+
+    # Model paths (relative to workspace root)
+    pose_model_path: 'human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/jax_resnet50_regressflow'
+    motion_model_path: 'human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle'
+    camera_params_path: 'human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/camera-parameters.json'
+    motion_score_fn_path: 'human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle'
+    cache_dir: 'cache/'
+
+    # Base key for pose OOD score functions (leave empty if not using)
+    pose_base_key: ''
+
+    # Stereo camera topics
+    camera_1_color_topic: '/realsense/camera_1/color/image_raw'
+    camera_2_color_topic: '/realsense/camera_2/color/image_raw'
+    camera_1_info_topic: '/realsense/camera_1/color/camera_info'
+    camera_2_info_topic: '/realsense/camera_2/color/camera_info'
+
+    # RGB-D camera topics (for rgbd mode)
+    rgbd_color_topic: '/realsense/camera_1/color/image_raw'
+    rgbd_depth_topic: '/realsense/camera_1/aligned_depth_to_color/image_raw'
+    rgbd_info_topic: '/realsense/camera_1/color/camera_info'
+
+    # Camera IDs for loading calibration parameters
+    camera_1_id: '55011271'
+    camera_2_id: '60457274'
+    subject: 'S1'  # Subject ID for H36M camera parameters
+
+    # Output topics
+    pose_output_topic: '/uq/pose_3d'
+    motion_output_topic: '/uq/motion_prediction'

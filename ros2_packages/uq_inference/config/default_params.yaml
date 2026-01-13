@@ -1,0 +1,13 @@
+uq_image_processor:
+  ros__parameters:
+    # Model configuration
+    model_path: "/models/your_model_name.pkl"
+    model_type: "ResNet"
+    dataset: "CIFAR-10"
+    score_method: "local_ensemble"
+    device: "cuda"
+
+    # Topic configuration
+    input_topic: "/camera/image_raw"
+    output_uncertainty_topic: "/uq/uncertainty_score"
+    output_prediction_topic: "/uq/prediction"
