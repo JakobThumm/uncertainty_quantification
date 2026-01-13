@@ -12,6 +12,7 @@ find_package(std_msgs REQUIRED)
 
 # Generate messages
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/Pose2D.msg"
   "msg/Pose3D.msg"
   "msg/MotionPrediction.msg"
   DEPENDENCIES std_msgs

@@ -406,7 +406,7 @@ def process_frame_3d(
     mirror_map, score_fn=None,
     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
     num_output_joints=17, use_gpu_acceleration=True, verbose=True, device='cpu'
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool]: 
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool, torch.Tensor, torch.Tensor, torch.Tensor]: 
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -432,11 +432,14 @@ def process_frame_3d(
         device: Device to place output tensors on ('cpu' or 'cuda')
 
     Returns:
-        - points_3d: 3D joint coordinates
-        - C_3d_all: 3D covariance matrices
+        - points_3d: 3D joint coordinates [B, N_joints, 3]
+        - C_3d_all: 3D covariance matrices [B, N_joints, 3, 3]
         - ood_score: OOD score for the detected person (0 if no score_fn provided)
         - is_ood: Boolean indicating if the person is classified as OOD based on the threshold (False if no score_fn provided)
         - human_detected: Boolean indicating if a human was detected in the frame
+        - keypoints_2d: 2D joint coordinates from left camera [B, N_joints, 2]
+        - uncertainties_2d: 2D uncertainties from left camera [B, N_joints, 2]
+        - covariance_xy: 2D covariance (x-y) from left camera [B, N_joints]
     """
     assert len(frames) >= 2
     assert len(frames) % 2 == 0
@@ -523,7 +526,13 @@ def process_frame_3d(
     points_3d, C_3d_all = triangulate_points_with_covariance_batched(
         left_pose, right_pose, P1, P2, C_2D
     )
-    return points_3d, C_3d_all, ood_score, bool(is_ood), bool(human_detected)
+
+    # Extract 2D keypoints from left camera for overlay visualization
+    keypoints_2d = left_pose  # [B, 13, 2]
+    uncertainties_2d = left_uncertainty  # [B, 13, 2]
+    covariance_xy = left_covariance_matrix[:, :, 0, 1]  # [B, 13] (x-y covariance)
+
+    return points_3d, C_3d_all, ood_score, bool(is_ood), bool(human_detected), keypoints_2d, uncertainties_2d, covariance_xy
 
 
 def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device='cpu'):
@@ -703,7 +712,7 @@ def process_frame_3d_from_rgbd(
     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
     num_output_joints=17, use_gpu_acceleration=True, verbose=True, device='cpu',
     depth_uncertainty=0.01
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Process RGB-D frame to extract 3D pose with uncertainty using depth lifting.
 
@@ -732,19 +741,21 @@ def process_frame_3d_from_rgbd(
         - ood_score: OOD score for the detected person
         - is_ood: Boolean indicating if the person is classified as OOD
         - human_detected: Boolean indicating if a human was detected
+        - keypoints_2d: 2D joint coordinates [B, N_joints, 2]
+        - uncertainties_2d: 2D uncertainties [B, N_joints, 2]
+        - covariance_xy: 2D covariance (x-y) [B, N_joints]
     """
     # Convert frames to tensor if needed
     if not isinstance(rgb_frames, torch.Tensor):
         np_frames = np.array(rgb_frames)
-        # Debug print:
-        print(f"np_frames.shape = {np_frames.shape}")
         rgb_frames = torch.from_numpy(np_frames).to(device_torch)
+        rgb_frames = rgb_frames.float()
 
     if not isinstance(depth_frames, torch.Tensor):
         np_frames = np.array(depth_frames)
-        # Debug print:
-        print(f"np_frames.shape = {np_frames.shape}")
         depth_frames = torch.from_numpy(np_frames).to(device_torch)
+        # Convert depth_frames to float32 for indexing and calculations (CUDA doesn't support UInt16 indexing)
+        depth_frames = depth_frames.float()
 
     # Run 2D pose estimation (same as stereo mode)
     batch_prediction = process_frame_2d(
@@ -798,7 +809,8 @@ def process_frame_3d_from_rgbd(
     # Use broadcasting: [B, N_joints, 1, 1] for 3×3 covariance matrices
     C_3d_all = C_3d_all * combined_valid.unsqueeze(-1).unsqueeze(-1).float()
 
-    return points_3d, C_3d_all, ood_score, bool(is_ood[0]), bool(human_detected[0])
+    # Return 2D keypoints for visualization overlay
+    return points_3d, C_3d_all, ood_score, bool(is_ood[0]), bool(human_detected[0]), keypoints_2d, uncertainties_2d, covariance_2d
 
 
 def detect_humans(

@@ -66,9 +66,10 @@ if workspace_root not in sys.path:
 
 # Try to import custom messages (will be available after building)
 try:
-    from uq_msgs.msg import Pose3D, MotionPrediction
+    from uq_msgs.msg import Pose2D, Pose3D, MotionPrediction
 except ImportError:
     print("WARNING: uq_msgs not found. Please build the uq_msgs package first.")
+    Pose2D = None
     Pose3D = None
     MotionPrediction = None
 
@@ -113,6 +114,7 @@ class PosePipelineNode(Node):
         self.declare_parameter('subject', 'S1')  # For H36M camera parameters
 
         # Output topics
+        self.declare_parameter('pose_2d_output_topic', '/uq/pose_2d')
         self.declare_parameter('pose_output_topic', '/uq/pose_3d')
         self.declare_parameter('motion_output_topic', '/uq/motion_prediction')
 
@@ -284,11 +286,13 @@ class PosePipelineNode(Node):
 
     def _setup_publishers(self):
         """Setup publishers for pose and motion predictions."""
+        pose_2d_topic = self.get_parameter('pose_2d_output_topic').value
         pose_topic = self.get_parameter('pose_output_topic').value
         motion_topic = self.get_parameter('motion_output_topic').value
 
         self.get_logger().info('Setting up publishers:')
-        self.get_logger().info(f'  Pose: {pose_topic}')
+        self.get_logger().info(f'  Pose 2D: {pose_2d_topic}')
+        self.get_logger().info(f'  Pose 3D: {pose_topic}')
         self.get_logger().info(f'  Motion: {motion_topic}')
 
         # Reliable QoS for output topics
@@ -298,7 +302,8 @@ class PosePipelineNode(Node):
         #     depth=10
         # )
 
-        if Pose3D is not None and MotionPrediction is not None:
+        if Pose2D is not None and Pose3D is not None and MotionPrediction is not None:
+            self.pose_2d_publisher = self.create_publisher(Pose2D, pose_2d_topic, self.sensor_qos)
             self.pose_publisher = self.create_publisher(Pose3D, pose_topic, self.sensor_qos)
             self.motion_publisher = self.create_publisher(MotionPrediction, motion_topic, self.sensor_qos)
         else:
@@ -378,7 +383,7 @@ class PosePipelineNode(Node):
             return
 
         # Perform 2D pose estimation and 3D depth lifting
-        points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected = process_frame_3d_from_rgbd(
+        points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy = process_frame_3d_from_rgbd(
             rgb_frames=rgb_frames,
             depth_frames=depth_frames,
             camera_intrinsics=self.camera_intrinsics,
@@ -396,7 +401,7 @@ class PosePipelineNode(Node):
         )
 
         # Process the results through common pipeline
-        self._process_pose_results(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header)
+        self._process_pose_results(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy, header)
 
     def _process_frames(self, frames, header):
         """
@@ -412,7 +417,7 @@ class PosePipelineNode(Node):
             return
 
         # Perform 2D pose estimation and 3D triangulation
-        points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected = process_frame_3d(
+        points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy = process_frame_3d(
             frames=frames,
             projection_matrices=self.projection_matrices,
             pose_estimation_jit_fn=self.pose_estimation_jit_fn,
@@ -429,9 +434,9 @@ class PosePipelineNode(Node):
         )
 
         # Process the results through common pipeline
-        self._process_pose_results(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header)
+        self._process_pose_results(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy, header)
 
-    def _process_pose_results(self, points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header):
+    def _process_pose_results(self, points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy, header):
         """
         Common pipeline for processing pose estimation results.
 
@@ -441,13 +446,20 @@ class PosePipelineNode(Node):
             pose_ood_score: OOD score for the pose
             pose_is_ood: Whether the pose is OOD
             human_detected: Whether a human was detected
+            keypoints_2d: 2D joint positions (batched)
+            uncertainties_2d: 2D uncertainties (batched)
+            covariance_xy: 2D covariance (batched)
             header: ROS message header for timestamp
         """
         # Remove batch dimension
         points_3d = points_3d[0]
         C_3d_all = C_3d_all[0]
+        keypoints_2d = keypoints_2d[0]
+        uncertainties_2d = uncertainties_2d[0]
+        covariance_xy = covariance_xy[0]
 
-        # Publish pose
+        # Publish 2D and 3D poses
+        self._publish_pose_2d(keypoints_2d, uncertainties_2d, covariance_xy, pose_ood_score, pose_is_ood, human_detected, header)
         self._publish_pose(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header)
 
         # Valid prediction if not OOD and human detected
@@ -548,6 +560,30 @@ class PosePipelineNode(Node):
                 valid_motion,
                 header
             )
+
+    def _publish_pose_2d(self, keypoints_2d, uncertainties_2d, covariance_xy, ood_score, is_ood, human_detected, header):
+        """Publish 2D pose with uncertainty."""
+        if Pose2D is None:
+            return
+
+        msg = Pose2D()
+        msg.header = header
+        msg.header.frame_id = 'camera_color_optical_frame'  # Image frame
+
+        # Convert tensors to numpy and flatten
+        keypoints_np = keypoints_2d.cpu().numpy().flatten().tolist()
+        uncertainties_np = uncertainties_2d.cpu().numpy().flatten().tolist()
+        covariance_np = covariance_xy.cpu().numpy().flatten().tolist()
+
+        msg.keypoints_2d = keypoints_np
+        msg.uncertainties_2d = uncertainties_np
+        msg.covariance_xy = covariance_np
+        msg.n_joints = N_JOINTS
+        msg.is_ood = is_ood
+        msg.ood_score = float(ood_score)
+        msg.human_detected = human_detected
+
+        self.pose_2d_publisher.publish(msg)
 
     def _publish_pose(self, points_3d, covariance_3d, ood_score, is_ood, human_detected, header):
         """Publish 3D pose with uncertainty."""
