@@ -9,3 +9,12 @@ OOD_THRESHOLD = 6e5
 # Number of recent non-ood 3D poses required to accept the current motion prediction.
 # This prevents an infinite feedback loop of predicted poses.
 N_CORRECT_POSES_REQUIRED = 3
+# Covariance calibration for motion prediction
+COV_CALIBRATION_CT = 1.2
+COV_CALIBRATION_IT = 0.4
+COV_CALIBRATION_HF = 1.7
+COV_CALIBRATION_FF = 1.5
+COV_CALIBRATION_HI = [5, 6]
+COV_CALIBRATION_FI = [11, 12]
+# Likelihood boundary for the predicted set
+SET_LIKELIHOOD = 0.99

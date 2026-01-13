@@ -383,9 +383,9 @@ def simple_coverage_stats_sara(
         "overall_within_set": np.mean(within_set),
         "per_joint_within_set": np.mean(within_set, axis=(0, 1)),
         "per_frame_within_set": np.mean(within_set, axis=(0, 2)),
-        "overall_volume": 4.0 / 3.0 * np.pi * np.pow(np.mean(radius / 1000.0), 3.0),
-        "per_joint_volume": 4.0 / 3.0 * np.pi * np.pow(np.mean(radius / 1000.0, axis=(0, 1)), 3.0),
-        "per_frame_volume": 4.0 / 3.0 * np.pi * np.pow(np.mean(radius / 1000.0, axis=(0, 2)), 3.0),
+        "overall_volume": 4.0 / 3.0 * np.pi * np.power(np.mean(radius / 1000.0), 3.0),
+        "per_joint_volume": 4.0 / 3.0 * np.pi * np.power(np.mean(radius / 1000.0, axis=(0, 1)), 3.0),
+        "per_frame_volume": 4.0 / 3.0 * np.pi * np.power(np.mean(radius / 1000.0, axis=(0, 2)), 3.0),
     }
     return coverage_stats, within_set
 

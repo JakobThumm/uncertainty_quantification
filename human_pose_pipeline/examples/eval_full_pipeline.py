@@ -18,12 +18,15 @@ import jax.numpy as jnp
 
 from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
 from human_pose_pipeline.utils.eval_utils import (
+    convert_covariance_matrices_to_set,
     evaluate_pose_prediction_scores_np,
     evaluate_uncertainty_coverage_with_covariance,
     print_coverage_stats,
     print_mpjpe_results,
+    print_simple_coverage_stats_sara,
     save_coverage_stats,
-    save_mpjpe_results
+    save_mpjpe_results,
+    simple_coverage_stats_sara
 )
 from src.datasets.h36m import SPLIT, Human36mDatasetTwoCameras
 from src.ood_scores.lm_lanczos import load_score_functions
@@ -50,7 +53,14 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
     PREDICTION_HORIZON_LENGTH,
     N_JOINTS,
     OOD_THRESHOLD as MOTION_OOD_THRESHOLD,
-    N_CORRECT_POSES_REQUIRED
+    N_CORRECT_POSES_REQUIRED,
+    COV_CALIBRATION_CT,
+    COV_CALIBRATION_IT,
+    COV_CALIBRATION_HF,
+    COV_CALIBRATION_FF,
+    COV_CALIBRATION_HI,
+    COV_CALIBRATION_FI,
+    SET_LIKELIHOOD
 )
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -161,6 +171,7 @@ def main():
     poses_3d_human_detected = []
     motions_predicted = []
     motions_cov_predicted = []
+    motions_set_radius = []
     motions_gt = []
     motions_ood_scores = []
     motions_is_ood = []
@@ -270,7 +281,13 @@ def main():
                 motion_predicted = motion_predicted.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)[0]
                 motion_cov_predicted = motion_cov_predicted[0]
                 motion_cov_predicted = calibrate_covariance_matrices(
-                    covariance_matrices=motion_cov_predicted
+                    covariance_matrices=motion_cov_predicted,
+                    constant_time_factor=COV_CALIBRATION_CT,
+                    increase_time_factor=COV_CALIBRATION_IT,
+                    hand_factor=COV_CALIBRATION_HF,
+                    feet_factor=COV_CALIBRATION_FF,
+                    hand_indices=COV_CALIBRATION_HI,
+                    feet_indices=COV_CALIBRATION_FI
                 )
                 motion_is_ood = bool(motion_ood_score > MOTION_OOD_THRESHOLD)
                 # Update motion prediction buffer
@@ -283,6 +300,10 @@ def main():
                     pose_valid_buffer=pose_valid_buffer,
                     n_correct_poses_required=N_CORRECT_POSES_REQUIRED
                 )
+                motion_prediction_set_radius = convert_covariance_matrices_to_set(
+                    motion_uncertainty_buffer,
+                    likelihood=SET_LIKELIHOOD
+                )
             else:
                 motion_predicted = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
                 motion_cov_predicted = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
@@ -291,9 +312,11 @@ def main():
                 motion_is_ood = False
                 motion_prediction_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
                 motion_uncertainty_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
+                motion_prediction_set_radius = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS])
             # Store motion predictions
             motions_predicted.append(motion_predicted)
             motions_cov_predicted.append(motion_cov_predicted)
+            motions_set_radius.append(motion_prediction_set_radius)
             motions_gt.append(pose_sequence[frame_idx + 1 : frame_idx + PREDICTION_HORIZON_LENGTH + 1])
             motions_ood_scores.append(motion_ood_score)
             motions_is_ood.append(motion_is_ood)
@@ -315,6 +338,7 @@ def main():
     poses_3d_gt = jnp.stack(poses_3d_gt, axis=0)
     poses_3d_ood_scores = torch.stack(poses_3d_ood_scores, dim=0)
     motions_predicted = jnp.stack(motions_predicted, axis=0)
+    motions_set_radius = jnp.stack(motions_set_radius, axis=0)
     motions_cov_predicted = jnp.stack(motions_cov_predicted, axis=0)
     motions_gt = jnp.array(motions_gt)
 
@@ -326,6 +350,7 @@ def main():
     poses_3d_is_ood = np.array(poses_3d_is_ood)
     poses_3d_human_detected = np.array(poses_3d_human_detected)
     motions_predicted_np = np.array(motions_predicted)
+    motions_set_radius_np = np.array(motions_set_radius)
     motions_cov_predicted_np = np.array(motions_cov_predicted)
     motions_gt_np = np.array(motions_gt)
     motions_ood_scores = np.array(motions_ood_scores)
@@ -373,6 +398,12 @@ def main():
     save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split)
     print_coverage_stats(coverage_stats)
     save_coverage_stats(coverage_stats, split=split)
+    coverage_stats_predictions_sara, _ = simple_coverage_stats_sara(
+        predictions=motions_predicted_np,
+        radius=motions_set_radius_np,
+        targets=motions_gt_np,
+    )
+    print_simple_coverage_stats_sara(coverage_stats_predictions_sara)
 
     # Print OOD statistics if enabled
     # TODO

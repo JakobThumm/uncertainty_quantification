@@ -9,7 +9,17 @@ from pathlib import Path
 
 from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
 from human_pose_pipeline.utils.eval_utils import compute_sara_predictions, convert_covariance_matrices_to_set, evaluate_uncertainty_coverage_with_covariance, print_coverage_stats, print_simple_coverage_stats_sara, simple_coverage_stats_sara
-from human_pose_pipeline.motion_prediction.h36m_settings import OOD_THRESHOLD, PREDICTION_HORIZON_LENGTH
+from human_pose_pipeline.motion_prediction.h36m_settings import (
+    OOD_THRESHOLD, 
+    PREDICTION_HORIZON_LENGTH,
+    COV_CALIBRATION_CT,
+    COV_CALIBRATION_IT,
+    COV_CALIBRATION_HF,
+    COV_CALIBRATION_FF,
+    COV_CALIBRATION_HI,
+    COV_CALIBRATION_FI,
+    SET_LIKELIHOOD
+)
 
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -70,12 +80,12 @@ def main():
     # Increase covariance for certain times and joints
     covariance_matrices = calibrate_covariance_matrices(
         covariance_matrices=covariance_matrices,
-        constant_time_factor=1.2,
-        increase_time_factor=0.4,
-        hand_factor=1.7,
-        feet_factor=1.5,
-        hand_indices=[5, 6],
-        feet_indices=[11, 12]
+        constant_time_factor=COV_CALIBRATION_CT,
+        increase_time_factor=COV_CALIBRATION_IT,
+        hand_factor=COV_CALIBRATION_HF,
+        feet_factor=COV_CALIBRATION_FF,
+        hand_indices=COV_CALIBRATION_HI,
+        feet_indices=COV_CALIBRATION_FI
     )
     # Generate n_std range
     n_std_range = [1, 2, 3, 4]
@@ -108,17 +118,16 @@ def main():
     print("SARA simple velocity model coverage stats:")
     print_simple_coverage_stats_sara(coverage_stats_sara)
 
-    likelihood = 0.99
     radius_predictions = convert_covariance_matrices_to_set(
         covariance_matrices,
-        likelihood=likelihood
+        likelihood=SET_LIKELIHOOD
     )
     coverage_stats_predictions, _ = simple_coverage_stats_sara(
         predictions=predictions,
         radius=radius_predictions,
         targets=targets,
     )
-    print(f"Predicted spherical reachable set coverage stats for {likelihood} likelihood:")
+    print(f"Predicted spherical reachable set coverage stats for {SET_LIKELIHOOD} likelihood:")
     print_simple_coverage_stats_sara(coverage_stats_predictions)
 
     # Plot predicted uncertainty increase over frame for each joint
