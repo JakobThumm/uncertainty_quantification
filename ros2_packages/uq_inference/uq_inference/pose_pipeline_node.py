@@ -396,33 +396,8 @@ class PosePipelineNode(Node):
             device=self.device
         )
 
-        # Remove batch dimension
-        points_3d = points_3d[0]
-        C_3d_all = C_3d_all[0]
-
-        # Publish pose
-        self._publish_pose(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header)
-
-        # Valid prediction if not OOD and human detected
-        is_valid = (not pose_is_ood) and human_detected
-
-        # Update pose buffer
-        self.points_3d_buffer, self.covariance_buffer, self.pose_valid_buffer, pose_buffer_good = fill_pose_buffer(
-            points_3d_buffer=self.points_3d_buffer,
-            covariance_buffer=self.covariance_buffer,
-            pose_valid_buffer=self.pose_valid_buffer,
-            points_3d=jnp.array(points_3d.cpu().numpy()),
-            covariance=jnp.array(C_3d_all.cpu().numpy()),
-            is_valid=is_valid,
-            motion_prediction_buffer=self.motion_prediction_buffer,
-            motion_uncertainty_buffer=self.motion_uncertainty_buffer,
-        )
-
-        # Predict motion if enough poses are in buffer (same as stereo mode)
-        self._predict_and_publish_motion(pose_buffer_good, header)
-
-        self.frame_counter += 1
-        self.frames_processed += 1
+        # Process the results through common pipeline
+        self._process_pose_results(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header)
 
     def _process_frames(self, frames, header):
         """
@@ -454,6 +429,21 @@ class PosePipelineNode(Node):
             device=self.device
         )
 
+        # Process the results through common pipeline
+        self._process_pose_results(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header)
+
+    def _process_pose_results(self, points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header):
+        """
+        Common pipeline for processing pose estimation results.
+
+        Args:
+            points_3d: 3D joint positions (batched)
+            C_3d_all: 3D covariance matrices (batched)
+            pose_ood_score: OOD score for the pose
+            pose_is_ood: Whether the pose is OOD
+            human_detected: Whether a human was detected
+            header: ROS message header for timestamp
+        """
         # Remove batch dimension
         points_3d = points_3d[0]
         C_3d_all = C_3d_all[0]
@@ -476,7 +466,7 @@ class PosePipelineNode(Node):
             motion_uncertainty_buffer=self.motion_uncertainty_buffer,
         )
 
-        # Predict motion if enough poses are in buffer (same as stereo mode)
+        # Predict and publish motion if enough poses are in buffer
         self._predict_and_publish_motion(pose_buffer_good, header)
 
         self.frame_counter += 1

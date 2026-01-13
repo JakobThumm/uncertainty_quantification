@@ -750,7 +750,6 @@ def process_frame_3d_from_rgbd(
         print(f"np_frames.shape = {np_frames.shape}")
         depth_frames = torch.from_numpy(np_frames).to(device_torch)
 
-    B = rgb_frames.shape[0]
     # Run 2D pose estimation (same as stereo mode)
     batch_prediction = process_frame_2d(
         frames=rgb_frames,
