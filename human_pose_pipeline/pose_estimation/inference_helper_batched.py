@@ -526,6 +526,243 @@ def process_frame_3d(
     return points_3d, C_3d_all, ood_score, bool(is_ood), bool(human_detected)
 
 
+def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device='cpu'):
+    """
+    Lift 2D keypoints to 3D using depth information.
+
+    Args:
+        keypoints_2d: 2D keypoint positions [B, N_joints, 2] in pixel coordinates
+        depth_map: Depth image [B, H, W] in meters (or mm, will be handled)
+        camera_intrinsics: Dict with keys 'fx', 'fy', 'cx', 'cy'
+        device: Device for torch tensors
+
+    Returns:
+        points_3d: 3D joint positions [B, N_joints, 3] in meters
+        valid_depth: Boolean mask [B, N_joints] indicating valid depth readings
+    """
+    B, N_joints, _ = keypoints_2d.shape
+    fx = camera_intrinsics['fx']
+    fy = camera_intrinsics['fy']
+    cx = camera_intrinsics['cx']
+    cy = camera_intrinsics['cy']
+
+    # Initialize output
+    points_3d = torch.zeros(B, N_joints, 3, device=device)
+    valid_depth = torch.zeros(B, N_joints, dtype=torch.bool, device=device)
+
+    for b in range(B):
+        for j in range(N_joints):
+            u = int(keypoints_2d[b, j, 0].item())
+            v = int(keypoints_2d[b, j, 1].item())
+
+            # Check bounds
+            H, W = depth_map.shape[1], depth_map.shape[2]
+            if 0 <= u < W and 0 <= v < H:
+                depth = depth_map[b, v, u]
+
+                # Check for valid depth (RealSense uses 0 for invalid)
+                if depth > 0:
+                    # Convert depth to meters if in millimeters (typical for RealSense)
+                    # Assume depth > 10 means it's in mm
+                    if depth > 10:
+                        depth = depth * 0.001
+
+                    # Back-projection formula
+                    Z = depth
+                    X = (u - cx) * Z / fx
+                    Y = (v - cy) * Z / fy
+
+                    points_3d[b, j] = torch.tensor([X, Y, Z], device=device)
+                    valid_depth[b, j] = True
+
+    return points_3d, valid_depth
+
+
+def propagate_uncertainty_2d_to_3d(keypoints_2d, uncertainties_2d, covariance_2d,
+                                   depth_map, camera_intrinsics,
+                                   depth_uncertainty=0.01, device='cpu'):
+    """
+    Propagate 2D uncertainty to 3D using depth information and Jacobian.
+
+    Args:
+        keypoints_2d: 2D keypoint positions [B, N_joints, 2]
+        uncertainties_2d: 2D uncertainties [B, N_joints, 2] (std devs)
+        covariance_2d: 2D covariance [B, N_joints] (covariance between x and y)
+        depth_map: Depth image [B, H, W]
+        camera_intrinsics: Dict with keys 'fx', 'fy', 'cx', 'cy'
+        depth_uncertainty: Uncertainty in depth measurement (std dev in meters)
+        device: Device for torch tensors
+
+    Returns:
+        C_3d: 3D covariance matrices [B, N_joints, 3, 3]
+    """
+    B, N_joints, _ = keypoints_2d.shape
+    fx = camera_intrinsics['fx']
+    fy = camera_intrinsics['fy']
+    cx = camera_intrinsics['cx']
+    cy = camera_intrinsics['cy']
+
+    C_3d = torch.zeros(B, N_joints, 3, 3, device=device)
+
+    for b in range(B):
+        for j in range(N_joints):
+            u = keypoints_2d[b, j, 0].item()
+            v = keypoints_2d[b, j, 1].item()
+
+            # Get depth
+            u_int = int(u)
+            v_int = int(v)
+            H, W = depth_map.shape[1], depth_map.shape[2]
+
+            if 0 <= u_int < W and 0 <= v_int < H:
+                Z = depth_map[b, v_int, u_int].item()
+
+                # Convert to meters if needed
+                if Z > 10:
+                    Z = Z * 0.001
+
+                if Z > 0:
+                    # Compute Jacobian of back-projection
+                    # X = (u - cx) * Z / fx
+                    # Y = (v - cy) * Z / fy
+                    # Z = Z
+                    # Variables: [u, v, Z]
+
+                    # dX/du = Z/fx, dX/dv = 0, dX/dZ = (u - cx)/fx
+                    # dY/du = 0, dY/dv = Z/fy, dY/dZ = (v - cy)/fy
+                    # dZ/du = 0, dZ/dv = 0, dZ/dZ = 1
+
+                    J = torch.zeros(3, 3, device=device)
+                    J[0, 0] = Z / fx  # dX/du
+                    J[0, 2] = (u - cx) / fx  # dX/dZ
+                    J[1, 1] = Z / fy  # dY/dv
+                    J[1, 2] = (v - cy) / fy  # dY/dZ
+                    J[2, 2] = 1.0  # dZ/dZ
+
+                    # Construct input covariance [u, v, Z]
+                    sigma_u = uncertainties_2d[b, j, 0].item()
+                    sigma_v = uncertainties_2d[b, j, 1].item()
+                    cov_uv = covariance_2d[b, j].item()
+
+                    C_input = torch.zeros(3, 3, device=device)
+                    C_input[0, 0] = sigma_u ** 2
+                    C_input[1, 1] = sigma_v ** 2
+                    C_input[0, 1] = cov_uv
+                    C_input[1, 0] = cov_uv
+                    C_input[2, 2] = depth_uncertainty ** 2
+
+                    # Propagate: C_3d = J @ C_input @ J^T
+                    C_3d[b, j] = J @ C_input @ J.T
+
+    return C_3d
+
+
+def process_frame_3d_from_rgbd(
+    rgb_frames, depth_frames, camera_intrinsics, pose_estimation_jit_fn, params, batch_stats,
+    human_detector, device_torch, mirror_map, score_fn=None,
+    human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
+    num_output_joints=17, use_gpu_acceleration=True, verbose=True, device='cpu',
+    depth_uncertainty=0.01
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool]:
+    """
+    Process RGB-D frame to extract 3D pose with uncertainty using depth lifting.
+
+    Args:
+        rgb_frames: Input RGB images [B, H, W, C]
+        depth_frames: Input aligned depth images [B, H, W] in mm or meters
+        camera_intrinsics: Dict with keys 'fx', 'fy', 'cx', 'cy'
+        pose_estimation_jit_fn: JIT-compiled pose estimation function
+        params: JAX model parameters
+        batch_stats: JAX model batch statistics
+        human_detector: YOLO human detector
+        device_torch: PyTorch device for YOLO
+        mirror_map: Joint mapping to correct left/right swapping
+        score_fn: Function to compute OOD score from model outputs
+        human_detection_threshold: Confidence threshold for human detection
+        ood_threshold: Threshold for OOD detection in pose estimation
+        num_output_joints: Number of joints the model outputs
+        use_gpu_acceleration: Whether to use GPU-accelerated preprocessing
+        verbose: Print debug information
+        device: Device to place output tensors on ('cpu' or 'cuda')
+        depth_uncertainty: Uncertainty in depth measurement (std dev in meters)
+
+    Returns:
+        - points_3d: 3D joint coordinates [B, N_joints, 3]
+        - C_3d_all: 3D covariance matrices [B, N_joints, 3, 3]
+        - ood_score: OOD score for the detected person
+        - is_ood: Boolean indicating if the person is classified as OOD
+        - human_detected: Boolean indicating if a human was detected
+    """
+    # Debug print:
+    print(f"rgb_frames.type = {rgb_frames.type}")
+    print(f"depth_frames.type = {depth_frames.type}")
+
+    # Convert frames to tensor if needed
+    if not isinstance(rgb_frames, torch.Tensor):
+        np_frames = np.array(rgb_frames)
+        # Debug print:
+        print(f"np_frames.shape = {np_frames.shape}")
+        rgb_frames = torch.from_numpy(np_frames).to(device_torch)
+
+    if not isinstance(depth_frames, torch.Tensor):
+        np_frames = np.array(depth_frames)
+        # Debug print:
+        print(f"np_frames.shape = {np_frames.shape}")
+        depth_frames = torch.from_numpy(np_frames).to(device_torch)
+
+    B = rgb_frames.shape[0]
+    # Run 2D pose estimation (same as stereo mode)
+    batch_prediction = process_frame_2d(
+        frames=rgb_frames,
+        pose_estimation_jit_fn=pose_estimation_jit_fn,
+        params=params,
+        batch_stats=batch_stats,
+        human_detector=human_detector,
+        device_torch=device_torch,
+        mirror_map=mirror_map,
+        score_fn=score_fn,
+        human_detection_threshold=human_detection_threshold,
+        ood_threshold=ood_threshold,
+        num_output_joints=num_output_joints,
+        verbose=verbose,
+        device=device
+    )
+
+    # Extract 2D predictions
+    keypoints_2d = batch_prediction['keypoints']  # [B, 13, 2]
+    uncertainties_2d = batch_prediction['uncertainties']  # [B, 13, 2]
+    covariance_2d = batch_prediction['covariance_matrix'][:, :, 0, 1]  # [B, 13] (x-y cov)
+    ood_score = batch_prediction['ood_score']  # [B]
+    is_ood = batch_prediction['is_ood']  # [B]
+    human_detected = batch_prediction['mask']  # [B]
+
+    # Lift 2D keypoints to 3D using depth
+    points_3d, valid_depth = lift_2d_to_3d_with_depth(
+        keypoints_2d, depth_frames, camera_intrinsics, device=device
+    )
+
+    # Propagate uncertainty to 3D
+    C_3d_all = propagate_uncertainty_2d_to_3d(
+        keypoints_2d, uncertainties_2d, covariance_2d,
+        depth_frames, camera_intrinsics,
+        depth_uncertainty=depth_uncertainty,
+        device=device
+    )
+
+    # Mark invalid joints (no depth or no human detected)
+    for b in range(B):
+        if not human_detected[b]:
+            points_3d[b] = 0.0
+            C_3d_all[b] = 0.0
+        else:
+            # Zero out joints with invalid depth
+            invalid_joints = ~valid_depth[b]
+            points_3d[b, invalid_joints] = 0.0
+            C_3d_all[b, invalid_joints] = 0.0
+
+    return points_3d, C_3d_all, ood_score, bool(is_ood[0]), bool(human_detected[0])
+
+
 def detect_humans(
     model,
     images: torch.Tensor,

@@ -23,17 +23,13 @@ import jax.numpy as jnp
 import cloudpickle
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 
-# Add the workspace root to the path
-workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
-if workspace_root not in sys.path:
-    sys.path.insert(0, workspace_root)
-
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
 )
 from human_pose_pipeline.pose_estimation.inference_helper_batched import (
     process_frame_3d,
+    process_frame_3d_from_rgbd,
     fill_pose_buffer,
     update_motion_prediction_buffer
 )
@@ -64,6 +60,11 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
     SET_LIKELIHOOD
 )
 
+# Add the workspace root to the path
+workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+if workspace_root not in sys.path:
+    sys.path.insert(0, workspace_root)
+
 # Try to import custom messages (will be available after building)
 try:
     from uq_msgs.msg import Pose3D, MotionPrediction
@@ -86,7 +87,7 @@ class PosePipelineNode(Node):
         super().__init__('pose_pipeline_node')
 
         # Declare parameters
-        self.declare_parameter('mode', 'stereo')  # 'stereo' or 'rgbd'
+        self.declare_parameter('mode', 'rgbd')  # 'stereo' or 'rgbd'
         self.declare_parameter('pose_model_path', 'human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/jax_resnet50_regressflow')
         self.declare_parameter('motion_model_path', 'human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle')
         self.declare_parameter('camera_params_path', 'human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/camera-parameters.json')
@@ -151,6 +152,10 @@ class PosePipelineNode(Node):
         self.motion_prediction_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
         self.motion_uncertainty_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
         self.frame_counter = 0
+
+        # Camera intrinsics (for RGB-D mode)
+        self.camera_intrinsics = None
+        self.intrinsics_received = False
 
         # Setup subscribers based on mode
         if self.mode == 'stereo':
@@ -251,10 +256,20 @@ class PosePipelineNode(Node):
         """Setup subscribers for RGB-D camera mode."""
         color_topic = self.get_parameter('rgbd_color_topic').value
         depth_topic = self.get_parameter('rgbd_depth_topic').value
+        info_topic = self.get_parameter('rgbd_info_topic').value
 
-        self.get_logger().info(f'Setting up RGB-D subscribers:')
+        self.get_logger().info('Setting up RGB-D subscribers:')
         self.get_logger().info(f'  Color: {color_topic}')
         self.get_logger().info(f'  Depth: {depth_topic}')
+        self.get_logger().info(f'  Camera Info: {info_topic}')
+
+        # Subscribe to camera info to get intrinsics
+        self.camera_info_sub = self.create_subscription(
+            CameraInfo,
+            info_topic,
+            self.camera_info_callback,
+            qos_profile=self.sensor_qos
+        )
 
         # Create synchronized subscribers for color and depth
         self.color_sub = Subscriber(self, Image, color_topic, qos_profile=self.sensor_qos)
@@ -273,20 +288,20 @@ class PosePipelineNode(Node):
         pose_topic = self.get_parameter('pose_output_topic').value
         motion_topic = self.get_parameter('motion_output_topic').value
 
-        self.get_logger().info(f'Setting up publishers:')
+        self.get_logger().info('Setting up publishers:')
         self.get_logger().info(f'  Pose: {pose_topic}')
         self.get_logger().info(f'  Motion: {motion_topic}')
 
-        # Use reliable QoS for output topics
-        reliable_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
+        # Reliable QoS for output topics
+        # reliable_qos = QoSProfile(
+        #     reliability=ReliabilityPolicy.RELIABLE,
+        #     history=HistoryPolicy.KEEP_LAST,
+        #     depth=10
+        # )
 
         if Pose3D is not None and MotionPrediction is not None:
-            self.pose_publisher = self.create_publisher(Pose3D, pose_topic, reliable_qos)
-            self.motion_publisher = self.create_publisher(MotionPrediction, motion_topic, reliable_qos)
+            self.pose_publisher = self.create_publisher(Pose3D, pose_topic, self.sensor_qos)
+            self.motion_publisher = self.create_publisher(MotionPrediction, motion_topic, self.sensor_qos)
         else:
             self.get_logger().error('Custom messages not available. Cannot create publishers.')
 
@@ -304,19 +319,110 @@ class PosePipelineNode(Node):
         except Exception as e:
             self.get_logger().error(f'Error in stereo callback: {e}', throttle_duration_sec=1.0)
 
+    def camera_info_callback(self, msg):
+        """Callback to receive and store camera intrinsics."""
+        if not self.intrinsics_received:
+            # Extract intrinsics from CameraInfo message
+            K = msg.k  # Intrinsic matrix (3x3) stored as 9-element array
+            self.camera_intrinsics = {
+                'fx': K[0],  # K[0, 0]
+                'fy': K[4],  # K[1, 1]
+                'cx': K[2],  # K[0, 2]
+                'cy': K[5],  # K[1, 2]
+            }
+            self.intrinsics_received = True
+            self.get_logger().info(
+                f'Camera intrinsics received: fx={self.camera_intrinsics["fx"]:.2f}, '
+                f'fy={self.camera_intrinsics["fy"]:.2f}, '
+                f'cx={self.camera_intrinsics["cx"]:.2f}, '
+                f'cy={self.camera_intrinsics["cy"]:.2f}'
+            )
+
     def rgbd_callback(self, color_msg, depth_msg):
         """Process synchronized RGB-D camera images."""
+        # Check if we have intrinsics
+        if not self.intrinsics_received:
+            self.get_logger().warn(
+                'Waiting for camera intrinsics...',
+                throttle_duration_sec=2.0
+            )
+            return
+
         try:
             # Convert ROS messages to OpenCV images
             color_img = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+            # Depth is typically uint16 in millimeters
             depth_img = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
 
-            # For RGB-D mode, we need to implement depth-based 3D lifting
-            # This is a TODO - for now, log a warning
-            self.get_logger().warn('RGB-D mode not fully implemented yet. Use stereo mode.', throttle_duration_sec=5.0)
+            # Process frames through RGB-D pipeline
+            frames = [color_img]
+            depth_frames = [depth_img]
+            self._process_frames_rgbd(frames, depth_frames, color_msg.header)
 
         except Exception as e:
             self.get_logger().error(f'Error in RGB-D callback: {e}', throttle_duration_sec=1.0)
+            import traceback
+            self.get_logger().error(traceback.format_exc())
+
+    def _process_frames_rgbd(self, rgb_frames, depth_frames, header):
+        """
+        Process RGB-D frames through the full pipeline.
+
+        Args:
+            rgb_frames: List of RGB images [img1] for RGB-D mode
+            depth_frames: List of depth images [depth1] for RGB-D mode
+            header: ROS message header for timestamp
+        """
+        # Process only every other frame to match motion prediction frequency
+        if self.frame_counter % 2 != 0:
+            self.frame_counter += 1
+            return
+
+        # Perform 2D pose estimation and 3D depth lifting
+        points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected = process_frame_3d_from_rgbd(
+            rgb_frames=rgb_frames,
+            depth_frames=depth_frames,
+            camera_intrinsics=self.camera_intrinsics,
+            pose_estimation_jit_fn=self.pose_estimation_jit_fn,
+            params=self.pose_estimation_params,
+            batch_stats=self.pose_estimation_batch_stats,
+            human_detector=self.human_detector,
+            device_torch=self.device_torch,
+            mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+            score_fn=self.pose_ood_score_fn,
+            human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
+            ood_threshold=POSE_OOD_THRESHOLD,
+            verbose=False,
+            device=self.device
+        )
+
+        # Remove batch dimension
+        points_3d = points_3d[0]
+        C_3d_all = C_3d_all[0]
+
+        # Publish pose
+        self._publish_pose(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header)
+
+        # Valid prediction if not OOD and human detected
+        is_valid = (not pose_is_ood) and human_detected
+
+        # Update pose buffer
+        self.points_3d_buffer, self.covariance_buffer, self.pose_valid_buffer, pose_buffer_good = fill_pose_buffer(
+            points_3d_buffer=self.points_3d_buffer,
+            covariance_buffer=self.covariance_buffer,
+            pose_valid_buffer=self.pose_valid_buffer,
+            points_3d=jnp.array(points_3d.cpu().numpy()),
+            covariance=jnp.array(C_3d_all.cpu().numpy()),
+            is_valid=is_valid,
+            motion_prediction_buffer=self.motion_prediction_buffer,
+            motion_uncertainty_buffer=self.motion_uncertainty_buffer,
+        )
+
+        # Predict motion if enough poses are in buffer (same as stereo mode)
+        self._predict_and_publish_motion(pose_buffer_good, header)
+
+        self.frame_counter += 1
+        self.frames_processed += 1
 
     def _process_frames(self, frames, header):
         """
@@ -370,7 +476,20 @@ class PosePipelineNode(Node):
             motion_uncertainty_buffer=self.motion_uncertainty_buffer,
         )
 
-        # Predict motion if enough poses are in buffer
+        # Predict motion if enough poses are in buffer (same as stereo mode)
+        self._predict_and_publish_motion(pose_buffer_good, header)
+
+        self.frame_counter += 1
+        self.frames_processed += 1
+
+    def _predict_and_publish_motion(self, pose_buffer_good, header):
+        """
+        Predict motion and publish results if buffer has enough poses.
+
+        Args:
+            pose_buffer_good: Boolean indicating if pose buffer is ready
+            header: ROS message header for timestamp
+        """
         if self.frame_counter >= INPUT_HORIZON_LENGTH - 1 and pose_buffer_good:
             pose_input = self.points_3d_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
             motion_prediction_input = jnp.concatenate([
@@ -440,9 +559,6 @@ class PosePipelineNode(Node):
                 valid_motion,
                 header
             )
-
-        self.frame_counter += 1
-        self.frames_processed += 1
 
     def _publish_pose(self, points_3d, covariance_3d, ood_score, is_ood, human_detected, header):
         """Publish 3D pose with uncertainty."""

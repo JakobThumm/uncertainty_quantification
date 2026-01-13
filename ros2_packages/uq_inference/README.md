@@ -54,7 +54,8 @@ The node supports two modes:
 2. **RGB-D Mode**: Uses single RGB-D camera with depth information
    - Requires synchronized color and depth streams
    - Topics: `/realsense/camera_1/color/image_raw`, `/realsense/camera_1/aligned_depth_to_color/image_raw`
-   - Note: RGB-D implementation is currently limited
+   - Uses depth-based 3D lifting with uncertainty propagation via Jacobian
+   - Fully implemented and ready to use
 
 ### Camera Setup
 
@@ -70,6 +71,14 @@ You need two RealSense cameras streaming to separate topics. Make sure both came
 One RealSense camera with aligned depth to color:
 - Enable aligned depth stream in your camera driver
 - Both color and depth should use SensorDataQoS profile
+- Camera intrinsics are automatically obtained from camera_info topic
+
+**How RGB-D Mode Works:**
+1. Runs 2D pose estimation on the color image
+2. For each detected 2D keypoint (u, v), reads the depth value Z at that pixel
+3. Back-projects to 3D using: X = (u - cx) * Z / fx, Y = (v - cy) * Z / fy
+4. Propagates 2D uncertainty to 3D using the Jacobian of the back-projection
+5. Handles invalid depth readings (0 values) gracefully
 
 ### Model Paths
 

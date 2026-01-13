@@ -53,9 +53,20 @@ Edit `uq_inference/config/pose_pipeline.yaml`:
 mode: 'rgbd'
 rgbd_color_topic: '/realsense/camera_1/color/image_raw'
 rgbd_depth_topic: '/realsense/camera_1/aligned_depth_to_color/image_raw'
+rgbd_info_topic: '/realsense/camera_1/aligned_depth_to_color/camera_info'
 ```
 
-**Note:** RGB-D mode currently has limited functionality. Stereo mode is recommended.
+**RGB-D Mode Features:**
+- ✅ Fully implemented depth-based 3D lifting
+- ✅ Automatic camera intrinsics from camera_info
+- ✅ Uncertainty propagation via Jacobian
+- ✅ Handles invalid depth readings gracefully
+
+**When to use RGB-D vs Stereo:**
+- Use **RGB-D** if: Single camera, indoor environment, subjects within 0.3-10m
+- Use **Stereo** if: Longer range needed, outdoor environment, or already have stereo setup
+
+See `RGBD_DETAILS.md` for implementation details.
 
 ## Step 4: Start Your Cameras
 
