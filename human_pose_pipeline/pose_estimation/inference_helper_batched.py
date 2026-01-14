@@ -950,6 +950,43 @@ def update_motion_prediction_buffer(
     return motion_prediction_buffer, motion_uncertainty_buffer, False
 
 
+def reset_yolo_tracking(yolo_pose_model):
+    """
+    Reset YOLO tracking state to start fresh tracking on a new sequence.
+
+    Call this function between different video sequences or when you want to
+    restart tracking with new IDs.
+
+    Args:
+        yolo_pose_model: YOLO pose estimation model
+
+    Example:
+        >>> from ultralytics import YOLO
+        >>> yolo_model = YOLO("yolo11n-pose.pt")
+        >>>
+        >>> # Process first video sequence with tracking
+        >>> for frame in video1_frames:
+        >>>     results = process_frame_2d_yolo(frame, yolo_model, mirror_map,
+        >>>                                      enable_tracking=True)
+        >>>
+        >>> # Reset tracking before processing a new sequence
+        >>> reset_yolo_tracking(yolo_model)
+        >>>
+        >>> # Process second video sequence with fresh tracking IDs
+        >>> for frame in video2_frames:
+        >>>     results = process_frame_2d_yolo(frame, yolo_model, mirror_map,
+        >>>                                      enable_tracking=True)
+    """
+    # Reset the predictor which contains the tracker state
+    # This forces YOLO to reinitialize tracking on the next call
+    if hasattr(yolo_pose_model, 'predictor') and yolo_pose_model.predictor is not None:
+        # Try to reset trackers list if it exists
+        if hasattr(yolo_pose_model.predictor, 'trackers'):
+            yolo_pose_model.predictor.trackers = []
+        # Alternatively, reset the entire predictor
+        yolo_pose_model.predictor = None
+
+
 def process_frame_2d_yolo(
     frames: Union[torch.Tensor, np.ndarray, Image.Image],
     yolo_pose_model,
@@ -995,7 +1032,8 @@ def process_frame_2d_yolo(
         - YOLO outputs 17 keypoints in COCO format
         - This function maps them to 13 joints by excluding eyes (indices 1-2) and ears (indices 3-4)
         - No uncertainty quantification or OOD detection is performed
-        - Tracking requires persist=True to maintain IDs across frames
+        - When tracking is enabled and batch size > 1, frames are processed sequentially
+          to maintain proper tracking state across frames
     """
     t0 = time()
 
@@ -1020,8 +1058,21 @@ def process_frame_2d_yolo(
     B = frames.shape[0]
 
     # Run YOLO pose estimation with or without tracking
-    if enable_tracking:
-        # Use tracking mode with persist=True
+    # When tracking is enabled and B > 1, loop through frames sequentially
+    if enable_tracking and B > 1:
+        # Process frames one at a time to maintain tracking state
+        results = []
+        for i in range(B):
+            frame_result = yolo_pose_model.track(
+                frames[i:i+1],
+                conf=confidence_threshold,
+                verbose=verbose,
+                persist=True,
+                tracker=tracker_config
+            )
+            results.extend(frame_result)
+    elif enable_tracking:
+        # Single frame with tracking
         results = yolo_pose_model.track(
             frames,
             conf=confidence_threshold,
@@ -1030,7 +1081,7 @@ def process_frame_2d_yolo(
             tracker=tracker_config
         )
     else:
-        # Use regular prediction mode
+        # Regular prediction mode (can process batch at once)
         results = yolo_pose_model.predict(
             frames,
             conf=confidence_threshold,
@@ -1163,6 +1214,10 @@ def process_frame_3d_yolo(
         - keypoints_2d: 2D joint coordinates from left camera [B, 13, 2]
         - uncertainties_2d: Placeholder uncertainties from left camera [B, 13, 2]
         - covariance_xy: Placeholder covariance from left camera [B, 13]
+
+    Note:
+        - When tracking is enabled and B > 1, stereo pairs are processed sequentially
+          to maintain proper tracking state across frame pairs
     """
     assert len(frames) >= 2
     assert len(frames) % 2 == 0
@@ -1179,27 +1234,57 @@ def process_frame_3d_yolo(
     # Convert frames to tensor if needed
     if isinstance(frames, list):
         first_frame = np.array(frames[0])
-        np_frames = np.zeros([2 * B, first_frame.shape[0], first_frame.shape[1], first_frame.shape[2]], dtype=np.float32)
+        np_frames = np.zeros(
+            [2 * B, first_frame.shape[0], first_frame.shape[1], first_frame.shape[2]],
+            dtype=np.float32
+        )
         for i in range(2 * B):
             new_frame = np.array(frames[i])
             if new_frame.shape != first_frame.shape:
                 if verbose:
-                    print(f"New frame shape {new_frame.shape}, first frame shape {first_frame.shape}, adjusting new frame.")
+                    print(f"New frame shape {new_frame.shape}, first frame shape "
+                          f"{first_frame.shape}, adjusting new frame.")
                 new_frame = new_frame[:first_frame.shape[0], :first_frame.shape[1]]
             np_frames[i] = new_frame
         frames = torch.from_numpy(np_frames).to(device)
 
     # Run 2D pose estimation on both cameras
-    batch_prediction = process_frame_2d_yolo(
-        frames=frames,
-        yolo_pose_model=yolo_pose_model,
-        mirror_map=mirror_map,
-        enable_tracking=enable_tracking,
-        confidence_threshold=confidence_threshold,
-        verbose=verbose,
-        device=device,
-        tracker_config=tracker_config
-    )
+    # If tracking is enabled and B > 1, process stereo pairs sequentially
+    if enable_tracking and B > 1:
+        # Process each stereo pair sequentially
+        all_predictions = []
+        for i in range(B):
+            # Extract stereo pair [left, right]
+            stereo_pair = torch.stack([frames[2*i], frames[2*i+1]])
+            pair_prediction = process_frame_2d_yolo(
+                frames=stereo_pair,
+                yolo_pose_model=yolo_pose_model,
+                mirror_map=mirror_map,
+                enable_tracking=enable_tracking,
+                confidence_threshold=confidence_threshold,
+                verbose=verbose,
+                device=device,
+                tracker_config=tracker_config
+            )
+            all_predictions.append(pair_prediction)
+
+        # Combine predictions from all stereo pairs
+        batch_prediction = {
+            key: torch.cat([pred[key] for pred in all_predictions], dim=0)
+            for key in all_predictions[0].keys()
+        }
+    else:
+        # Process all frames at once (either single pair or tracking disabled)
+        batch_prediction = process_frame_2d_yolo(
+            frames=frames,
+            yolo_pose_model=yolo_pose_model,
+            mirror_map=mirror_map,
+            enable_tracking=enable_tracking,
+            confidence_threshold=confidence_threshold,
+            verbose=verbose,
+            device=device,
+            tracker_config=tracker_config
+        )
 
     # Reshape to separate left and right cameras
     both_pose = batch_prediction['keypoints'].reshape(B, 2, 13, 2)
@@ -1291,6 +1376,10 @@ def process_frame_3d_from_rgbd_yolo(
         - keypoints_2d: 2D joint coordinates [B, 13, 2]
         - uncertainties_2d: 2D uncertainties [B, 13, 2]
         - covariance_xy: 2D covariance (x-y) [B, 13]
+
+    Note:
+        - When tracking is enabled and B > 1, frames are processed sequentially
+          to maintain proper tracking state across frames
     """
     # Convert to tensors if needed
     if not isinstance(rgb_frames, torch.Tensor):
@@ -1299,7 +1388,7 @@ def process_frame_3d_from_rgbd_yolo(
     if not isinstance(depth_frames, torch.Tensor):
         depth_frames = torch.from_numpy(np.array(depth_frames)).to(device).float()
 
-    # Run 2D pose estimation
+    # Run 2D pose estimation (handles sequential processing internally if B > 1)
     batch_prediction = process_frame_2d_yolo(
         frames=rgb_frames,
         yolo_pose_model=yolo_pose_model,
