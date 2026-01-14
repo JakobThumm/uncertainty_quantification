@@ -948,3 +948,397 @@ def update_motion_prediction_buffer(
         motion_uncertainty_buffer = motion_uncertainty_buffer.at[-1].set(jnp.zeros_like(motion_uncertainty_buffer[-1]))
 
     return motion_prediction_buffer, motion_uncertainty_buffer, False
+
+
+def process_frame_2d_yolo(
+    frames: Union[torch.Tensor, np.ndarray, Image.Image],
+    yolo_pose_model,
+    mirror_map,
+    enable_tracking: bool = True,
+    confidence_threshold: float = YOLO_CONFIDENCE_THRESHOLD,
+    verbose: bool = False,
+    device: str = 'cpu',
+    tracker_config: str = 'botsort.yaml'
+) -> dict:
+    """
+    Process frames using YOLO's built-in pose estimation and optional tracking.
+
+    This function uses YOLO's end-to-end pose estimation without OOD detection.
+    YOLO outputs 17 keypoints which are mapped to 13 joints (excluding eyes and ears).
+
+    Args:
+        frames: Input frame images (torch.Tensor [B, H, W, C], np.ndarray, or PIL Image)
+        yolo_pose_model: YOLO pose estimation model (e.g., YOLO11-pose)
+        mirror_map: Joint mapping to correct left/right swapping
+        enable_tracking: Whether to enable multi-object tracking with persistent IDs
+        confidence_threshold: Confidence threshold for pose detection
+        verbose: Print debug information
+        device: Device to place output tensors on ('cpu' or 'cuda')
+        tracker_config: Tracker configuration file (e.g., 'botsort.yaml', 'bytetrack.yaml')
+
+    Returns:
+        Dict containing for each detected person:
+            - 'keypoints': Joint coordinates [B, 13, 2]
+            - 'uncertainties': Placeholder zeros (YOLO doesn't provide uncertainties) [B, 13, 2]
+            - 'covariance': Placeholder zeros [B, 13]
+            - 'covariance_matrix': Placeholder zeros [B, 13, 2, 2]
+            - 'bbox': Bounding boxes [B, 4] in format [x1, y1, x2, y2]
+            - 'center': Centers of bounding boxes [B, 2]
+            - 'scale': Width and height of bounding boxes [B, 2]
+            - 'confidence': Keypoint confidence scores [B, 13]
+            - 'track_id': Track IDs if tracking enabled, otherwise -1 [B]
+            - 'ood_score': Placeholder zeros [B]
+            - 'is_ood': Placeholder False [B]
+            - 'mask': Whether a human was detected [B]
+
+    Note:
+        - YOLO outputs 17 keypoints in COCO format
+        - This function maps them to 13 joints by excluding eyes (indices 1-2) and ears (indices 3-4)
+        - No uncertainty quantification or OOD detection is performed
+        - Tracking requires persist=True to maintain IDs across frames
+    """
+    t0 = time()
+
+    # Convert frames to appropriate format
+    if isinstance(frames, Image.Image):
+        frames = np.array(frames)
+
+    if isinstance(frames, np.ndarray):
+        # Convert BGR to RGB if needed and normalize
+        if frames.ndim == 3:
+            frames = np.expand_dims(frames, axis=0)  # Add batch dimension
+        frames = torch.from_numpy(frames).to(device)
+
+    if isinstance(frames, torch.Tensor):
+        # Ensure correct format [B, H, W, C]
+        if frames.ndim == 3:
+            frames = frames.unsqueeze(0)
+        # Normalize if needed
+        if torch.mean(frames) > 2.0:
+            frames = frames / 255.0
+
+    B = frames.shape[0]
+
+    # Run YOLO pose estimation with or without tracking
+    if enable_tracking:
+        # Use tracking mode with persist=True
+        results = yolo_pose_model.track(
+            frames,
+            conf=confidence_threshold,
+            verbose=verbose,
+            persist=True,
+            tracker=tracker_config
+        )
+    else:
+        # Use regular prediction mode
+        results = yolo_pose_model.predict(
+            frames,
+            conf=confidence_threshold,
+            verbose=verbose
+        )
+
+    # Initialize output tensors
+    keypoints_13 = torch.zeros((B, 13, 2), device=device)
+    confidences_13 = torch.zeros((B, 13), device=device)
+    bboxes = torch.zeros((B, 4), device=device)
+    centers = torch.zeros((B, 2), device=device)
+    scales = torch.zeros((B, 2), device=device)
+    track_ids = torch.full((B,), -1, dtype=torch.long, device=device)
+    mask = torch.zeros(B, dtype=torch.bool, device=device)
+
+    # Process results for each frame in batch
+    for idx, result in enumerate(results):
+        if result.keypoints is not None and len(result.keypoints) > 0:
+            # Take first detected person (for consistency with existing pipeline)
+            # YOLO keypoints format: [N_persons, 17, 3] where last dim is [x, y, confidence]
+            kpts = result.keypoints.data[0]  # [17, 3] - first person
+
+            # Extract x, y coordinates [17, 2]
+            kpts_xy = kpts[:, :2].cpu()
+
+            # Extract confidence scores [17]
+            kpts_conf = kpts[:, 2].cpu()
+
+            # Map from 17 keypoints to 13 keypoints
+            keypoints_13[idx] = kpts_xy[JOINT_IDX_13_MODEL]
+            confidences_13[idx] = kpts_conf[JOINT_IDX_13_MODEL]
+
+            # Extract bounding box
+            if result.boxes is not None and len(result.boxes) > 0:
+                bbox = result.boxes.xyxy[0].cpu()  # [x1, y1, x2, y2]
+                bboxes[idx] = bbox
+
+                # Compute center and scale
+                x1, y1, x2, y2 = bbox
+                centers[idx] = torch.tensor([
+                    (x1 + x2) / 2,
+                    (y1 + y2) / 2
+                ], device=device)
+                scales[idx] = torch.tensor([
+                    x2 - x1,
+                    y2 - y1
+                ], device=device)
+
+                # Extract track ID if available
+                if enable_tracking and hasattr(result.boxes, 'id') and result.boxes.id is not None:
+                    track_ids[idx] = int(result.boxes.id[0].cpu())
+
+                mask[idx] = True
+
+    # Apply mirror mapping to keypoints
+    keypoints_13 = joint_mapping(keypoints_13.unsqueeze(0), mirror_map).squeeze(0)
+    confidences_13 = joint_mapping(confidences_13.unsqueeze(0).unsqueeze(-1), mirror_map).squeeze(0).squeeze(-1)
+
+    # Create placeholder uncertainties and covariances (YOLO doesn't provide these)
+    # We could potentially use (1 - confidence) as a proxy for uncertainty
+    uncertainties = torch.ones((B, 13, 2), device=device) * 10.0  # Default 10 pixel std dev
+    # Optionally: scale uncertainty by confidence
+    # uncertainties = uncertainties * (1 - confidences_13.unsqueeze(-1))
+
+    covariance = torch.zeros((B, 13), device=device)  # No covariance information
+
+    # Construct per-joint 2x2 covariance matrices (diagonal only)
+    joint_covariances = torch.zeros((B, 13, 2, 2), device=device)
+    joint_covariances[:, :, 0, 0] = torch.pow(uncertainties[:, :, 0], 2)
+    joint_covariances[:, :, 1, 1] = torch.pow(uncertainties[:, :, 1], 2)
+
+    # Prepare output dictionary
+    pose_estimations = {
+        'keypoints': keypoints_13,
+        'uncertainties': uncertainties,
+        'covariance': covariance,
+        'covariance_matrix': joint_covariances,
+        'bbox': bboxes,
+        'center': centers,
+        'scale': scales,
+        'confidence': confidences_13,
+        'track_id': track_ids,
+        'ood_score': torch.zeros(B, device=device),
+        'is_ood': torch.zeros(B, dtype=torch.bool, device=device),
+        'mask': mask
+    }
+
+    if verbose:
+        t1 = time()
+        print(f"YOLO pose estimation time: {t1 - t0:.3f} seconds")
+        if enable_tracking:
+            print(f"Detected persons with track IDs: {track_ids[mask].tolist()}")
+
+    return pose_estimations
+
+
+def process_frame_3d_yolo(
+    frames: Union[torch.Tensor, np.ndarray],
+    projection_matrices: list,
+    yolo_pose_model,
+    mirror_map,
+    enable_tracking: bool = True,
+    confidence_threshold: float = YOLO_CONFIDENCE_THRESHOLD,
+    verbose: bool = False,
+    device: str = 'cpu',
+    tracker_config: str = 'botsort.yaml'
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Process stereo frames using YOLO pose estimation and triangulate to 3D.
+
+    Args:
+        frames: Input frame images from left and right cameras. Shape: [2*B, H, W, C]
+                The %2 = 0 elements correspond to the left camera,
+                The %2 = 1 elements correspond to the right camera.
+        projection_matrices: The two camera projection matrices for triangulation [P1, P2]
+        yolo_pose_model: YOLO pose estimation model
+        mirror_map: Joint mapping to correct left/right swapping
+        enable_tracking: Whether to enable multi-object tracking
+        confidence_threshold: Confidence threshold for pose detection
+        verbose: Print debug information
+        device: Device to place output tensors on ('cpu' or 'cuda')
+        tracker_config: Tracker configuration file
+
+    Returns:
+        - points_3d: 3D joint coordinates [B, 13, 3]
+        - C_3d_all: 3D covariance matrices [B, 13, 3, 3] (minimal - no uncertainty from YOLO)
+        - ood_score: Placeholder zeros [B]
+        - is_ood: Placeholder False
+        - human_detected: Boolean indicating if humans were detected
+        - keypoints_2d: 2D joint coordinates from left camera [B, 13, 2]
+        - uncertainties_2d: Placeholder uncertainties from left camera [B, 13, 2]
+        - covariance_xy: Placeholder covariance from left camera [B, 13]
+    """
+    assert len(frames) >= 2
+    assert len(frames) % 2 == 0
+    assert len(projection_matrices) == 2
+
+    P1 = projection_matrices[0]
+    P2 = projection_matrices[1]
+    if isinstance(P1, np.ndarray):
+        P1 = torch.from_numpy(P1).to(device)
+        P2 = torch.from_numpy(P2).to(device)
+
+    B = len(frames) // 2
+
+    # Convert frames to tensor if needed
+    if isinstance(frames, list):
+        first_frame = np.array(frames[0])
+        np_frames = np.zeros([2 * B, first_frame.shape[0], first_frame.shape[1], first_frame.shape[2]], dtype=np.float32)
+        for i in range(2 * B):
+            new_frame = np.array(frames[i])
+            if new_frame.shape != first_frame.shape:
+                if verbose:
+                    print(f"New frame shape {new_frame.shape}, first frame shape {first_frame.shape}, adjusting new frame.")
+                new_frame = new_frame[:first_frame.shape[0], :first_frame.shape[1]]
+            np_frames[i] = new_frame
+        frames = torch.from_numpy(np_frames).to(device)
+
+    # Run 2D pose estimation on both cameras
+    batch_prediction = process_frame_2d_yolo(
+        frames=frames,
+        yolo_pose_model=yolo_pose_model,
+        mirror_map=mirror_map,
+        enable_tracking=enable_tracking,
+        confidence_threshold=confidence_threshold,
+        verbose=verbose,
+        device=device,
+        tracker_config=tracker_config
+    )
+
+    # Reshape to separate left and right cameras
+    both_pose = batch_prediction['keypoints'].reshape(B, 2, 13, 2)
+    both_uncertainty = batch_prediction['uncertainties'].reshape(B, 2, 13, 2)
+    both_covariance_matrix = batch_prediction['covariance_matrix'].reshape(B, 2, 13, 2, 2)
+    both_mask = batch_prediction['mask'].reshape(B, 2)
+
+    # Split left and right
+    left_pose = both_pose[:, 0]
+    left_uncertainty = both_uncertainty[:, 0]
+    left_covariance_matrix = both_covariance_matrix[:, 0]
+    left_human_detected = both_mask[:, 0]
+
+    right_pose = both_pose[:, 1]
+    right_uncertainty = both_uncertainty[:, 1]
+    right_covariance_matrix = both_covariance_matrix[:, 1]
+    right_human_detected = both_mask[:, 1]
+
+    # Human detected only if both cameras detect
+    human_detected = torch.logical_and(left_human_detected, right_human_detected)
+
+    # Zero out invalid detections
+    left_pose[human_detected == 0] = 0.0
+    right_pose[human_detected == 0] = 0.0
+    left_uncertainty[human_detected == 0] = 0.0
+    right_uncertainty[human_detected == 0] = 0.0
+    left_covariance_matrix[human_detected == 0] = 0.0
+    right_covariance_matrix[human_detected == 0] = 0.0
+
+    # Create joint covariance matrices for triangulation
+    C_2D = create_joint_covariance_batched(
+        mapped_uncertainty_cam1=left_uncertainty,
+        mapped_covariance_cam1=left_covariance_matrix[:, :, 0, 1],
+        mapped_uncertainty_cam2=right_uncertainty,
+        mapped_covariance_cam2=right_covariance_matrix[:, :, 0, 1],
+        cross_covariance=torch.zeros((B, 13, 2, 2), device=device)
+    )
+
+    # Triangulate to 3D
+    points_3d, C_3d_all = triangulate_points_with_covariance_batched(
+        left_pose, right_pose, P1, P2, C_2D
+    )
+
+    # Extract outputs
+    keypoints_2d = left_pose
+    uncertainties_2d = left_uncertainty
+    covariance_xy = left_covariance_matrix[:, :, 0, 1]
+    ood_score = torch.zeros(B, device=device)
+    is_ood = torch.zeros(B, dtype=torch.bool, device=device)
+
+    return points_3d, C_3d_all, ood_score, bool(is_ood[0]), bool(human_detected[0]), keypoints_2d, uncertainties_2d, covariance_xy
+
+
+def process_frame_3d_from_rgbd_yolo(
+    rgb_frames: Union[torch.Tensor, np.ndarray],
+    depth_frames: Union[torch.Tensor, np.ndarray],
+    camera_intrinsics: dict,
+    yolo_pose_model,
+    mirror_map,
+    enable_tracking: bool = True,
+    confidence_threshold: float = YOLO_CONFIDENCE_THRESHOLD,
+    verbose: bool = False,
+    device: str = 'cpu',
+    depth_uncertainty: float = 0.01,
+    tracker_config: str = 'botsort.yaml'
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Process RGB-D frames using YOLO pose estimation and lift to 3D using depth.
+
+    Args:
+        rgb_frames: Input RGB images [B, H, W, C]
+        depth_frames: Input aligned depth images [B, H, W] in mm or meters
+        camera_intrinsics: Dict with keys 'fx', 'fy', 'cx', 'cy'
+        yolo_pose_model: YOLO pose estimation model
+        mirror_map: Joint mapping to correct left/right swapping
+        enable_tracking: Whether to enable multi-object tracking
+        confidence_threshold: Confidence threshold for pose detection
+        verbose: Print debug information
+        device: Device to place output tensors on ('cpu' or 'cuda')
+        depth_uncertainty: Uncertainty in depth measurement (std dev in meters)
+        tracker_config: Tracker configuration file
+
+    Returns:
+        - points_3d: 3D joint coordinates [B, 13, 3]
+        - C_3d_all: 3D covariance matrices [B, 13, 3, 3]
+        - ood_score: Placeholder zeros [B]
+        - is_ood: Placeholder False
+        - human_detected: Boolean indicating if humans were detected
+        - keypoints_2d: 2D joint coordinates [B, 13, 2]
+        - uncertainties_2d: 2D uncertainties [B, 13, 2]
+        - covariance_xy: 2D covariance (x-y) [B, 13]
+    """
+    # Convert to tensors if needed
+    if not isinstance(rgb_frames, torch.Tensor):
+        rgb_frames = torch.from_numpy(np.array(rgb_frames)).to(device).float()
+
+    if not isinstance(depth_frames, torch.Tensor):
+        depth_frames = torch.from_numpy(np.array(depth_frames)).to(device).float()
+
+    # Run 2D pose estimation
+    batch_prediction = process_frame_2d_yolo(
+        frames=rgb_frames,
+        yolo_pose_model=yolo_pose_model,
+        mirror_map=mirror_map,
+        enable_tracking=enable_tracking,
+        confidence_threshold=confidence_threshold,
+        verbose=verbose,
+        device=device,
+        tracker_config=tracker_config
+    )
+
+    # Extract 2D predictions
+    keypoints_2d = batch_prediction['keypoints']
+    uncertainties_2d = batch_prediction['uncertainties']
+    covariance_2d = batch_prediction['covariance_matrix'][:, :, 0, 1]
+    human_detected = batch_prediction['mask']
+
+    # Lift 2D to 3D using depth
+    points_3d, valid_depth = lift_2d_to_3d_with_depth(
+        keypoints_2d, depth_frames, camera_intrinsics, device=device
+    )
+
+    # Propagate uncertainty to 3D
+    C_3d_all = propagate_uncertainty_2d_to_3d(
+        keypoints_2d, uncertainties_2d, covariance_2d,
+        depth_frames, camera_intrinsics,
+        depth_uncertainty=depth_uncertainty,
+        device=device
+    )
+
+    # Mark invalid joints
+    human_detected_expanded = human_detected.unsqueeze(1)
+    combined_valid = valid_depth & human_detected_expanded
+
+    points_3d = points_3d * combined_valid.unsqueeze(-1).float()
+    C_3d_all = C_3d_all * combined_valid.unsqueeze(-1).unsqueeze(-1).float()
+
+    # Prepare outputs
+    ood_score = torch.zeros(keypoints_2d.shape[0], device=device)
+    is_ood = torch.zeros(keypoints_2d.shape[0], dtype=torch.bool, device=device)
+
+    return points_3d, C_3d_all, ood_score, bool(is_ood[0]), bool(human_detected[0]), keypoints_2d, uncertainties_2d, covariance_2d
