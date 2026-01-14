@@ -406,7 +406,7 @@ def process_frame_3d(
     mirror_map, score_fn=None,
     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
     num_output_joints=17, use_gpu_acceleration=True, verbose=True, device='cpu'
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool, torch.Tensor, torch.Tensor, torch.Tensor]: 
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: 
     """
     Process a single frame to extract pose with uncertainty (JAX version).
 
@@ -532,7 +532,7 @@ def process_frame_3d(
     uncertainties_2d = left_uncertainty  # [B, 13, 2]
     covariance_xy = left_covariance_matrix[:, :, 0, 1]  # [B, 13] (x-y covariance)
 
-    return points_3d, C_3d_all, ood_score, bool(is_ood), bool(human_detected), keypoints_2d, uncertainties_2d, covariance_xy
+    return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy
 
 
 def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device='cpu'):
@@ -1037,25 +1037,44 @@ def process_frame_2d_yolo(
     """
     t0 = time()
 
-    # Convert frames to appropriate format
+    # YOLO can handle various input formats, but tensors must be in BCHW with specific sizes
+    # For simplicity, convert everything to numpy arrays and let YOLO handle preprocessing
+    original_format = None
     if isinstance(frames, Image.Image):
-        frames = np.array(frames)
-
-    if isinstance(frames, np.ndarray):
-        # Convert BGR to RGB if needed and normalize
+        frames_for_yolo = [np.array(frames)]
+        B = 1
+        original_format = 'pil'
+    elif isinstance(frames, np.ndarray):
         if frames.ndim == 3:
-            frames = np.expand_dims(frames, axis=0)  # Add batch dimension
-        frames = torch.from_numpy(frames).to(device)
-
-    if isinstance(frames, torch.Tensor):
-        # Ensure correct format [B, H, W, C]
+            frames_for_yolo = [frames]
+            B = 1
+        else:
+            # Split batch into list of numpy arrays
+            frames_for_yolo = [frames[i] for i in range(frames.shape[0])]
+            B = frames.shape[0]
+        original_format = 'numpy'
+    elif isinstance(frames, torch.Tensor):
+        # Convert tensor to numpy arrays for YOLO
         if frames.ndim == 3:
             frames = frames.unsqueeze(0)
-        # Normalize if needed
-        if torch.mean(frames) > 2.0:
-            frames = frames / 255.0
 
-    B = frames.shape[0]
+        # Handle both BHWC and BCHW formats
+        if frames.shape[1] == 3:  # Already in BCHW format
+            frames_np = frames.permute(0, 2, 3, 1).cpu().numpy()
+        else:  # BHWC format
+            frames_np = frames.cpu().numpy()
+
+        # Convert to uint8 if normalized
+        if frames_np.max() <= 1.0:
+            frames_np = (frames_np * 255).astype(np.uint8)
+        else:
+            frames_np = frames_np.astype(np.uint8)
+
+        frames_for_yolo = [frames_np[i] for i in range(frames_np.shape[0])]
+        B = frames_np.shape[0]
+        original_format = 'torch'
+    else:
+        raise ValueError(f"Unsupported frame type: {type(frames)}")
 
     # Run YOLO pose estimation with or without tracking
     # When tracking is enabled and B > 1, loop through frames sequentially
@@ -1064,29 +1083,44 @@ def process_frame_2d_yolo(
         results = []
         for i in range(B):
             frame_result = yolo_pose_model.track(
-                frames[i:i+1],
+                frames_for_yolo[i],
                 conf=confidence_threshold,
                 verbose=verbose,
                 persist=True,
-                tracker=tracker_config
+                tracker=tracker_config,
+                device=device
             )
             results.extend(frame_result)
     elif enable_tracking:
         # Single frame with tracking
         results = yolo_pose_model.track(
-            frames,
+            frames_for_yolo[0] if B == 1 else frames_for_yolo,
             conf=confidence_threshold,
             verbose=verbose,
             persist=True,
-            tracker=tracker_config
+            tracker=tracker_config,
+            device=device
         )
     else:
         # Regular prediction mode (can process batch at once)
-        results = yolo_pose_model.predict(
-            frames,
-            conf=confidence_threshold,
-            verbose=verbose
-        )
+        if B == 1:
+            results = yolo_pose_model.predict(
+                frames_for_yolo[0],
+                conf=confidence_threshold,
+                verbose=verbose,
+                device=device
+            )
+        else:
+            # Process multiple frames
+            results = []
+            for frame in frames_for_yolo:
+                frame_result = yolo_pose_model.predict(
+                    frame,
+                    conf=confidence_threshold,
+                    verbose=verbose,
+                    device=device
+                )
+                results.extend(frame_result)
 
     # Initialize output tensors
     keypoints_13 = torch.zeros((B, 13, 2), device=device)
@@ -1104,11 +1138,11 @@ def process_frame_2d_yolo(
             # YOLO keypoints format: [N_persons, 17, 3] where last dim is [x, y, confidence]
             kpts = result.keypoints.data[0]  # [17, 3] - first person
 
-            # Extract x, y coordinates [17, 2]
-            kpts_xy = kpts[:, :2].cpu()
+            # Extract x, y coordinates [17, 2] and move to correct device
+            kpts_xy = kpts[:, :2].to(device)
 
-            # Extract confidence scores [17]
-            kpts_conf = kpts[:, 2].cpu()
+            # Extract confidence scores [17] and move to correct device
+            kpts_conf = kpts[:, 2].to(device)
 
             # Map from 17 keypoints to 13 keypoints
             keypoints_13[idx] = kpts_xy[JOINT_IDX_13_MODEL]
@@ -1116,29 +1150,25 @@ def process_frame_2d_yolo(
 
             # Extract bounding box
             if result.boxes is not None and len(result.boxes) > 0:
-                bbox = result.boxes.xyxy[0].cpu()  # [x1, y1, x2, y2]
+                bbox = result.boxes.xyxy[0].to(device)  # [x1, y1, x2, y2]
                 bboxes[idx] = bbox
 
                 # Compute center and scale
                 x1, y1, x2, y2 = bbox
-                centers[idx] = torch.tensor([
-                    (x1 + x2) / 2,
-                    (y1 + y2) / 2
-                ], device=device)
-                scales[idx] = torch.tensor([
-                    x2 - x1,
-                    y2 - y1
-                ], device=device)
+                centers[idx, 0] = (x1 + x2) / 2
+                centers[idx, 1] = (y1 + y2) / 2
+                scales[idx, 0] = x2 - x1
+                scales[idx, 1] = y2 - y1
 
                 # Extract track ID if available
                 if enable_tracking and hasattr(result.boxes, 'id') and result.boxes.id is not None:
-                    track_ids[idx] = int(result.boxes.id[0].cpu())
+                    track_ids[idx] = int(result.boxes.id[0].item())
 
                 mask[idx] = True
 
     # Apply mirror mapping to keypoints
-    keypoints_13 = joint_mapping(keypoints_13.unsqueeze(0), mirror_map).squeeze(0)
-    confidences_13 = joint_mapping(confidences_13.unsqueeze(0).unsqueeze(-1), mirror_map).squeeze(0).squeeze(-1)
+    keypoints_13 = joint_mapping(keypoints_13, mirror_map)
+    confidences_13 = joint_mapping(confidences_13.unsqueeze(-1), mirror_map).squeeze(-1)
 
     # Create placeholder uncertainties and covariances (YOLO doesn't provide these)
     # We could potentially use (1 - confidence) as a proxy for uncertainty

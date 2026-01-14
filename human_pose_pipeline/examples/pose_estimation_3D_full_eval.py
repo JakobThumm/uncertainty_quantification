@@ -174,7 +174,7 @@ def main():
             # Interleave left and right frames
             interleaved_frames = [x for pair in zip(left_frames, right_frames) for x in pair]
 
-            points_3d, C_3d_all, ood_score, is_ood = process_frame_3d(
+            points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy = process_frame_3d(
                 frames=interleaved_frames,
                 projection_matrices=projection_matrices,
                 pose_estimation_jit_fn=pose_estimation_jit_fn,
