@@ -121,6 +121,15 @@ We have two things:
             Average percentage of keypoints within 3 std: 96.87%
             Average percentage of keypoints within 4 std: 98.85%
         ==> Here, the accuracy of the jax_resnet50_regressflow and finetuned_h36m_regressflow_with_unc roughly match.
+      - RESULTS YOLOv26 with sigma prediction:
+          Frames processed:        4998
+          Joints evaluated:        64974
+          Average MPJPE:           13.98 px
+          Within 1 std (68%):      97.28%
+          Within 2 std (95%):      99.41%
+          Within 3 std (99.7%):    99.88%
+          Within 4 std (99.99%):   100.00%
+        ==> Prediction accuracy is worse than our previous model but that is expected as not fine-tuned on H36M data. Uncertainty is a bit too high, but useable.
     - [x] Investigate the uncertainty coverage for the 2D Pose estimation in pytorch vs. Jax.
     - [x] Investigate prediction accuracy 3D Pose estimation in pytorch vs. Jax.
         Results Marian Pytorch on 10 validation files with 1000 max_frames (yolo threshold = 0.8) (Model: estimation_model_finetuned_on_h36m.pth):

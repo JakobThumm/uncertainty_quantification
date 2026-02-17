@@ -56,6 +56,23 @@ python score_model.py --ID_dataset ImageNet --OOD_datasets SVHN-256 FOOD101-256 
 
 The repository includes a human pose estimation pipeline for uncertainty quantification on pose prediction tasks.
 
+## Setup
+
+The pipeline uses a custom fork of ultralytics located in `ultralytics/` that extends the YOLO v26 pose head (`Pose26`) to output per-keypoint uncertainty values (`sigma_x`, `sigma_y`). Install it as an editable package so that `import ultralytics` resolves to the fork throughout the entire environment:
+
+```bash
+cd ultralytics
+python3 -m pip install -e .
+cd ..
+```
+
+This replaces any previously pip-installed ultralytics version. To verify the correct version is active:
+
+```bash
+python3 -c "import ultralytics; print(ultralytics.__file__)"
+# Should print: .../uncertainty_quantification/ultralytics/ultralytics/__init__.py
+```
+
 ## Data Preprocessing
 
 Preprocess the H36M dataset for pose estimation:

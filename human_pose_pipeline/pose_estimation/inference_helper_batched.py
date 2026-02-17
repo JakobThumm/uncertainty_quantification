@@ -1125,6 +1125,8 @@ def process_frame_2d_yolo(
     # Initialize output tensors
     keypoints_13 = torch.zeros((B, 13, 2), device=device)
     confidences_13 = torch.zeros((B, 13), device=device)
+    sigmas_13 = torch.zeros((B, 13, 2), device=device)
+    has_sigma = False
     bboxes = torch.zeros((B, 4), device=device)
     centers = torch.zeros((B, 2), device=device)
     scales = torch.zeros((B, 2), device=device)
@@ -1148,6 +1150,12 @@ def process_frame_2d_yolo(
             keypoints_13[idx] = kpts_xy[JOINT_IDX_13_MODEL]
             confidences_13[idx] = kpts_conf[JOINT_IDX_13_MODEL]
 
+            # Extract sigma uncertainties if available (custom Pose26 model)
+            if hasattr(result, 'kpts_sigma') and result.kpts_sigma is not None and len(result.kpts_sigma) > 0:
+                sigma = result.kpts_sigma[0].to(device)  # [17, 2] - first person
+                sigmas_13[idx] = sigma[JOINT_IDX_13_MODEL]
+                has_sigma = True
+
             # Extract bounding box
             if result.boxes is not None and len(result.boxes) > 0:
                 bbox = result.boxes.xyxy[0].to(device)  # [x1, y1, x2, y2]
@@ -1170,13 +1178,15 @@ def process_frame_2d_yolo(
     keypoints_13 = joint_mapping(keypoints_13, mirror_map)
     confidences_13 = joint_mapping(confidences_13.unsqueeze(-1), mirror_map).squeeze(-1)
 
-    # Create placeholder uncertainties and covariances (YOLO doesn't provide these)
-    # We could potentially use (1 - confidence) as a proxy for uncertainty
-    uncertainties = torch.ones((B, 13, 2), device=device) * 10.0  # Default 10 pixel std dev
-    # Optionally: scale uncertainty by confidence
-    # uncertainties = uncertainties * (1 - confidences_13.unsqueeze(-1))
+    # Use actual sigma values from the custom Pose26 model if available,
+    # otherwise fall back to a placeholder (10 pixel std dev)
+    if has_sigma:
+        sigmas_13 = joint_mapping(sigmas_13, mirror_map)
+        uncertainties = sigmas_13
+    else:
+        uncertainties = torch.ones((B, 13, 2), device=device) * 10.0
 
-    covariance = torch.zeros((B, 13), device=device)  # No covariance information
+    covariance = torch.zeros((B, 13), device=device)  # No x-y covariance from sigma head
 
     # Construct per-joint 2x2 covariance matrices (diagonal only)
     joint_covariances = torch.zeros((B, 13, 2, 2), device=device)

@@ -24,6 +24,10 @@ import torch
 # Add parent directory to path
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 sys.path.insert(0, root_dir)
+# The ultralytics/ subfolder is a namespace package (no __init__.py at repo root level),
+# which shadows the editable install when running from this directory.
+# Insert the fork's repo root explicitly so the real package is found first.
+sys.path.insert(0, os.path.join(root_dir, 'ultralytics'))
 
 from ultralytics import YOLO
 from human_pose_pipeline.pose_estimation.inference_helper_batched import (
@@ -274,7 +278,7 @@ def main():
 
     try:
         # Configuration
-        yolo_model_name = "yolo11n-pose.pt"  # Options: yolo11n/s/m/l/x-pose.pt
+        yolo_model_name = "yolo26n-pose.pt"  # Options: yolo26n/s/m/l/x-pose.pt (auto-downloaded)
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         enable_tracking_test = True
 
@@ -342,6 +346,11 @@ def main():
               f"{np.max(pred_pose_13):.1f}]")
         print(f"  - Mean confidence: {np.mean(confidence_scores):.3f}")
 
+        # Extract and display sigma uncertainty info
+        pred_uncertainties_raw = pose_predictions['uncertainties'][0].cpu().numpy()  # [13, 2]
+        print(f"  - Mean sigma_x: {np.mean(pred_uncertainties_raw[:, 0]):.2f} px")
+        print(f"  - Mean sigma_y: {np.mean(pred_uncertainties_raw[:, 1]):.2f} px")
+
         # Compute evaluation metrics
         mpjpe_score = compute_mpjpe(pred_pose_13, gt_pose_13)
 
@@ -356,9 +365,9 @@ def main():
         save_path = (f"visualizations/debug_yolo_pose_visualization_"
                     f"frame_{sample['frame_idx']}.png")
 
-        # YOLO doesn't provide uncertainties, use confidence as proxy
-        pred_uncertainties = np.ones_like(pred_pose_13) * 10.0
-        pred_covariances = np.zeros(13)
+        # Extract sigma_x, sigma_y uncertainties from the custom Pose26 model output
+        pred_uncertainties = pose_predictions['uncertainties'][0].cpu().numpy()  # [13, 2]
+        pred_covariances = np.zeros(13)  # No x-y covariance from the sigma head
 
         visualize_poses_matplotlib(
             image=sample['image'],
@@ -367,7 +376,7 @@ def main():
             pred_uncertainties=pred_uncertainties,
             pred_covariances=pred_covariances,
             save_path=save_path,
-            show_uncertainty=False  # YOLO doesn't provide uncertainty
+            show_uncertainty=True  # Custom Pose26 model provides sigma_x, sigma_y
         )
 
         print("\n" + "=" * 60)
