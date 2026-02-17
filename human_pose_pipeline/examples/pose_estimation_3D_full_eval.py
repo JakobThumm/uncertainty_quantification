@@ -244,9 +244,9 @@ def main():
         true_poses=all_gt_points,
         cov_matrices=all_3d_covariances
     )
-    print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
+    print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, print_per_time_errors=False)
     save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split)
-    print_coverage_stats(coverage_stats)
+    print_coverage_stats(coverage_stats, print_per_time_stats=False)
     save_coverage_stats(coverage_stats, split=split)
 
 

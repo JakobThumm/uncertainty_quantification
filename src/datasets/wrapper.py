@@ -21,6 +21,7 @@ from src.datasets.h36m_motion_prediction import (
     get_h36m_motion_dataset_with_uncertainty,
 )
 from src.datasets.tiger_pose import get_tiger_pose_preprocessed
+from src.datasets.human_rgbd import get_human_rgbd, get_human_rgbd_sequence
 from src.datasets.utils import get_subset_loader
 
 
@@ -406,6 +407,20 @@ def dataloader_from_string(
             shuffle=shuffle,
             seed=seed,
             n_samples=n_samples,
+        )
+    elif dataset_name == "HumanRGBD":
+        train_loader, valid_loader, test_loader = get_human_rgbd(
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            data_path=os.path.join(data_path, "rgbd_test"),
+        )
+    elif dataset_name == "HumanRGBDSequence":
+        train_loader, valid_loader, test_loader = get_human_rgbd_sequence(
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            data_path=os.path.join(data_path, "rgbd_test"),
         )
     else:
         raise ValueError(f"Dataset {dataset_name} is not implemented")

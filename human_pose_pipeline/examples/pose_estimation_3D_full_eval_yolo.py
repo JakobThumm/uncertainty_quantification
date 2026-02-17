@@ -276,8 +276,8 @@ def main():
     print("\n" + "=" * 60)
     print("EVALUATION RESULTS")
     print("=" * 60)
-    print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
-    print_coverage_stats(coverage_stats)
+    print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, print_per_time_errors=False)
+    print_coverage_stats(coverage_stats, print_per_time_stats=False)
 
     # Create output directory with model-specific subdirectory
     model_name = args.yolo_model.replace('.pt', '')
