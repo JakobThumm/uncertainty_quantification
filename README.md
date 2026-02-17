@@ -58,7 +58,17 @@ The repository includes a human pose estimation pipeline for uncertainty quantif
 
 ## Setup
 
-The pipeline uses a custom fork of ultralytics located in `ultralytics/` that extends the YOLO v26 pose head (`Pose26`) to output per-keypoint uncertainty values (`sigma_x`, `sigma_y`). Install it as an editable package so that `import ultralytics` resolves to the fork throughout the entire environment:
+The pipeline uses a custom fork of ultralytics that extends the YOLO v26 pose head (`Pose26`) to output per-keypoint uncertainty values (`sigma_x`, `sigma_y`).
+
+**1. Clone the fork into the repo root:**
+
+```bash
+git clone --branch pose-uncertainty-head https://github.com/JakobThumm/ultralytics.git
+```
+
+This creates the `ultralytics/` directory expected by all pipeline scripts.
+
+**2. Install it as an editable package** so that `import ultralytics` resolves to the fork throughout the entire environment:
 
 ```bash
 cd ultralytics
