@@ -464,7 +464,7 @@ class DCTPoseTransformer(nn.Module):
             # Process uncertainty -> [batch, seq, d_model]
             uncertainty_features = uncertainty_embedding(input_uncertainty)
             # Add to main features
-            x = x + uncertainty_features / self.unit_conversion
+            x = x + uncertainty_features
 
         # Pass through transformer blocks
         features = []
