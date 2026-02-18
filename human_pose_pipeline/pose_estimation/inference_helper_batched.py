@@ -535,7 +535,8 @@ def process_frame_3d(
     return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy
 
 
-def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device='cpu'):
+def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device='cpu',
+                             depth_outlier_threshold=1.5):
     """
     Lift 2D keypoints to 3D using depth information (fully vectorized).
 
@@ -579,11 +580,15 @@ def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device=
     # Using advanced indexing: depth_map[batch_idx, v_idx, u_idx]
     Z = depth_map[batch_indices, v_clamped, u_clamped]
 
-    # Check for valid depth (> 0)
-    valid_depth_values = Z > 0
-
     # Convert depth to meters if in millimeters (depth > 10 means mm)
     Z = torch.where(Z > 10, Z * 0.001, Z)
+
+    # Median-based outlier rejection: compute per-frame median over valid joints,
+    # then discard joints whose depth deviates by more than depth_outlier_threshold.
+    Z_for_median = Z.masked_fill(Z <= 0, float('nan'))
+    Z_median = torch.nanmedian(Z_for_median, dim=1).values  # [B]
+    median_diff = torch.abs(Z - Z_median.unsqueeze(1))      # [B, N_joints]
+    valid_depth_values = (Z > 0) & (median_diff <= depth_outlier_threshold)
 
     # Back-projection formula (vectorized) [B, N_joints]
     X = (u - cx) * Z / fx
@@ -603,7 +608,8 @@ def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device=
 
 def propagate_uncertainty_2d_to_3d(keypoints_2d, uncertainties_2d, covariance_2d,
                                    depth_map, camera_intrinsics,
-                                   depth_uncertainty=0.01, device='cpu'):
+                                   depth_uncertainty=0.01, device='cpu',
+                                   depth_outlier_threshold=1.5):
     """
     Propagate 2D uncertainty to 3D using depth information and Jacobian (fully vectorized).
 
@@ -649,8 +655,11 @@ def propagate_uncertainty_2d_to_3d(keypoints_2d, uncertainties_2d, covariance_2d
     # Convert depth to meters if needed
     Z = torch.where(Z > 10, Z * 0.001, Z)
 
-    # Check for valid depth
-    valid_depth = (Z > 0) & valid_bounds
+    # Median-based outlier rejection (same criterion as lift_2d_to_3d_with_depth)
+    Z_for_median = Z.masked_fill(Z <= 0, float('nan'))
+    Z_median = torch.nanmedian(Z_for_median, dim=1).values  # [B]
+    median_diff = torch.abs(Z - Z_median.unsqueeze(1))      # [B, N_joints]
+    valid_depth = (Z > 0) & (median_diff <= depth_outlier_threshold) & valid_bounds
 
     # Compute Jacobian matrices for all joints [B, N_joints, 3, 3]
     # J = [[Z/fx,     0,         (u-cx)/fx],
@@ -818,6 +827,8 @@ def process_frame_3d_from_rgbd(
     # If human detected, use valid_depth mask
     human_detected_expanded = human_detected.unsqueeze(1)  # [B, 1]
     combined_valid = valid_depth & human_detected_expanded  # [B, N_joints]
+
+    is_ood = torch.logical_or(is_ood, torch.any(torch.logical_not(combined_valid), dim=1))
 
     # Apply mask to zero out invalid joints
     # Use broadcasting: [B, N_joints, 1] for 3D coordinates
@@ -1514,5 +1525,6 @@ def process_frame_3d_from_rgbd_yolo(
     # Prepare outputs
     ood_score = torch.zeros(keypoints_2d.shape[0], device=device)
     is_ood = torch.zeros(keypoints_2d.shape[0], dtype=torch.bool, device=device)
+    is_ood = torch.logical_or(is_ood, torch.any(combined_valid == 0, dim=1))
 
     return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_2d

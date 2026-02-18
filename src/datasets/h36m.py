@@ -661,10 +661,11 @@ class Human36mDatasetEmulatedRGBD(Dataset):
 
         img_size = H36M_IMAGE_SIZE  # (width, height)
         # H36M cameras are ~45° apart (not a classical stereo pair).
-        # alpha=0 / CALIB_ZERO_DISPARITY crops to the tiny overlap region,
-        # leaving most of the output black.  alpha=1 + flags=0 preserves each
-        # camera's full FOV; depth quality is limited by the wide angle but the
-        # rectified images are complete and usable.
+        # alpha=1 + flags=0 preserves each camera's full FOV; rect1 therefore
+        # covers the entire primary scene.  The pair camera needs a large
+        # rectification rotation, so only part of rect2 contains valid pixels
+        # (the rest is black fill).  A validity mask is computed in _compute_depth
+        # via remapping a binary image, and depth is zeroed outside that region.
         R1_rect, R2_rect, P1_rect, P2_rect, _, _, _ = cv2.stereoRectify(
             K1, d1, K2, d2, img_size, R_rel, t_rel,
             flags=0, alpha=1,
@@ -753,6 +754,14 @@ class Human36mDatasetEmulatedRGBD(Dataset):
         rect2 = cv2.remap(frame_pair, stereo_params['map2x'], stereo_params['map2y'],
                           cv2.INTER_LINEAR)
 
+        # Build a pixel-accurate validity mask for rect2: remap a fully-white
+        # source image — output pixels that fall outside the source boundary are
+        # filled with 0 by cv2.remap, so this reliably identifies the valid region
+        # without depending on scene content (which may contain genuine dark areas).
+        ones = np.ones(frame_pair.shape[:2], dtype=np.float32)
+        valid_rect2 = cv2.remap(ones, stereo_params['map2x'], stereo_params['map2y'],
+                                cv2.INTER_NEAREST) > 0.5  # (H, W) bool
+
         scale = self._sgbm_scale
         H_full, W_full = rect1.shape[:2]
         if scale < 1.0:
@@ -782,6 +791,9 @@ class Human36mDatasetEmulatedRGBD(Dataset):
         else:
             depth = depth_small
 
+        # Zero out depth where rect2 had no valid source pixels.
+        depth[~valid_rect2] = 0.0
+
         return rect1, depth
 
     def _load_data(self):
@@ -807,6 +819,8 @@ class Human36mDatasetEmulatedRGBD(Dataset):
                     with CDF(pose_path) as cdf:
                         poses_raw = np.squeeze(cdf['Pose'][:]).reshape(-1, 32, 3)
                     gt_poses_13 = poses_raw[:, JOINT_IDX_17, :][:, JOINT_IDX_13, :]
+                    # Convert to mm
+                    gt_poses_13 *= 1000.0
                 except Exception:
                     gt_poses_13 = None
 
