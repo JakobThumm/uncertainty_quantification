@@ -613,6 +613,26 @@ def initialize_jax_models(checkpoint_path_jax):
     return model_jit_fn, params, batch_stats
 
 
+def _import_yolo():
+    """Import YOLO from the installed ultralytics package.
+
+    The project root contains a local ultralytics/ source tree which shadows
+    the installed wheel when the root is on sys.path.  We temporarily strip
+    the project root from sys.path so that Python resolves ultralytics to the
+    installed package (or any entry that is *not* the project root).
+    """
+    import sys
+    import os
+    _root = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    _saved = sys.path[:]
+    sys.path = [p for p in sys.path if os.path.normpath(p) != _root]
+    try:
+        from ultralytics import YOLO
+        return YOLO
+    finally:
+        sys.path = _saved
+
+
 def get_human_detector(device_torch):
     """
     Initialize the YOLO model for human detection using ultralytics.
@@ -624,7 +644,7 @@ def get_human_detector(device_torch):
         YOLO: Loaded YOLO model
     """
     try:
-        from ultralytics import YOLO
+        YOLO = _import_yolo()
         import torch
 
         print("Loading YOLO human detector...")
@@ -657,7 +677,7 @@ def get_human_detector(device_torch):
         print(f"Error loading YOLO: {e}")
         print("Falling back to CPU-only YOLO...")
         try:
-            from ultralytics import YOLO
+            YOLO = _import_yolo()
             model = YOLO("yolo11n.pt")
             print("YOLO loaded on CPU as fallback.")
             return model

@@ -712,7 +712,7 @@ def process_frame_3d_from_rgbd(
     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
     num_output_joints=17, use_gpu_acceleration=True, verbose=True, device='cpu',
     depth_uncertainty=0.01
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Process RGB-D frame to extract 3D pose with uncertainty using depth lifting.
 
@@ -810,7 +810,7 @@ def process_frame_3d_from_rgbd(
     C_3d_all = C_3d_all * combined_valid.unsqueeze(-1).unsqueeze(-1).float()
 
     # Return 2D keypoints for visualization overlay
-    return points_3d, C_3d_all, ood_score, bool(is_ood[0]), bool(human_detected[0]), keypoints_2d, uncertainties_2d, covariance_2d
+    return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_2d
 
 
 def detect_humans(
@@ -1390,7 +1390,7 @@ def process_frame_3d_from_rgbd_yolo(
     device: str = 'cpu',
     depth_uncertainty: float = 0.01,
     tracker_config: str = 'botsort.yaml'
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, bool, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Process RGB-D frames using YOLO pose estimation and lift to 3D using depth.
 
@@ -1470,4 +1470,4 @@ def process_frame_3d_from_rgbd_yolo(
     ood_score = torch.zeros(keypoints_2d.shape[0], device=device)
     is_ood = torch.zeros(keypoints_2d.shape[0], dtype=torch.bool, device=device)
 
-    return points_3d, C_3d_all, ood_score, bool(is_ood[0]), bool(human_detected[0]), keypoints_2d, uncertainties_2d, covariance_2d
+    return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_2d

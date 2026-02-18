@@ -182,7 +182,8 @@ def main():
                 device=args.device,
                 depth_uncertainty=args.depth_uncertainty
             )
-
+        human_detected = human_detected.cpu()[0]
+        is_ood = is_ood.cpu()[0]
         if not human_detected:
             print("No human detected in frame!")
             return
