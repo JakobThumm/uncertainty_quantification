@@ -19,6 +19,7 @@ Evaluation output: MPJPE (mm) and uncertainty coverage statistics.
 import os
 import sys
 import argparse
+from time import time
 import numpy as np
 from tqdm import tqdm
 
@@ -146,6 +147,9 @@ def main():
 
     # ------------------------------------------------------------------
     # Inference loop (manual batching; StereoSGBM is not multiprocess-safe)
+    # Each dataset item is now a full sequence for one (subject, action, camera).
+    # Frames within a sequence are read from both videos in a single open/close
+    # pass, avoiding per-frame VideoCapture overhead.
     # ------------------------------------------------------------------
     all_3d_points_list = []
     all_3d_cov_list = []
@@ -157,25 +161,18 @@ def main():
     # Cache (subject, cam_id) → camera_intrinsics dict to avoid repeated JSON reads.
     _intrinsics_cache: dict = {}
 
-    n = len(dataset)
-    for start in tqdm(range(0, n, args.batch_size), desc="Processing frames"):
-        end = min(start + args.batch_size, n)
+    for seq_idx in tqdm(range(len(dataset)), desc="Processing sequences"):
+        t1 = time()
+        sample = dataset[seq_idx]
+        t2 = time()
+        print(f"Time for sequence loading: {t2 - t1:.3f}s  "
+              f"({len(sample['rgb_raw'])} frames)")
 
-        rgb_batch, depth_batch, gt_batch = [], [], []
-        R_batch, t_batch = [], []
-        for i in range(start, end):
-            sample = dataset[i]
-            rgb_batch.append(sample['rgb_raw'])                  # (H, W, 3) uint8
-            depth_batch.append(sample['depth_raw'])              # (H, W) float32 mm
-            gt_batch.append(sample['gt_pose'].numpy())           # (13, 3) m, world
-            R_batch.append(sample['R_rect_to_world'].numpy())    # (3, 3)
-            t_batch.append(sample['t_rect_to_world'].numpy())    # (3,) m
+        seq_meta = dataset.data[seq_idx]
+        subject = seq_meta['subject']
+        primary_cam = seq_meta['primary_cam']
 
-        # Load camera intrinsics for the primary camera of this batch.
-        # For clean per-camera evaluation, set --camera_ids to a single camera.
-        first_meta = dataset.data[start]
-        subject = first_meta['subject']
-        primary_cam = first_meta['primary_cam']
+        # Camera intrinsics are constant across all frames in this sequence.
         cache_key = (subject, primary_cam)
         if cache_key not in _intrinsics_cache:
             intrinsics, _, _ = load_camera_parameters(
@@ -190,40 +187,58 @@ def main():
             }
         camera_intrinsics = _intrinsics_cache[cache_key]
 
-        points_3d, C_3d_all, ood_score, is_ood, _, _, _, _ = \
-            process_frame_3d_from_rgbd(
-                rgb_frames=rgb_batch,
-                depth_frames=depth_batch,
-                camera_intrinsics=camera_intrinsics,
-                pose_estimation_jit_fn=pose_estimation_jit_fn,
-                params=params,
-                batch_stats=batch_stats,
-                human_detector=human_detector,
-                device_torch=device_torch,
-                mirror_map=MIRROR_13_JOINT_MODEL_MAP,
-                score_fn=score_fn,
-                human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
-                ood_threshold=args.ood_threshold,
-                verbose=False,
-                device=args.device,
-                depth_uncertainty=args.depth_uncertainty,
-                R_rect_to_world=np.stack(R_batch),
-                t_rect_to_world=np.stack(t_batch),
-            )
+        rgb_seq = sample['rgb_raw']      # list[T] of (H, W, 3) uint8
+        depth_seq = sample['depth_raw']  # list[T] of (H, W) float32
+        gt_seq = sample['gt_pose']       # (T, 13, 3) tensor, world frame m
+        R = sample['R_rect_to_world'].numpy()   # (3, 3)
+        t = sample['t_rect_to_world'].numpy()   # (3,)
 
-        B = points_3d.shape[0]
-        # ood_score is [B]; is_ood returned as a scalar bool for only the first
-        # frame, so derive per-frame flags from ood_score directly.
-        is_ood_batch = (ood_score > args.ood_threshold).cpu().numpy()
+        T = len(rgb_seq)
+        for start in range(0, T, args.batch_size):
+            end = min(start + args.batch_size, T)
+            B_req = end - start
 
-        all_batch_sizes.append(B)
-        all_3d_points_list.append(points_3d.cpu().numpy())
-        all_3d_cov_list.append(C_3d_all.cpu().numpy())
-        all_gt_list.append(np.stack(gt_batch[:B]))
-        all_ood_scores_list.append(ood_score.cpu().numpy())
-        all_is_ood_list.append(is_ood_batch)
+            rgb_batch = rgb_seq[start:end]
+            depth_batch = depth_seq[start:end]
+            gt_batch = gt_seq[start:end].numpy()   # (B_req, 13, 3) m
+            R_batch = np.stack([R] * B_req)        # (B_req, 3, 3)
+            t_batch = np.stack([t] * B_req)        # (B_req, 3)
 
-        del points_3d, C_3d_all, ood_score, is_ood_batch
+            t3 = time()
+            points_3d, C_3d_all, ood_score, is_ood, _, _, _, _ = \
+                process_frame_3d_from_rgbd(
+                    rgb_frames=rgb_batch,
+                    depth_frames=depth_batch,
+                    camera_intrinsics=camera_intrinsics,
+                    pose_estimation_jit_fn=pose_estimation_jit_fn,
+                    params=params,
+                    batch_stats=batch_stats,
+                    human_detector=human_detector,
+                    device_torch=device_torch,
+                    mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+                    score_fn=score_fn,
+                    human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
+                    ood_threshold=args.ood_threshold,
+                    verbose=False,
+                    device=args.device,
+                    depth_uncertainty=args.depth_uncertainty,
+                    R_rect_to_world=R_batch,
+                    t_rect_to_world=t_batch,
+                )
+            t4 = time()
+            print(f"Time for batch processing: {t4 - t3:.3f}s")
+
+            B = points_3d.shape[0]
+            is_ood_batch = is_ood.cpu().numpy()
+
+            all_batch_sizes.append(B)
+            all_3d_points_list.append(points_3d.cpu().numpy())
+            all_3d_cov_list.append(C_3d_all.cpu().numpy())
+            all_gt_list.append(gt_batch[:B])
+            all_ood_scores_list.append(ood_score.cpu().numpy())
+            all_is_ood_list.append(is_ood_batch)
+
+            del points_3d, C_3d_all, ood_score, is_ood_batch
 
     # ------------------------------------------------------------------
     # Aggregate results

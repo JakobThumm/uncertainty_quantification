@@ -1,5 +1,6 @@
 import json
 import os
+from time import time
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -563,6 +564,8 @@ class Human36mDatasetEmulatedRGBD(Dataset):
         camera_params_path=None,
         sgbm_num_disparities=128,
         sgbm_block_size=11,
+        sgbm_scale=0.5,
+        use_gpu_disparity=True,
     ):
         self.base_directory = base_directory
         self.split = split
@@ -575,11 +578,25 @@ class Human36mDatasetEmulatedRGBD(Dataset):
             transforms.Normalize(mean=[0.5] * 3, std=[0.5] * 3),
         ])
 
+        self._sgbm_num_disparities = sgbm_num_disparities
+        self._sgbm_block_size = sgbm_block_size
+        # Downscale rectified images before disparity estimation.  SGBM cost is
+        # O(W·H·D), so halving all three dimensions gives ~8× speedup.  The
+        # depth formula becomes depth = (fx·scale)·baseline / d_scaled, which
+        # equals the full-resolution result exactly.
+        self._sgbm_scale = sgbm_scale
+        self._use_gpu_disparity = use_gpu_disparity and torch.cuda.is_available()
+
+        # Number of disparity levels needed at the reduced scale.
+        num_disp_scaled = max(16, int(sgbm_num_disparities * sgbm_scale) // 16 * 16)
+        self._num_disp_scaled = num_disp_scaled
+
         self._load_camera_params(camera_params_path or _DEFAULT_CAMERA_PARAMS_PATH)
         self._stereo_cache = {}  # (subject, primary_cam, pair_cam) -> stereo params
+        # CPU SGBM used as fallback when CUDA is unavailable.
         self._stereo_matcher = cv2.StereoSGBM_create(
             minDisparity=0,
-            numDisparities=sgbm_num_disparities,
+            numDisparities=num_disp_scaled,
             blockSize=sgbm_block_size,
             P1=8 * 3 * sgbm_block_size ** 2,
             P2=32 * 3 * sgbm_block_size ** 2,
@@ -590,6 +607,11 @@ class Human36mDatasetEmulatedRGBD(Dataset):
             preFilterCap=63,
             mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
         )
+
+        if self._use_gpu_disparity:
+            print("disparity: GPU SAD block-matching (PyTorch)")
+        else:
+            print("disparity: CPU StereoSGBM")
 
         self.data = self._load_data()
         print(f"Loaded {len(self.data)} emulated-RGBD samples for {split} split")
@@ -665,31 +687,95 @@ class Human36mDatasetEmulatedRGBD(Dataset):
         self._stereo_cache[key] = stereo_params
         return stereo_params
 
+    def _compute_disparity_gpu(self, gray1, gray2):
+        """
+        SAD block-matching disparity on GPU via PyTorch.
+
+        Uses self._num_disp_scaled disparity levels and self._sgbm_block_size
+        block size.  Returns float32 disparity in pixels at the input resolution.
+        Cost volume memory: num_disp × H × W × 4 bytes (e.g. 64×500×500 ≈ 64 MB).
+        """
+        D = self._num_disp_scaled
+        block = self._sgbm_block_size
+        half = block // 2
+        H, W = gray1.shape
+
+        g1 = torch.from_numpy(gray1.astype(np.float32)).cuda() / 255.0   # (H, W)
+        g2 = torch.from_numpy(gray2.astype(np.float32)).cuda() / 255.0   # (H, W)
+
+        # For disparity d, compare g1[h, w] with g2[h, w - d].
+        # Build all D shifted copies of g2 in one vectorised operation.
+        d_vec = torch.arange(D, device='cuda').unsqueeze(1)   # (D, 1)
+        w_vec = torch.arange(W, device='cuda').unsqueeze(0)   # (1, W)
+        src_w = (w_vec - d_vec).clamp(min=0)                  # (D, W) clamped col index
+        valid = (w_vec - d_vec) >= 0                          # (D, W) mask
+
+        # g2_shifted: (D, H, W) — g2 shifted left by d pixels
+        g2_shifted = g2[:, src_w.view(-1)].view(H, D, W).permute(1, 0, 2)
+        # Zero out columns where the disparity would reach past the image border.
+        g2_shifted = g2_shifted * valid.float().unsqueeze(1)
+
+        # Sum-of-absolute-differences aggregated over a block window.
+        diff = torch.abs(g1.unsqueeze(0) - g2_shifted)        # (D, H, W)
+        cost = torch.nn.functional.avg_pool2d(
+            diff.unsqueeze(1), kernel_size=block, stride=1, padding=half
+        ).squeeze(1)                                           # (D, H, W)
+
+        # Heavily penalise border positions so they never win.
+        cost = cost + (~valid).float().unsqueeze(1) * 1e6
+
+        disparity = cost.argmin(dim=0).float()                # (H, W) pixels
+        return disparity.cpu().numpy()
+
     def _compute_depth(self, frame_primary, frame_pair, stereo_params):
         """
         Rectify stereo pair and compute a depth map.
 
-        Args:
-            frame_primary: (H, W, 3) RGB uint8 — primary camera
-            frame_pair:    (H, W, 3) RGB uint8 — pair camera
+        Rectification is performed at the original H36M resolution; disparity
+        estimation runs on images downscaled by self._sgbm_scale (default 0.5)
+        using either GPU SAD block-matching or CPU StereoSGBM.
+
+        Because depth = fx·baseline / disparity, scaling both fx and disparity
+        by the same factor leaves depth values unchanged:
+            depth = (fx·scale)·baseline / (d_scaled) = fx·baseline / d_full
 
         Returns:
-            rgb_rect: (H, W, 3) uint8 — rectified primary frame
-            depth:    (H, W) float32 — depth in mm, 0 where invalid
+            rgb_rect: (H, W, 3) uint8 — rectified primary frame (full resolution)
+            depth:    (H, W) float32 — depth in mm, 0 where invalid (full resolution)
         """
         rect1 = cv2.remap(frame_primary, stereo_params['map1x'], stereo_params['map1y'],
                           cv2.INTER_LINEAR)
         rect2 = cv2.remap(frame_pair, stereo_params['map2x'], stereo_params['map2y'],
                           cv2.INTER_LINEAR)
 
-        gray1 = cv2.cvtColor(rect1, cv2.COLOR_RGB2GRAY)
-        gray2 = cv2.cvtColor(rect2, cv2.COLOR_RGB2GRAY)
+        scale = self._sgbm_scale
+        H_full, W_full = rect1.shape[:2]
+        if scale < 1.0:
+            small_h, small_w = int(H_full * scale), int(W_full * scale)
+            r1 = cv2.resize(rect1, (small_w, small_h), interpolation=cv2.INTER_AREA)
+            r2 = cv2.resize(rect2, (small_w, small_h), interpolation=cv2.INTER_AREA)
+        else:
+            r1, r2 = rect1, rect2
 
-        disparity = self._stereo_matcher.compute(gray1, gray2).astype(np.float32) / 16.0
+        gray1 = cv2.cvtColor(r1, cv2.COLOR_RGB2GRAY)
+        gray2 = cv2.cvtColor(r2, cv2.COLOR_RGB2GRAY)
 
-        depth = np.zeros_like(disparity)
+        if self._use_gpu_disparity:
+            disparity = self._compute_disparity_gpu(gray1, gray2)
+        else:
+            disparity = self._stereo_matcher.compute(gray1, gray2).astype(np.float32) / 16.0
+
+        # Effective focal length at the scaled resolution: fx_eff = fx_rect * scale.
+        fx_eff = stereo_params['fx_rect'] * scale
+        depth_small = np.zeros_like(disparity)
         valid = disparity > 0
-        depth[valid] = stereo_params['fx_rect'] * stereo_params['baseline_mm'] / disparity[valid]
+        depth_small[valid] = fx_eff * stereo_params['baseline_mm'] / disparity[valid]
+
+        # Upsample depth map back to the original rectified resolution.
+        if scale < 1.0:
+            depth = cv2.resize(depth_small, (W_full, H_full), interpolation=cv2.INTER_NEAREST)
+        else:
+            depth = depth_small
 
         return rect1, depth
 
@@ -743,74 +829,61 @@ class Human36mDatasetEmulatedRGBD(Dataset):
                     if total_frames < n_frames:
                         continue
 
-                    for frame_idx in np.linspace(0, total_frames - 1, n_frames, dtype=int):
-                        frame_idx = int(frame_idx)
-                        gt = (gt_poses_13[frame_idx]
-                              if gt_poses_13 is not None and frame_idx < len(gt_poses_13)
-                              else None)
-                        all_data.append({
-                            'subject': subject,
-                            'action': action,
-                            'primary_cam': cam_id,
-                            'pair_cam': pair_cam,
-                            'primary_video': primary_video,
-                            'pair_video': pair_video,
-                            'frame_idx': frame_idx,
-                            'gt_pose_world_mm': gt,  # (13, 3) float or None
-                        })
+                    frame_indices = np.linspace(
+                        0, total_frames - 1, n_frames, dtype=int
+                    ).tolist()
+
+                    # Pre-select GT poses for all frame indices in this sequence.
+                    if gt_poses_13 is not None:
+                        gt_len = len(gt_poses_13)
+                        gt_for_seq = np.array([
+                            gt_poses_13[fi] if fi < gt_len else np.zeros((13, 3))
+                            for fi in frame_indices
+                        ])  # (n_frames, 13, 3) mm
+                    else:
+                        gt_for_seq = None
+
+                    all_data.append({
+                        'subject': subject,
+                        'action': action,
+                        'primary_cam': cam_id,
+                        'pair_cam': pair_cam,
+                        'primary_video': primary_video,
+                        'pair_video': pair_video,
+                        'frame_indices': frame_indices,      # list of ints, length n_frames
+                        'gt_poses_world_mm': gt_for_seq,     # (n_frames, 13, 3) mm or None
+                    })
                     num_sequences += 1
         return all_data
-
-    def _load_frame(self, video_path, frame_idx):
-        cap = cv2.VideoCapture(video_path)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = cap.read()
-        cap.release()
-        if not ret:
-            raise RuntimeError(f"Failed to load frame {frame_idx} from {video_path}")
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         """
-        Returns a dict:
-            'rgb_raw'   – (H_full, W_full, 3) uint8, rectified primary frame
-            'depth_raw' – (H_full, W_full) float32, depth in mm
-            'rgb'       – (3, H, W) normalised tensor
-            'depth'     – (1, H, W) float32 tensor, depth in mm
-            'gt_pose'   – (13, 3) float32 tensor, GT joints in rectified camera
-                          frame in metres; zeros when GT is unavailable
-            'subject'   – str
-            'action'    – str
-            'camera_id' – str (primary camera ID)
+        Returns a dict (one entry = one full sequence for a single camera):
+            'rgb_raw'          – list of T (H_full, W_full, 3) uint8 rectified frames
+            'depth_raw'        – list of T (H_full, W_full) float32 depth maps (mm)
+            'rgb'              – (T, 3, H, W) normalised tensor
+            'depth'            – (T, 1, H, W) float32 tensor, depth in mm
+            'gt_pose'          – (T, 13, 3) float32 tensor, GT joints world frame (m);
+                                 zeros when GT is unavailable
+            'R_rect_to_world'  – (3, 3) rotation: rectified cam frame → world
+            't_rect_to_world'  – (3,) translation (m): rectified cam frame → world
+            'subject'          – str
+            'action'           – str
+            'camera_id'        – str (primary camera ID)
         """
         sample = self.data[idx]
         subject = sample['subject']
         primary_cam = sample['primary_cam']
-
-        frame_primary = self._load_frame(sample['primary_video'], sample['frame_idx'])
-        frame_pair = self._load_frame(sample['pair_video'], sample['frame_idx'])
-
-        stereo_params = self._get_stereo_params(subject, primary_cam, sample['pair_cam'])
-        rgb_rect, depth = self._compute_depth(frame_primary, frame_pair, stereo_params)
-
+        pair_cam = sample['pair_cam']
+        frame_indices = sample['frame_indices']
         target_h, target_w = self.image_size
-        rgb_resized = cv2.resize(rgb_rect, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-        rgb_tensor = self.transform(Image.fromarray(rgb_resized))
 
-        depth_resized = cv2.resize(depth, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
-        depth_tensor = torch.FloatTensor(depth_resized).unsqueeze(0)  # (1, H, W)
+        stereo_params = self._get_stereo_params(subject, primary_cam, pair_cam)
 
-        # GT: world frame, metres
-        gt_raw = sample['gt_pose_world_mm']  # (13, 3) mm or None
-        gt_pose = (torch.FloatTensor(gt_raw / 1000.0)
-                   if gt_raw is not None else torch.zeros(13, 3))
-
-        # Inverse transform: rectified camera frame (m) → world frame (m).
-        # Forward:  X_rect = R1_rect @ (R_cam @ X_world + t_cam_mm) / 1000
-        # Inverse:  X_world = R_cam^T @ (R1_rect^T @ X_rect) - R_cam^T @ (t_cam_mm / 1000)
+        # Precompute rectified-cam → world transform (same for every frame).
         R_cam = self.extrinsics[subject][primary_cam]['R']   # (3, 3)
         t_cam = self.extrinsics[subject][primary_cam]['t']   # (3, 1) mm
         R1_rect = stereo_params['R1_rect']                   # (3, 3)
@@ -819,14 +892,68 @@ class Human36mDatasetEmulatedRGBD(Dataset):
             (-R_cam.T @ (t_cam.squeeze() / 1000.0)).astype(np.float32)
         )
 
+        rgb_raw_list = []
+        depth_raw_list = []
+        rgb_tensor_list = []
+        depth_tensor_list = []
+
+        # Open both videos once and read all frames in a single pass.
+        cap1 = cv2.VideoCapture(sample['primary_video'])
+        cap2 = cv2.VideoCapture(sample['pair_video'])
+        prev_idx = -1
+        for frame_idx in frame_indices:
+            # Only seek when frames are non-consecutive; consecutive reads use
+            # the codec's natural forward position, avoiding expensive seeks.
+            if frame_idx != prev_idx + 1:
+                cap1.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                cap2.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret1, frame1 = cap1.read()
+            ret2, frame2 = cap2.read()
+            prev_idx = frame_idx
+
+            if not ret1 or not ret2:
+                rgb_raw_list.append(np.zeros(
+                    (H36M_IMAGE_SIZE[1], H36M_IMAGE_SIZE[0], 3), dtype=np.uint8))
+                depth_raw_list.append(np.zeros(
+                    (H36M_IMAGE_SIZE[1], H36M_IMAGE_SIZE[0]), dtype=np.float32))
+                rgb_tensor_list.append(torch.zeros(3, target_h, target_w))
+                depth_tensor_list.append(torch.zeros(1, target_h, target_w))
+                continue
+
+            frame1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2RGB)
+            frame2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
+
+            rgb_rect, depth = self._compute_depth(frame1, frame2, stereo_params)
+
+            rgb_resized = cv2.resize(rgb_rect, (target_w, target_h),
+                                     interpolation=cv2.INTER_LINEAR)
+            rgb_tensor = self.transform(Image.fromarray(rgb_resized))
+            depth_resized = cv2.resize(depth, (target_w, target_h),
+                                       interpolation=cv2.INTER_NEAREST)
+            depth_tensor = torch.FloatTensor(depth_resized).unsqueeze(0)
+
+            rgb_raw_list.append(rgb_rect)
+            depth_raw_list.append(depth)
+            rgb_tensor_list.append(rgb_tensor)
+            depth_tensor_list.append(depth_tensor)
+
+        cap1.release()
+        cap2.release()
+
+        # GT: world frame, metres.
+        gt_raw = sample['gt_poses_world_mm']  # (T, 13, 3) mm or None
+        gt_pose = (torch.FloatTensor(gt_raw / 1000.0)
+                   if gt_raw is not None
+                   else torch.zeros(len(frame_indices), 13, 3))
+
         return {
-            'rgb_raw': rgb_rect,              # (H_full, W_full, 3) uint8
-            'depth_raw': depth,               # (H_full, W_full) float32 mm
-            'rgb': rgb_tensor,                # (3, H, W)
-            'depth': depth_tensor,            # (1, H, W) mm
-            'gt_pose': gt_pose,               # (13, 3) m, world frame
-            'R_rect_to_world': R_rect_to_world,  # (3, 3) rotation
-            't_rect_to_world': t_rect_to_world,  # (3,) translation m
+            'rgb_raw': rgb_raw_list,                          # list[T] of (H, W, 3) uint8
+            'depth_raw': depth_raw_list,                      # list[T] of (H, W) float32 mm
+            'rgb': torch.stack(rgb_tensor_list),              # (T, 3, H, W)
+            'depth': torch.stack(depth_tensor_list),          # (T, 1, H, W) mm
+            'gt_pose': gt_pose,                               # (T, 13, 3) m, world frame
+            'R_rect_to_world': R_rect_to_world,               # (3, 3)
+            't_rect_to_world': t_rect_to_world,               # (3,)
             'subject': subject,
             'action': sample['action'],
             'camera_id': primary_cam,
