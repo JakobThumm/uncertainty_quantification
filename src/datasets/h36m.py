@@ -1161,7 +1161,7 @@ class Human36mDatasetGTPoseRGBD(Dataset):
         cap.release()
 
         gt_raw = sample['gt_poses_world_mm']
-        gt_pose = (torch.FloatTensor(gt_raw / 1000.0)
+        gt_pose = (torch.FloatTensor(gt_raw)
                    if gt_raw is not None
                    else torch.zeros(len(frame_indices), 13, 3))
 

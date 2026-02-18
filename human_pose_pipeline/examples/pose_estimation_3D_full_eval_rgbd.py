@@ -137,7 +137,7 @@ def main():
         num_frames_per_video=args.num_frames_per_video,
         max_sequences=args.max_sequences,
         camera_params_path=camera_params_path,
-        depth_radius_px=40,
+        depth_radius_px=15,
         far_depth_m=20.0,
     )
 

@@ -850,6 +850,9 @@ def process_frame_3d_from_rgbd(
         # Rotate covariances: C_world[b,k] = R[b] @ C_cam[b,k] @ R[b]^T
         R_exp = R.unsqueeze(1)                  # (B, 1, 3, 3)
         C_3d_all = R_exp @ C_3d_all @ R_exp.transpose(-1, -2)
+        # Convert to mm
+        points_3d *= 1000
+        C_3d_all *= 1000 * 1000
 
     # Return 2D keypoints for visualization overlay
     return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_2d
