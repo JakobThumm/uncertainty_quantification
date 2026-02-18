@@ -660,9 +660,14 @@ class Human36mDatasetEmulatedRGBD(Dataset):
         t_rel = t2 - R_rel @ t1  # shape (3, 1)
 
         img_size = H36M_IMAGE_SIZE  # (width, height)
+        # H36M cameras are ~45° apart (not a classical stereo pair).
+        # alpha=0 / CALIB_ZERO_DISPARITY crops to the tiny overlap region,
+        # leaving most of the output black.  alpha=1 + flags=0 preserves each
+        # camera's full FOV; depth quality is limited by the wide angle but the
+        # rectified images are complete and usable.
         R1_rect, R2_rect, P1_rect, P2_rect, _, _, _ = cv2.stereoRectify(
             K1, d1, K2, d2, img_size, R_rel, t_rel,
-            flags=cv2.CALIB_ZERO_DISPARITY, alpha=0,
+            flags=0, alpha=1,
         )
 
         map1x, map1y = cv2.initUndistortRectifyMap(
@@ -960,6 +965,220 @@ class Human36mDatasetEmulatedRGBD(Dataset):
         }
 
 
+class Human36mDatasetGTPoseRGBD(Dataset):
+    """
+    Single-camera emulated RGB-D using ground-truth pose for depth.
+
+    No stereo matching is needed.  For each frame the 13 GT joints are
+    projected into the camera, and each joint's depth is painted as a filled
+    disk of `depth_radius_px` pixels on a depth image that is otherwise
+    initialised to `far_depth_m` metres (background / no-data).
+
+    Returns the same dict structure as Human36mDatasetEmulatedRGBD so the eval
+    script can use either class without modification.
+    """
+
+    def __init__(
+        self,
+        base_directory,
+        split='train',
+        camera_ids=None,
+        num_frames_per_video=None,
+        max_sequences=None,
+        transform=None,
+        image_size=(256, 192),
+        camera_params_path=None,
+        depth_radius_px=20,
+        far_depth_m=20.0,
+    ):
+        self.base_directory = base_directory
+        self.split = split
+        self.camera_ids = camera_ids or list(CAMERA_PAIRS.keys())
+        self.num_frames_per_video = num_frames_per_video
+        self.max_sequences = max_sequences
+        self.image_size = image_size
+        self.depth_radius_px = depth_radius_px
+        self.far_depth_mm = far_depth_m * 1000.0
+        self.transform = transform if transform else transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5] * 3, std=[0.5] * 3),
+        ])
+
+        self._load_camera_params(camera_params_path or _DEFAULT_CAMERA_PARAMS_PATH)
+        self.data = self._load_data()
+        print(f"Loaded {len(self.data)} GT-depth RGBD sequences for {split} split")
+
+    def _load_camera_params(self, json_path):
+        with open(json_path, 'r') as f:
+            params = json.load(f)
+        self.intrinsics = {}
+        self.distortions = {}
+        self.extrinsics = {}
+        for cam_key, intr in params['intrinsics'].items():
+            cam_id = cam_key.lstrip('.')
+            self.intrinsics[cam_id] = np.array(intr['calibration_matrix'])
+            self.distortions[cam_id] = np.array(intr['distortion'])
+        for subject, subject_data in params['extrinsics'].items():
+            self.extrinsics[subject] = {}
+            for cam_key, ext in subject_data.items():
+                cam_id = cam_key.lstrip('.')
+                self.extrinsics[subject][cam_id] = {
+                    'R': np.array(ext['R']),
+                    't': np.array(ext['t']).reshape(3, 1),
+                }
+
+    def _load_data(self):
+        all_data = []
+        num_sequences = 0
+        for subject in SPLIT[self.split]:
+            if subject not in self.extrinsics:
+                continue
+            poses_dir = os.path.join(self.base_directory, subject, 'Poses_D3_Positions')
+            videos_dir = os.path.join(self.base_directory, subject, 'Videos')
+            if not os.path.exists(poses_dir) or not os.path.exists(videos_dir):
+                continue
+            for pose_file in sorted(os.listdir(poses_dir)):
+                if not pose_file.endswith('.cdf'):
+                    continue
+                action = os.path.splitext(pose_file)[0]
+                try:
+                    with CDF(os.path.join(poses_dir, pose_file)) as cdf:
+                        poses_raw = np.squeeze(cdf['Pose'][:]).reshape(-1, 32, 3)
+                    gt_poses_13 = poses_raw[:, JOINT_IDX_17, :][:, JOINT_IDX_13, :]
+                except Exception:
+                    gt_poses_13 = None
+                for cam_id in self.camera_ids:
+                    if self.max_sequences is not None and num_sequences >= self.max_sequences:
+                        break
+                    video_path = os.path.join(videos_dir, f"{action}.{cam_id}.mp4")
+                    if not os.path.exists(video_path):
+                        continue
+                    cap = cv2.VideoCapture(video_path)
+                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    cap.release()
+                    n_frames = (self.num_frames_per_video
+                                if self.num_frames_per_video is not None
+                                else total_frames)
+                    if total_frames < n_frames:
+                        continue
+                    frame_indices = np.linspace(
+                        0, total_frames - 1, n_frames, dtype=int
+                    ).tolist()
+                    if gt_poses_13 is not None:
+                        gt_len = len(gt_poses_13)
+                        gt_for_seq = np.array([
+                            gt_poses_13[fi] if fi < gt_len else np.zeros((13, 3))
+                            for fi in frame_indices
+                        ])
+                    else:
+                        gt_for_seq = None
+                    all_data.append({
+                        'subject': subject,
+                        'action': action,
+                        'cam_id': cam_id,
+                        'video_path': video_path,
+                        'frame_indices': frame_indices,
+                        'gt_poses_world_mm': gt_for_seq,
+                    })
+                    num_sequences += 1
+        return all_data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        sample = self.data[idx]
+        subject = sample['subject']
+        cam_id = sample['cam_id']
+        frame_indices = sample['frame_indices']
+        target_h, target_w = self.image_size
+        W_full, H_full = H36M_IMAGE_SIZE
+
+        K = self.intrinsics[cam_id].astype(np.float64)
+        d = self.distortions[cam_id].astype(np.float64)
+        R = self.extrinsics[subject][cam_id]['R']    # (3,3) world→cam
+        t = self.extrinsics[subject][cam_id]['t']    # (3,1) mm
+        rvec = cv2.Rodrigues(R)[0]
+
+        # Camera→world transform returned to the eval script.
+        R_rect_to_world = torch.FloatTensor(R.T.astype(np.float32))
+        t_rect_to_world = torch.FloatTensor((-R.T @ t.squeeze() / 1000.0).astype(np.float32))
+
+        rgb_raw_list, depth_raw_list, rgb_tensor_list, depth_tensor_list = [], [], [], []
+
+        cap = cv2.VideoCapture(sample['video_path'])
+        prev_idx = -1
+        gt_poses_mm = sample['gt_poses_world_mm']   # (T, 13, 3) mm or None
+
+        for fi, frame_idx in enumerate(frame_indices):
+            if frame_idx != prev_idx + 1:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            prev_idx = frame_idx
+
+            depth_img = np.full((H_full, W_full), self.far_depth_mm, dtype=np.float32)
+
+            if not ret:
+                rgb_raw_list.append(np.zeros((H_full, W_full, 3), dtype=np.uint8))
+                depth_raw_list.append(depth_img)
+                rgb_tensor_list.append(torch.zeros(3, target_h, target_w))
+                depth_tensor_list.append(torch.full((1, target_h, target_w), self.far_depth_mm))
+                continue
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            if gt_poses_mm is not None:
+                pts_world = gt_poses_mm[fi]                      # (13, 3) mm
+                # Depth of each joint in camera frame.
+                pts_cam = (R @ pts_world.T + t).T                # (13, 3) mm
+                depths_mm = pts_cam[:, 2]
+                # Project to pixel coordinates (handles distortion).
+                pts_2d, _ = cv2.projectPoints(
+                    pts_world.reshape(-1, 1, 3).astype(np.float64),
+                    rvec, t.astype(np.float64), K, d,
+                )
+                pts_2d = pts_2d.reshape(-1, 2)
+                for j in range(len(pts_world)):
+                    if depths_mm[j] <= 0:
+                        continue
+                    u = int(round(pts_2d[j, 0]))
+                    v = int(round(pts_2d[j, 1]))
+                    if 0 <= u < W_full and 0 <= v < H_full:
+                        cv2.circle(depth_img, (u, v), self.depth_radius_px,
+                                   float(depths_mm[j]), -1)
+
+            rgb_resized = cv2.resize(rgb, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+            rgb_tensor = self.transform(Image.fromarray(rgb_resized))
+            depth_resized = cv2.resize(depth_img, (target_w, target_h),
+                                       interpolation=cv2.INTER_NEAREST)
+            depth_tensor = torch.FloatTensor(depth_resized).unsqueeze(0)
+
+            rgb_raw_list.append(rgb)
+            depth_raw_list.append(depth_img)
+            rgb_tensor_list.append(rgb_tensor)
+            depth_tensor_list.append(depth_tensor)
+
+        cap.release()
+
+        gt_raw = sample['gt_poses_world_mm']
+        gt_pose = (torch.FloatTensor(gt_raw / 1000.0)
+                   if gt_raw is not None
+                   else torch.zeros(len(frame_indices), 13, 3))
+
+        return {
+            'rgb_raw': rgb_raw_list,
+            'depth_raw': depth_raw_list,
+            'rgb': torch.stack(rgb_tensor_list),
+            'depth': torch.stack(depth_tensor_list),
+            'gt_pose': gt_pose,                        # (T, 13, 3) m, world frame
+            'R_rect_to_world': R_rect_to_world,        # (3, 3)
+            't_rect_to_world': t_rect_to_world,        # (3,) m
+            'subject': subject,
+            'action': sample['action'],
+            'camera_id': cam_id,
+        }
+
+
 class Human36mDatasetSequenceEmulatedRGBD:
     """
     Sequence version of Human36mDatasetEmulatedRGBD.
@@ -1066,7 +1285,7 @@ class Human36mDatasetSequenceEmulatedRGBD:
         img_size = H36M_IMAGE_SIZE
         R1_rect, R2_rect, P1_rect, P2_rect, _, _, _ = cv2.stereoRectify(
             K1, d1, K2, d2, img_size, R_rel, t_rel,
-            flags=cv2.CALIB_ZERO_DISPARITY, alpha=0,
+            flags=0, alpha=1,
         )
 
         map1x, map1y = cv2.initUndistortRectifyMap(

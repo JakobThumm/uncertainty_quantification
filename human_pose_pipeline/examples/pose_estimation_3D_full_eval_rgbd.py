@@ -48,7 +48,7 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
     OOD_THRESHOLD,
 )
 from src.ood_scores.lm_lanczos import load_score_functions
-from src.datasets.h36m import Human36mDatasetEmulatedRGBD
+from src.datasets.h36m import Human36mDatasetGTPoseRGBD
 from human_pose_pipeline.pose_estimation.triangulation_helper import load_camera_parameters
 
 
@@ -130,15 +130,15 @@ def main():
     # Build emulated-RGBD dataset
     # ------------------------------------------------------------------
     print("\nBuilding emulated RGB-D dataset...")
-    dataset = Human36mDatasetEmulatedRGBD(
+    dataset = Human36mDatasetGTPoseRGBD(
         base_directory=base_directory,
         split=args.split,
         camera_ids=args.camera_ids,
         num_frames_per_video=args.num_frames_per_video,
         max_sequences=args.max_sequences,
         camera_params_path=camera_params_path,
-        sgbm_num_disparities=args.sgbm_num_disparities,
-        sgbm_block_size=args.sgbm_block_size,
+        depth_radius_px=40,
+        far_depth_m=20.0,
     )
 
     if len(dataset) == 0:
@@ -170,7 +170,7 @@ def main():
 
         seq_meta = dataset.data[seq_idx]
         subject = seq_meta['subject']
-        primary_cam = seq_meta['primary_cam']
+        primary_cam = seq_meta['cam_id']
 
         # Camera intrinsics are constant across all frames in this sequence.
         cache_key = (subject, primary_cam)
