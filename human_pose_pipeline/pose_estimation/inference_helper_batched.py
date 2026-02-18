@@ -535,6 +535,62 @@ def process_frame_3d(
     return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy
 
 
+def set_depth_uncertainty_to_constant(
+    C_3d_all: torch.Tensor,
+    R_world_to_cam,
+    sigma_depth: float,
+    device: str = 'cpu',
+) -> torch.Tensor:
+    """
+    Replace the depth (camera-frame Z) component of 3D covariance matrices with
+    a constant uncertainty, decoupled from the lateral (X, Y) components.
+
+    This is useful when the lateral position is known accurately from stereo
+    triangulation but the depth component from covariance propagation is
+    unreliable (e.g. wide-baseline cameras).  The function:
+      1. Rotates covariances to the primary camera frame:
+             C_cam = R @ C_world @ R^T
+      2. Replaces C_cam[..., 2, 2] with sigma_depth² and zeroes the
+         cross-terms C_cam[..., :2, 2] and C_cam[..., 2, :2].
+      3. Rotates back to world frame:
+             C_world_new = R^T @ C_cam_new @ R
+
+    Args:
+        C_3d_all:        [B, J, 3, 3] covariances in world frame (any unit).
+        R_world_to_cam:  (3, 3) or (B, 3, 3) rotation from world to camera frame.
+                         Accepts numpy arrays or torch tensors.
+        sigma_depth:     Depth std dev in the same unit as C_3d_all.
+        device:          Torch device for intermediate tensors.
+
+    Returns:
+        [B, J, 3, 3] modified covariances in world frame.
+    """
+    B = C_3d_all.shape[0]
+
+    if isinstance(R_world_to_cam, np.ndarray):
+        R = torch.tensor(R_world_to_cam, dtype=torch.float32, device=device)
+    else:
+        R = R_world_to_cam.to(device=device, dtype=torch.float32)
+    if R.ndim == 2:
+        R = R.unsqueeze(0).expand(B, -1, -1)   # (B, 3, 3)
+
+    R_exp = R.unsqueeze(1)                       # (B, 1, 3, 3)
+    R_T_exp = R_exp.transpose(-1, -2)            # (B, 1, 3, 3)
+
+    # Rotate to camera frame
+    C_cam = R_exp @ C_3d_all @ R_T_exp           # (B, J, 3, 3)
+
+    # Replace depth (Z) variance and zero cross-terms
+    C_cam_new = C_cam.clone()
+    C_cam_new[:, :, 2, 2] = sigma_depth ** 2
+    C_cam_new[:, :, :2, 2] = 0.0
+    C_cam_new[:, :, 2, :2] = 0.0
+
+    # Rotate back to world frame: C_world = R^T @ C_cam @ R
+    C_world_new = R_T_exp @ C_cam_new @ R_exp    # (B, J, 3, 3)
+    return C_world_new
+
+
 def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device='cpu',
                              depth_outlier_threshold=1.5):
     """
