@@ -557,6 +557,7 @@ class Human36mDatasetEmulatedRGBD(Dataset):
         split='train',
         camera_ids=None,
         num_frames_per_video=5,
+        max_sequences=None,
         transform=None,
         image_size=(256, 192),
         camera_params_path=None,
@@ -567,6 +568,7 @@ class Human36mDatasetEmulatedRGBD(Dataset):
         self.split = split
         self.camera_ids = camera_ids or list(CAMERA_PAIRS.keys())
         self.num_frames_per_video = num_frames_per_video
+        self.max_sequences = max_sequences  # None = all sequences
         self.image_size = image_size  # (H, W)
         self.transform = transform if transform else transforms.Compose([
             transforms.ToTensor(),
@@ -693,6 +695,7 @@ class Human36mDatasetEmulatedRGBD(Dataset):
 
     def _load_data(self):
         all_data = []
+        num_sequences = 0
         for subject in SPLIT[self.split]:
             if subject not in self.extrinsics:
                 print(f"Warning: no extrinsics for {subject}, skipping")
@@ -717,6 +720,9 @@ class Human36mDatasetEmulatedRGBD(Dataset):
                     gt_poses_13 = None
 
                 for cam_id in self.camera_ids:
+                    if (self.max_sequences is not None
+                            and num_sequences >= self.max_sequences):
+                        break
                     pair_cam = CAMERA_PAIRS[cam_id]
                     primary_video = os.path.join(videos_dir, f"{action}.{cam_id}.mp4")
                     pair_video = os.path.join(videos_dir, f"{action}.{pair_cam}.mp4")
@@ -724,13 +730,20 @@ class Human36mDatasetEmulatedRGBD(Dataset):
                         continue
 
                     cap = cv2.VideoCapture(primary_video)
-                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    total_primary = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                     cap.release()
-                    if total_frames < self.num_frames_per_video:
+                    cap = cv2.VideoCapture(pair_video)
+                    total_pair = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    cap.release()
+                    # Use the minimum to guarantee valid seeks in both videos.
+                    total_frames = min(total_primary, total_pair)
+                    n_frames = (self.num_frames_per_video
+                               if self.num_frames_per_video is not None
+                               else total_frames)
+                    if total_frames < n_frames:
                         continue
 
-                    for frame_idx in np.linspace(0, total_frames - 1,
-                                                 self.num_frames_per_video, dtype=int):
+                    for frame_idx in np.linspace(0, total_frames - 1, n_frames, dtype=int):
                         frame_idx = int(frame_idx)
                         gt = (gt_poses_13[frame_idx]
                               if gt_poses_13 is not None and frame_idx < len(gt_poses_13)
@@ -745,6 +758,7 @@ class Human36mDatasetEmulatedRGBD(Dataset):
                             'frame_idx': frame_idx,
                             'gt_pose_world_mm': gt,  # (13, 3) float or None
                         })
+                    num_sequences += 1
         return all_data
 
     def _load_frame(self, video_path, frame_idx):
@@ -789,23 +803,30 @@ class Human36mDatasetEmulatedRGBD(Dataset):
         depth_resized = cv2.resize(depth, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
         depth_tensor = torch.FloatTensor(depth_resized).unsqueeze(0)  # (1, H, W)
 
-        # GT: world mm → rectified camera frame (m)
-        gt_raw = sample['gt_pose_world_mm']  # (13, 3) or None
-        if gt_raw is not None:
-            R_cam = self.extrinsics[subject][primary_cam]['R']   # (3, 3)
-            t_cam = self.extrinsics[subject][primary_cam]['t']   # (3, 1)
-            R1_rect = stereo_params['R1_rect']                   # (3, 3)
-            X_cam = (R_cam @ gt_raw.T + t_cam).T                # (13, 3) mm
-            gt_pose = torch.FloatTensor((R1_rect @ X_cam.T).T / 1000.0)  # m
-        else:
-            gt_pose = torch.zeros(13, 3)
+        # GT: world frame, metres
+        gt_raw = sample['gt_pose_world_mm']  # (13, 3) mm or None
+        gt_pose = (torch.FloatTensor(gt_raw / 1000.0)
+                   if gt_raw is not None else torch.zeros(13, 3))
+
+        # Inverse transform: rectified camera frame (m) → world frame (m).
+        # Forward:  X_rect = R1_rect @ (R_cam @ X_world + t_cam_mm) / 1000
+        # Inverse:  X_world = R_cam^T @ (R1_rect^T @ X_rect) - R_cam^T @ (t_cam_mm / 1000)
+        R_cam = self.extrinsics[subject][primary_cam]['R']   # (3, 3)
+        t_cam = self.extrinsics[subject][primary_cam]['t']   # (3, 1) mm
+        R1_rect = stereo_params['R1_rect']                   # (3, 3)
+        R_rect_to_world = torch.FloatTensor((R_cam.T @ R1_rect.T).astype(np.float32))
+        t_rect_to_world = torch.FloatTensor(
+            (-R_cam.T @ (t_cam.squeeze() / 1000.0)).astype(np.float32)
+        )
 
         return {
-            'rgb_raw': rgb_rect,       # (H_full, W_full, 3) uint8
-            'depth_raw': depth,        # (H_full, W_full) float32 mm
-            'rgb': rgb_tensor,         # (3, H, W)
-            'depth': depth_tensor,     # (1, H, W) mm
-            'gt_pose': gt_pose,        # (13, 3) m, rectified camera frame
+            'rgb_raw': rgb_rect,              # (H_full, W_full, 3) uint8
+            'depth_raw': depth,               # (H_full, W_full) float32 mm
+            'rgb': rgb_tensor,                # (3, H, W)
+            'depth': depth_tensor,            # (1, H, W) mm
+            'gt_pose': gt_pose,               # (13, 3) m, world frame
+            'R_rect_to_world': R_rect_to_world,  # (3, 3) rotation
+            't_rect_to_world': t_rect_to_world,  # (3,) translation m
             'subject': subject,
             'action': sample['action'],
             'camera_id': primary_cam,

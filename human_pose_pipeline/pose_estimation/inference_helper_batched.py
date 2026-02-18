@@ -711,10 +711,22 @@ def process_frame_3d_from_rgbd(
     human_detector, device_torch, mirror_map, score_fn=None,
     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
     num_output_joints=17, use_gpu_acceleration=True, verbose=True, device='cpu',
-    depth_uncertainty=0.01
+    depth_uncertainty=0.01,
+    R_rect_to_world=None,
+    t_rect_to_world=None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Process RGB-D frame to extract 3D pose with uncertainty using depth lifting.
+
+    Uncertainty propagation follows two steps:
+      1. Pixel → rectified camera frame via back-projection Jacobian
+         J = [[Z/fx, 0,    (u-cx)/fx],
+              [0,    Z/fy, (v-cy)/fy],
+              [0,    0,    1        ]]
+         C_cam = J @ diag(σ_u², σ_v², σ_Z²) @ J^T
+      2. Rectified camera → world frame (if R_rect_to_world is provided)
+         X_world = R @ X_cam + t
+         C_world = R @ C_cam @ R^T
 
     Args:
         rgb_frames: Input RGB images [B, H, W, C]
@@ -733,14 +745,19 @@ def process_frame_3d_from_rgbd(
         use_gpu_acceleration: Whether to use GPU-accelerated preprocessing
         verbose: Print debug information
         device: Device to place output tensors on ('cpu' or 'cuda')
-        depth_uncertainty: Uncertainty in depth measurement (std dev in meters)
+        depth_uncertainty: Std dev of depth measurement in meters (e.g. 0.002 for 2 mm)
+        R_rect_to_world: Rotation from rectified camera to world frame.
+            Shape (3, 3) broadcast to all frames, or (B, 3, 3) per-frame.
+            numpy array or torch.Tensor. When None outputs remain in rectified camera frame.
+        t_rect_to_world: Translation from rectified camera to world frame in meters.
+            Shape (3,) or (B, 3). numpy array or torch.Tensor.
 
     Returns:
-        - points_3d: 3D joint coordinates [B, N_joints, 3]
-        - C_3d_all: 3D covariance matrices [B, N_joints, 3, 3]
-        - ood_score: OOD score for the detected person
-        - is_ood: Boolean indicating if the person is classified as OOD
-        - human_detected: Boolean indicating if a human was detected
+        - points_3d: 3D joint coordinates [B, N_joints, 3] (world frame if R given, else camera)
+        - C_3d_all: 3D covariance matrices [B, N_joints, 3, 3] (same frame as points_3d)
+        - ood_score: OOD scores [B]
+        - is_ood: OOD flags [B]
+        - human_detected: Detection flags [B]
         - keypoints_2d: 2D joint coordinates [B, N_joints, 2]
         - uncertainties_2d: 2D uncertainties [B, N_joints, 2]
         - covariance_xy: 2D covariance (x-y) [B, N_joints]
@@ -808,6 +825,31 @@ def process_frame_3d_from_rgbd(
 
     # Use broadcasting: [B, N_joints, 1, 1] for 3×3 covariance matrices
     C_3d_all = C_3d_all * combined_valid.unsqueeze(-1).unsqueeze(-1).float()
+
+    # Optionally rotate from rectified camera frame to world frame.
+    if R_rect_to_world is not None:
+        if isinstance(R_rect_to_world, np.ndarray):
+            R = torch.tensor(R_rect_to_world, dtype=torch.float32, device=device)
+        else:
+            R = R_rect_to_world.to(device=device, dtype=torch.float32)
+        if R.ndim == 2:
+            R = R.unsqueeze(0).expand(points_3d.shape[0], -1, -1)  # (B, 3, 3)
+
+        # Rotate 3D points: X_world[b,k] = R[b] @ X_cam[b,k]
+        points_3d = torch.einsum('bij,bkj->bki', R, points_3d)
+
+        if t_rect_to_world is not None:
+            if isinstance(t_rect_to_world, np.ndarray):
+                t = torch.tensor(t_rect_to_world, dtype=torch.float32, device=device)
+            else:
+                t = t_rect_to_world.to(device=device, dtype=torch.float32)
+            if t.ndim == 1:
+                t = t.unsqueeze(0)              # (1, 3)
+            points_3d = points_3d + t.unsqueeze(1)  # broadcast over joints
+
+        # Rotate covariances: C_world[b,k] = R[b] @ C_cam[b,k] @ R[b]^T
+        R_exp = R.unsqueeze(1)                  # (B, 1, 3, 3)
+        C_3d_all = R_exp @ C_3d_all @ R_exp.transpose(-1, -2)
 
     # Return 2D keypoints for visualization overlay
     return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_2d

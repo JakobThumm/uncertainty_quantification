@@ -72,8 +72,11 @@ def main():
     parser.add_argument('--camera_ids', type=str, nargs='+',
                         default=['55011271', '60457274', '54138969', '58860488'],
                         help='Primary camera IDs to evaluate (all four by default)')
-    parser.add_argument('--num_frames_per_video', type=int, default=10,
-                        help='Number of frames sampled per action video')
+    parser.add_argument('--num_frames_per_video', type=int, default=None,
+                        help='Number of frames sampled per action video (default: all frames)')
+    parser.add_argument('--max_sequences', type=int, default=None,
+                        help='Maximum number of (subject, action, camera) sequences to load '
+                             '(default: all); useful for quick debug runs')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Number of frames per inference batch')
     parser.add_argument('--sgbm_num_disparities', type=int, default=128,
@@ -131,6 +134,7 @@ def main():
         split=args.split,
         camera_ids=args.camera_ids,
         num_frames_per_video=args.num_frames_per_video,
+        max_sequences=args.max_sequences,
         camera_params_path=camera_params_path,
         sgbm_num_disparities=args.sgbm_num_disparities,
         sgbm_block_size=args.sgbm_block_size,
@@ -158,11 +162,14 @@ def main():
         end = min(start + args.batch_size, n)
 
         rgb_batch, depth_batch, gt_batch = [], [], []
+        R_batch, t_batch = [], []
         for i in range(start, end):
             sample = dataset[i]
-            rgb_batch.append(sample['rgb_raw'])          # (H, W, 3) uint8
-            depth_batch.append(sample['depth_raw'])      # (H, W) float32 mm
-            gt_batch.append(sample['gt_pose'].numpy())   # (13, 3) m
+            rgb_batch.append(sample['rgb_raw'])                  # (H, W, 3) uint8
+            depth_batch.append(sample['depth_raw'])              # (H, W) float32 mm
+            gt_batch.append(sample['gt_pose'].numpy())           # (13, 3) m, world
+            R_batch.append(sample['R_rect_to_world'].numpy())    # (3, 3)
+            t_batch.append(sample['t_rect_to_world'].numpy())    # (3,) m
 
         # Load camera intrinsics for the primary camera of this batch.
         # For clean per-camera evaluation, set --camera_ids to a single camera.
@@ -200,14 +207,15 @@ def main():
                 verbose=False,
                 device=args.device,
                 depth_uncertainty=args.depth_uncertainty,
+                R_rect_to_world=np.stack(R_batch),
+                t_rect_to_world=np.stack(t_batch),
             )
 
-        # ood_score is [B] tensor; is_ood returned by the function is always
-        # bool(is_ood[0]) — a scalar for the first frame only, so we derive
-        # per-frame is_ood directly from ood_score.
-        is_ood_batch = is_ood.cpu().numpy()
-
         B = points_3d.shape[0]
+        # ood_score is [B]; is_ood returned as a scalar bool for only the first
+        # frame, so derive per-frame flags from ood_score directly.
+        is_ood_batch = (ood_score > args.ood_threshold).cpu().numpy()
+
         all_batch_sizes.append(B)
         all_3d_points_list.append(points_3d.cpu().numpy())
         all_3d_cov_list.append(C_3d_all.cpu().numpy())
