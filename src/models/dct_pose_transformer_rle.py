@@ -49,7 +49,8 @@ class _CouplingMLP(nn.Module):
 
     hidden_dim: int
     out_dim: int
-    use_tanh: bool  # True for scale network (bounds scale outputs)
+    use_tanh: bool   # True for scale network (bounds scale outputs)
+    zero_init_output: bool = False  # If True, output layer starts at zero → identity flow
 
     @nn.compact
     def __call__(self, x):
@@ -57,7 +58,8 @@ class _CouplingMLP(nn.Module):
         x = nn.silu(x)
         x = nn.Dense(self.hidden_dim)(x)
         x = nn.silu(x)
-        x = nn.Dense(self.out_dim)(x)
+        out_init = nn.initializers.zeros if self.zero_init_output else nn.initializers.lecun_normal()
+        x = nn.Dense(self.out_dim, kernel_init=out_init)(x)
         if self.use_tanh:
             x = jnp.tanh(x)
         return x
@@ -79,12 +81,17 @@ class RealNVPFlax(nn.Module):
     n_layers: int = 6  # must be even; _MASKS_3D has period 2
 
     def setup(self):
+        # zero_init_output=True makes every coupling layer start as identity:
+        #   s=0 → scale=1, t=0 → no translation, log_det=0.
+        # This prevents exploding log-det values at the start of training.
         self.s_nets = [
-            _CouplingMLP(hidden_dim=self.hidden_dim, out_dim=3, use_tanh=True, name=f"s_{i}")
+            _CouplingMLP(hidden_dim=self.hidden_dim, out_dim=3, use_tanh=True,
+                         zero_init_output=True, name=f"s_{i}")
             for i in range(self.n_layers)
         ]
         self.t_nets = [
-            _CouplingMLP(hidden_dim=self.hidden_dim, out_dim=3, use_tanh=False, name=f"t_{i}")
+            _CouplingMLP(hidden_dim=self.hidden_dim, out_dim=3, use_tanh=False,
+                         zero_init_output=True, name=f"t_{i}")
             for i in range(self.n_layers)
         ]
 
@@ -145,18 +152,47 @@ class RLESigmaHead(nn.Module):
 
     Uses stopped-gradient transformer features (analogous to UncertaintyHeadCov).
     Outputs are in the same unit as pred_poses (millimetres after unit_conversion).
+
+    Args:
+        log_sigma_init: Initial value for all log-sigma outputs.  Setting this
+            to log(σ₀) makes every joint start with uncertainty σ₀ mm.
+
+            IMPORTANT: σ₀ must be chosen near the RLE equilibrium value, NOT at
+            a large "safe" value.  The RLE loss equilibrium is at:
+
+                r* = σ_opt / error_c  where  3*r*² + r* - 2 = 0  →  r* ≈ 0.67
+
+            i.e. σ_opt ≈ 0.67 * per_coord_error ≈ 0.39 * MPJPE.
+
+            If σ₀ >> σ_opt, the normalized residuals r = error/σ are very small
+            (~0.15 for σ₀=100mm, MPJPE=27mm).  The flow rapidly learns to assign
+            very high log_phi to near-zero r, creating a feedback loop that drives
+            σ even larger rather than toward σ_opt (runaway divergence).
+
+            Starting at or below σ_opt (r₀ ≥ r*) avoids this: the Gaussian prior
+            penalises large r, the flow cannot create runaway, and σ converges
+            stably.
+
+            Rule of thumb:  σ₀ ≈ 0.4 × MPJPE  (e.g. 20 mm for MPJPE≈50 mm stage-1).
     """
 
     d_model: int
     seq_len: int
     seq_len_output: int
     num_joints: int
+    log_sigma_init: float = math.log(20.0)  # warm-start at ~optimal for MPJPE≈27mm
 
     def setup(self):
         n_out = self.seq_len_output * self.num_joints * 3
         self.fc0 = nn.Dense(512)
         self.fc1 = nn.Dense(256)
-        self.log_sigma_out = nn.Dense(n_out)
+        # zero kernel → output is pure bias at init; bias = log_sigma_init
+        # so all joints start with the same reasonable uncertainty.
+        self.log_sigma_out = nn.Dense(
+            n_out,
+            kernel_init=nn.initializers.zeros,
+            bias_init=nn.initializers.constant(self.log_sigma_init),
+        )
 
     def __call__(self, features):
         """
@@ -257,6 +293,10 @@ class DCTPoseTransformerRLE(nn.Module):
         reduced_size:    If True, return a single flat pose vector (for OOD eval).
         flow_hidden_dim: Hidden size in RealNVP coupling MLPs.
         flow_n_layers:   Number of RealNVP coupling layers (must be even).
+        sigma_init_mm:   Initial per-joint sigma (mm).  Must be near the RLE
+                         equilibrium (≈ 0.39 × MPJPE) to avoid the flow-sigma
+                         runaway.  Default 20 mm suits MPJPE ≈ 27-50 mm.
+                         See RLESigmaHead docstring for full explanation.
     """
 
     input_dim: int = 39
@@ -270,6 +310,7 @@ class DCTPoseTransformerRLE(nn.Module):
     reduced_size: bool = False
     flow_hidden_dim: int = 64
     flow_n_layers: int = 6
+    sigma_init_mm: float = 20.0   # initial sigma in mm; optimal ≈ MPJPE/√(D·2/D) = MPJPE/√2
 
     def __post_init__(self):
         self.dct_mat, self.idct_mat = get_dct_matrix(self.seq_len)
@@ -413,6 +454,7 @@ class DCTPoseTransformerRLE(nn.Module):
             seq_len=self.seq_len,
             seq_len_output=self.seq_len_output,
             num_joints=num_joints,
+            log_sigma_init=math.log(self.sigma_init_mm),
             name="rle_sigma_head",
         )
         # Optionally fuse uncertainty features into sigma prediction

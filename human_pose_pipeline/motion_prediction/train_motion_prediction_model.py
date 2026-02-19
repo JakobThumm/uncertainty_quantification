@@ -204,6 +204,7 @@ class TrainingConfig:
         use_rle_model: bool = False,
         flow_hidden_dim: int = 64,
         flow_n_layers: int = 6,
+        sigma_init_mm: float = 20.0,
 
         # Experiment tracking
         run_id: Optional[str] = None,
@@ -247,6 +248,7 @@ class TrainingConfig:
         self.use_rle_model = use_rle_model
         self.flow_hidden_dim = flow_hidden_dim
         self.flow_n_layers = flow_n_layers
+        self.sigma_init_mm = sigma_init_mm
 
         # Experiment tracking
         self.run_id = run_id
@@ -366,6 +368,7 @@ def create_train_state(
             reduced_size=config.reduced_size,
             flow_hidden_dim=getattr(config, 'flow_hidden_dim', 64),
             flow_n_layers=getattr(config, 'flow_n_layers', 6),
+            sigma_init_mm=getattr(config, 'sigma_init_mm', 20.0),
         )
         dummy_input = jnp.ones((1, config.seq_len, config.input_dim))
         # y_true is always the pose-only target (N_JOINTS*3), even in stage 4
@@ -683,6 +686,7 @@ def eval_step_rle(
         'mpjpe_time_240ms': per_time_errors[5],
         'mpjpe_time_320ms': per_time_errors[7],
         'mpjpe_time_400ms': per_time_errors[9],
+        'sigma_mean': jnp.mean(sigma),
         'uncertainty_coverage std=1': uncertainty_coverage[0],
         'uncertainty_coverage std=2': uncertainty_coverage[1],
         'uncertainty_coverage std=3': uncertainty_coverage[2],
@@ -1411,6 +1415,7 @@ def main(args):
             use_rle_model=args.use_rle_model,
             flow_hidden_dim=args.flow_hidden_dim,
             flow_n_layers=args.flow_n_layers,
+            sigma_init_mm=args.sigma_init_mm,
         )
         config.save(config_path)
         print(f"Saved configuration to {config_path}")
@@ -1625,6 +1630,9 @@ if __name__ == "__main__":
                         help="Hidden size for RealNVP coupling MLPs")
     parser.add_argument("--flow_n_layers", type=int, default=6,
                         help="Number of RealNVP coupling layers (must be even)")
+    parser.add_argument("--sigma_init_mm", type=float, default=20.0,
+                        help="Initial sigma (mm) for all joints at start of stage 2 training. "
+                             "Rule of thumb: MPJPE_mm / sqrt(2) (≈19 mm for MPJPE≈27 mm).")
 
     # Training hyperparameters
     parser.add_argument("--batch_size", type=int, default=32)
