@@ -12,17 +12,10 @@ YOLOv26 version of pose_estimation_2D.py:
 
 import os
 import sys
+from time import time
 import numpy as np
 from scipy.stats import chi2
 import torch
-
-# Add parent directory to path
-root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-sys.path.insert(0, root_dir)
-# The ultralytics/ subfolder is a namespace package (no __init__.py at repo root level),
-# which shadows the editable install when running from this directory.
-# Insert the fork's repo root explicitly so the real package is found first.
-sys.path.insert(0, os.path.join(root_dir, 'ultralytics'))
 
 from ultralytics import YOLO
 from human_pose_pipeline.pose_estimation.inference_helper_batched import (
@@ -36,6 +29,18 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
     MIRROR_13_JOINT_MODEL_MAP,
     YOLO_CONFIDENCE_THRESHOLD,
 )
+
+# Coverage levels for both evaluation methods
+COVERAGES = [0.6800, 0.9500, 0.9973, 0.9999]
+N_RLE_SAMPLES = 100000
+
+# Add parent directory to path
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+sys.path.insert(0, root_dir)
+# The ultralytics/ subfolder is a namespace package (no __init__.py at repo root level),
+# which shadows the editable install when running from this directory.
+# Insert the fork's repo root explicitly so the real package is found first.
+# sys.path.insert(0, os.path.join(root_dir, 'ultralytics'))
 
 
 def evaluate_pose_estimation_full(ground_truth, estimated_pose, estimated_uncertainty, estimated_covariance):
@@ -87,6 +92,110 @@ def evaluate_pose_estimation_full(ground_truth, estimated_pose, estimated_uncert
     }
 
 
+# ---------------------------------------------------------------------------
+# RLE sampling-based coverage evaluation
+# ---------------------------------------------------------------------------
+
+def _get_flow_model_from_yolo(yolo_model):
+    """Extract the RealNVP flow model from a YOLO Pose26 head, or None if unavailable."""
+    try:
+        head = yolo_model.model.model[-1]
+        if hasattr(head, 'flow_model') and head.flow_model is not None:
+            return head.flow_model
+    except Exception:
+        pass
+    return None
+
+
+def _flow_forward_p(flow_model, z):
+    """Map N(0,I) latent samples to the normalised-error data space via the RealNVP inverse.
+
+    Inverts flow_model.backward_p(x):
+      backward:  z = (1-mask)*(x-t)*exp(-s) + mask*x    (iterating layers reversed)
+      forward:   x = (1-mask)*z*exp(s) + t + mask*z      (iterating layers forward)
+
+    Args:
+        flow_model: RealNVP instance.
+        z: (N, 2) tensor of standard-normal samples.
+
+    Returns:
+        (N, 2) tensor of samples in the normalised error space.
+    """
+    x = z.clone()
+    for i in range(len(flow_model.t)):
+        x_ = flow_model.mask[i] * x
+        s = flow_model.s[i](x_) * (1 - flow_model.mask[i])
+        t = flow_model.t[i](x_) * (1 - flow_model.mask[i])
+        x = (1 - flow_model.mask[i]) * x * torch.exp(s) + t + x_
+    return x
+
+
+def precompute_rle_coverage_thresholds(flow_model, n_samples=N_RLE_SAMPLES, coverages=COVERAGES):
+    """Precompute log-prob thresholds for RLE sampling-based coverage.
+
+    Draws n_samples points from the RealNVP distribution and finds the
+    log-prob values that separate each coverage level (HPD regions).
+
+    Args:
+        flow_model: trained RealNVP normalising flow from the Pose26 head.
+        n_samples: number of Monte Carlo samples (default 10 000).
+        coverages: sequence of coverage fractions, e.g. [0.68, 0.95, ...].
+
+    Returns:
+        List of log-prob thresholds — one per entry in coverages.
+    """
+    flow_device = flow_model.loc.device
+    epsilon = torch.randn(n_samples, 2, device=flow_device)
+    with torch.no_grad():
+        error_samples = _flow_forward_p(flow_model, epsilon)       # (N, 2) data space
+        log_p_samples = flow_model.log_prob(error_samples)         # (N,)
+    log_p_np = log_p_samples.cpu().numpy()
+    return [float(np.percentile(log_p_np, (1.0 - c) * 100.0)) for c in coverages]
+
+
+def evaluate_pose_estimation_rle_sampling(
+    ground_truth,
+    estimated_pose,
+    sigma,
+    flow_model,
+    rle_thresholds,
+):
+    """Evaluate pose coverage using RLE sampling-based confidence regions.
+
+    For each joint the normalised GT error is evaluated under the learned
+    RealNVP distribution.  The GT is considered 'covered' at level X% when
+    its log-probability is at least as high as the precomputed threshold that
+    corresponds to that level (i.e. it lies in the X% HPD region).
+
+    Args:
+        ground_truth:   (num_joints, 2) pixel coordinates.
+        estimated_pose: (num_joints, 2) predicted pixel coordinates.
+        sigma:          (num_joints, 2) per-joint (sigma_x, sigma_y) from RLE.
+        flow_model:     trained RealNVP normalising flow.
+        rle_thresholds: log-prob thresholds for [68%, 95%, 99.73%, 99.99%]
+                        as returned by precompute_rle_coverage_thresholds().
+
+    Returns:
+        dict with 'counts' (joints within each level) and 'num_joints'.
+    """
+    delta = ground_truth - estimated_pose          # (num_joints, 2)
+
+    # Normalise error by sigma — same normalisation used during RLE training
+    error_gt = delta / (sigma + 1e-9)             # (num_joints, 2)
+
+    flow_device = flow_model.loc.device
+    error_gt_t = torch.tensor(error_gt, dtype=torch.float32, device=flow_device)
+    with torch.no_grad():
+        log_p_gt = flow_model.log_prob(error_gt_t).cpu().numpy()   # (num_joints,)
+
+    label_map = ['within_1std', 'within_2std', 'within_3std', 'within_4std']
+    counts = {
+        label_map[i]: int(np.sum(log_p_gt >= thresh))
+        for i, thresh in enumerate(rle_thresholds)
+    }
+    return {'counts': counts, 'num_joints': len(ground_truth)}
+
+
 def main():
     base_directory = os.path.join(root_dir, "datasets", "H36M", "extracted")
 
@@ -96,6 +205,7 @@ def main():
     yolo_model_name = "yolo26n-pose.pt"  # Options: yolo26n/s/m/l/x-pose.pt (auto-downloaded)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     visualize = False          # Set to True to save per-sequence GIF visualizations
+    use_flow_model = True
     # =======================================
 
     if QUICK_TEST:
@@ -115,6 +225,22 @@ def main():
     yolo_model = YOLO(yolo_model_name)
     yolo_model.to(device)
     print("Model ready.\n")
+
+    # ---- RLE sampling setup ----
+    if use_flow_model:
+        flow_model = _get_flow_model_from_yolo(yolo_model)
+    else:
+        flow_model = None
+    rle_thresholds = None
+    if flow_model is not None:
+        print(f"RLE flow model found. Precomputing coverage thresholds (N={N_RLE_SAMPLES})...")
+        rle_thresholds = precompute_rle_coverage_thresholds(flow_model)
+        print(f"  Log-prob thresholds: " +
+              ", ".join(f"{c*100:.2f}%→{t:.3f}" for c, t in zip(COVERAGES, rle_thresholds)))
+        print()
+    else:
+        print("RLE flow model not accessible (model may be fused). "
+              "RLE sampling evaluation will be skipped.\n")
 
     # Build dataset splits
     datasets = {}
@@ -141,6 +267,12 @@ def main():
         total_within_2std = 0
         total_within_3std = 0
         total_within_4std = 0
+
+        # RLE sampling counters
+        total_within_1std_rle = 0
+        total_within_2std_rle = 0
+        total_within_3std_rle = 0
+        total_within_4std_rle = 0
 
         for idx, sample in enumerate(dataset):
             full_sequence = np.array(sample['pose_sequence'])  # (T, 13, 2)
@@ -198,6 +330,20 @@ def main():
                 total_within_3std += evaluation['counts']['within_3std']
                 total_within_4std += evaluation['counts']['within_4std']
 
+                # RLE sampling evaluation
+                if flow_model is not None and rle_thresholds is not None:
+                    eval_rle = evaluate_pose_estimation_rle_sampling(
+                        ground_truth=ground_truth,
+                        estimated_pose=mapped_pose,
+                        sigma=mapped_uncertainty,
+                        flow_model=flow_model,
+                        rle_thresholds=rle_thresholds,
+                    )
+                    total_within_1std_rle += eval_rle['counts']['within_1std']
+                    total_within_2std_rle += eval_rle['counts']['within_2std']
+                    total_within_3std_rle += eval_rle['counts']['within_3std']
+                    total_within_4std_rle += eval_rle['counts']['within_4std']
+
             if len(estimated_poses) == 0:
                 print("  No valid frames in this sequence.")
                 continue
@@ -238,10 +384,24 @@ def main():
             print(f"  Frames processed:        {total_frames}")
             print(f"  Joints evaluated:        {total_joints}")
             print(f"  Average MPJPE:           {total_mpjpe / total_frames:.2f} px")
-            print(f"  Within 1 std (68%):      {avg_within_1std:.2f}%")
-            print(f"  Within 2 std (95%):      {avg_within_2std:.2f}%")
-            print(f"  Within 3 std (99.7%):    {avg_within_3std:.2f}%")
-            print(f"  Within 4 std (99.99%):   {avg_within_4std:.2f}%")
+            print()
+            print(f"  --- Gaussian (sigma_x/sigma_y, Mahalanobis) ---")
+            print(f"  Within 68.00% (1-std):   {avg_within_1std:.2f}%")
+            print(f"  Within 95.00% (2-std):   {avg_within_2std:.2f}%")
+            print(f"  Within 99.73% (3-std):   {avg_within_3std:.2f}%")
+            print(f"  Within 99.99% (4-std):   {avg_within_4std:.2f}%")
+
+            if flow_model is not None and rle_thresholds is not None:
+                avg_within_1std_rle = (total_within_1std_rle / total_joints) * 100
+                avg_within_2std_rle = (total_within_2std_rle / total_joints) * 100
+                avg_within_3std_rle = (total_within_3std_rle / total_joints) * 100
+                avg_within_4std_rle = (total_within_4std_rle / total_joints) * 100
+                print()
+                print(f"  --- RLE sampling (N={N_RLE_SAMPLES}, HPD regions via RealNVP flow) ---")
+                print(f"  Within 68.00% HPD:       {avg_within_1std_rle:.2f}%")
+                print(f"  Within 95.00% HPD:       {avg_within_2std_rle:.2f}%")
+                print(f"  Within 99.73% HPD:       {avg_within_3std_rle:.2f}%")
+                print(f"  Within 99.99% HPD:       {avg_within_4std_rle:.2f}%")
 
 
 if __name__ == "__main__":
