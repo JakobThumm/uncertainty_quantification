@@ -40,6 +40,10 @@ from src.models.dct_pose_transformer_pytorch_attn import (
     pose_prediction_loss,
     gaussian_nll_from_cholesky,
 )
+from src.models.dct_pose_transformer_rle import (
+    DCTPoseTransformerRLE,
+    rle_loss as rle_loss_fn,
+)
 from src.datasets.wrapper import dataloader_from_string
 from human_pose_pipeline.motion_prediction.h36m_settings import (
     N_JOINTS,
@@ -196,6 +200,11 @@ class TrainingConfig:
         data_path: str = "../datasets",
         seed: int = 420,
 
+        # RLE model options
+        use_rle_model: bool = False,
+        flow_hidden_dim: int = 64,
+        flow_n_layers: int = 6,
+
         # Experiment tracking
         run_id: Optional[str] = None,
         wandb_project: str = "motion-prediction",
@@ -233,6 +242,11 @@ class TrainingConfig:
         # Data settings
         self.data_path = data_path
         self.seed = seed
+
+        # RLE model options
+        self.use_rle_model = use_rle_model
+        self.flow_hidden_dim = flow_hidden_dim
+        self.flow_n_layers = flow_n_layers
 
         # Experiment tracking
         self.run_id = run_id
@@ -339,20 +353,40 @@ def create_train_state(
         learning_rate = config.learning_rate
 
     # Initialize model
-    model = DCTPoseTransformer(
-        input_dim=config.input_dim,
-        d_model=config.d_model,
-        nhead=config.nhead,
-        num_layers=config.num_layers,
-        seq_len=config.seq_len,
-        seq_len_output=config.seq_len_output,
-        unit_conversion=config.unit_conversion,
-        reduced_size=config.reduced_size,
-    )
+    use_rle = getattr(config, 'use_rle_model', False)
+    if use_rle:
+        model = DCTPoseTransformerRLE(
+            input_dim=config.input_dim,
+            d_model=config.d_model,
+            nhead=config.nhead,
+            num_layers=config.num_layers,
+            seq_len=config.seq_len,
+            seq_len_output=config.seq_len_output,
+            unit_conversion=config.unit_conversion,
+            reduced_size=config.reduced_size,
+            flow_hidden_dim=getattr(config, 'flow_hidden_dim', 64),
+            flow_n_layers=getattr(config, 'flow_n_layers', 6),
+        )
+        dummy_input = jnp.ones((1, config.seq_len, config.input_dim))
+        # y_true is always the pose-only target (N_JOINTS*3), even in stage 4
+        # where input_dim includes appended uncertainty covariances
+        pose_dim = N_JOINTS * 3
+        dummy_target = jnp.ones((1, config.seq_len_output, pose_dim))
+        variables = model.init(rng, dummy_input, y_true=dummy_target, train=True)
+    else:
+        model = DCTPoseTransformer(
+            input_dim=config.input_dim,
+            d_model=config.d_model,
+            nhead=config.nhead,
+            num_layers=config.num_layers,
+            seq_len=config.seq_len,
+            seq_len_output=config.seq_len_output,
+            unit_conversion=config.unit_conversion,
+            reduced_size=config.reduced_size,
+        )
+        dummy_input = jnp.ones((1, config.seq_len, config.input_dim))
+        variables = model.init(rng, dummy_input, train=True)
 
-    # Initialize parameters
-    dummy_input = jnp.ones((1, config.seq_len, config.input_dim))
-    variables = model.init(rng, dummy_input, train=True)
     params = variables['params']
 
     # Create learning rate schedule for this stage
@@ -542,6 +576,120 @@ def eval_step(
     }
 
 
+@partial(jax.jit, static_argnames=['use_uncertainty_head', 'freeze_backbone'])
+def train_step_rle(
+    state: TrainState,
+    batch: Tuple[jnp.ndarray, jnp.ndarray],
+    use_uncertainty_head: bool,
+    lambda_weight: float,
+    freeze_backbone: bool = False,
+) -> Tuple[TrainState, Dict[str, float]]:
+    """Training step for the RLE model.
+
+    Stage 1: pose loss only (no flow).
+    Stage 2: RLE loss with frozen backbone (only rle_sigma_head + rle_flow train).
+    Stage 3: RLE loss end-to-end.
+    """
+    input_pose, target_pose = batch
+
+    def loss_fn(params):
+        if use_uncertainty_head:
+            pred_poses, (log_sigma, log_phi) = state.apply_fn(
+                {'params': params}, input_pose, y_true=target_pose, train=True
+            )
+            pose_loss = pose_prediction_loss(pred_poses, target_pose)
+            batch_size = target_pose.shape[0]
+            y_3d = target_pose.reshape(batch_size, -1, N_JOINTS, 3)
+            pred_3d = pred_poses.reshape(batch_size, -1, N_JOINTS, 3)
+            nll_loss = rle_loss_fn(pred_3d, y_3d, log_sigma, log_phi)
+            total_loss = nll_loss + lambda_weight * pose_loss
+        else:
+            # Stage 1: skip the flow entirely by not passing y_true
+            pred_poses, _ = state.apply_fn(
+                {'params': params}, input_pose, train=True
+            )
+            pose_loss = pose_prediction_loss(pred_poses, target_pose)
+            nll_loss = jnp.array(0.0)
+            total_loss = pose_loss
+
+        return total_loss, {
+            'loss': total_loss,
+            'nll_loss': nll_loss,
+            'pose_loss': pose_loss,
+            'lambda': jnp.array(lambda_weight),
+        }
+
+    grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
+    (loss, metrics), grads = grad_fn(state.params)
+
+    if freeze_backbone:
+        def freeze_rle_grads(path, grad):
+            path_str = '/'.join(str(k.key) for k in path)
+            if 'rle_sigma_head' in path_str or 'rle_flow' in path_str:
+                return grad
+            return jax.tree.map(jnp.zeros_like, grad)
+
+        grads = jax.tree_util.tree_map_with_path(freeze_rle_grads, grads)
+
+    state = state.apply_gradients(grads=grads)
+    return state, metrics
+
+
+@jax.jit
+def eval_step_rle(
+    state: TrainState,
+    batch: Tuple[jnp.ndarray, jnp.ndarray],
+) -> Dict[str, jnp.ndarray]:
+    """Evaluation step for the RLE model."""
+    input_pose, target_pose = batch
+
+    # Pass y_true so the flow computes log_phi for the NLL metric
+    pred_poses, (log_sigma, log_phi) = state.apply_fn(
+        {'params': state.params}, input_pose, y_true=target_pose, train=False
+    )
+
+    sigma = jnp.exp(log_sigma)  # [B, T_out, J, 3]
+    batch_size = target_pose.shape[0]
+    y_3d = target_pose.reshape(batch_size, -1, N_JOINTS, 3)
+    pred_3d = pred_poses.reshape(batch_size, -1, N_JOINTS, 3)
+
+    nll_loss = rle_loss_fn(pred_3d, y_3d, log_sigma, log_phi)
+    pose_loss = pose_prediction_loss(pred_poses, target_pose)
+
+    mpjpe, std, per_time_errors, _, _, _ = \
+        evaluate_pose_prediction_scores_jax(pred_3d, y_3d)
+
+    # Build diagonal Cholesky L from per-coord sigma for coverage evaluation
+    # Cov = diag(sigma^2) → L = diag(sigma) (lower triangular, diagonal)
+    L_diag = jnp.zeros((*sigma.shape, 3))  # [B, T, J, 3, 3]
+    L_diag = L_diag.at[..., 0, 0].set(sigma[..., 0])
+    L_diag = L_diag.at[..., 1, 1].set(sigma[..., 1])
+    L_diag = L_diag.at[..., 2, 2].set(sigma[..., 2])
+
+    uncertainty_coverage = evaluate_uncertainty_coverage_jax(
+        pred_poses=pred_3d,
+        true_poses=y_3d,
+        L=L_diag,
+        std_multipliers=[1, 2, 3, 4]
+    )
+
+    return {
+        'nll_loss': nll_loss,
+        'pose_loss': pose_loss,
+        'mpjpe': mpjpe,
+        'mpjpe_std': std,
+        'mpjpe_time_80ms': per_time_errors[1],
+        'mpjpe_time_160ms': per_time_errors[3],
+        'mpjpe_time_240ms': per_time_errors[5],
+        'mpjpe_time_320ms': per_time_errors[7],
+        'mpjpe_time_400ms': per_time_errors[9],
+        'uncertainty_coverage std=1': uncertainty_coverage[0],
+        'uncertainty_coverage std=2': uncertainty_coverage[1],
+        'uncertainty_coverage std=3': uncertainty_coverage[2],
+        'uncertainty_coverage std=4': uncertainty_coverage[3],
+    }
+
+
 def train_epoch(
     state: TrainState,
     train_loader,
@@ -553,6 +701,9 @@ def train_epoch(
     """Train for one epoch."""
     epoch_metrics = []
 
+    use_rle = getattr(config, 'use_rle_model', False)
+    step_fn = train_step_rle if use_rle else train_step
+
     for batch in tqdm(train_loader, "Training Epoch {}".format(epoch + 1)):
         # Convert to JAX arrays
         input_pose = jnp.array(batch[0], dtype=jnp.float32)
@@ -561,7 +712,7 @@ def train_epoch(
         # Select training step based on stage
         if stage == 1:
             # Stage 1: Train only pose prediction (no uncertainty head)
-            state, metrics = train_step(
+            state, metrics = step_fn(
                 state=state,
                 batch=(input_pose, target_pose),
                 use_uncertainty_head=False,
@@ -570,18 +721,16 @@ def train_epoch(
             )
         elif stage == 2:
             # Stage 2: Train ONLY uncertainty head (freeze backbone)
-            # Calculate lambda decay
-            lambda_weight = 0.0
-            state, metrics = train_step(
+            state, metrics = step_fn(
                 state=state,
                 batch=(input_pose, target_pose),
                 use_uncertainty_head=True,
-                lambda_weight=lambda_weight,
-                freeze_backbone=True  # FREEZE all params except uncertainty_head
+                lambda_weight=0.0,
+                freeze_backbone=True
             )
         elif stage == 3:
             # Stage 3: Train entire model end-to-end
-            state, metrics = train_step(
+            state, metrics = step_fn(
                 state=state,
                 batch=(input_pose, target_pose),
                 use_uncertainty_head=True,
@@ -590,7 +739,7 @@ def train_epoch(
             )
         elif stage == 4:
             # Stage 4: Train entire model end-to-end with input uncertainty
-            state, metrics = train_step(
+            state, metrics = step_fn(
                 state=state,
                 batch=(input_pose, target_pose),
                 use_uncertainty_head=True,
@@ -616,17 +765,20 @@ def train_epoch(
 def evaluate(
     state: TrainState,
     eval_loader,
-    epoch: int
+    epoch: int,
+    config: Optional[TrainingConfig] = None,
 ) -> Dict[str, float]:
     """Evaluate the model."""
     eval_metrics = []
+    use_rle = getattr(config, 'use_rle_model', False) if config is not None else False
+    eval_fn = eval_step_rle if use_rle else eval_step
 
     for batch in tqdm(eval_loader, "Eval Epoch {}".format(epoch + 1)):
         # Convert to JAX arrays
         input_pose = jnp.array(batch[0], dtype=jnp.float32)
         target_pose = jnp.array(batch[1], dtype=jnp.float32)
 
-        metrics = eval_step(state, (input_pose, target_pose))
+        metrics = eval_fn(state, (input_pose, target_pose))
         eval_metrics.append(metrics)
 
     # Average metrics
@@ -780,8 +932,9 @@ def save_model_pickle(
     os.makedirs(stage_dir, exist_ok=True)
 
     # Create model data with standard structure
+    model_name = 'DCTPoseTransformerRLE' if getattr(config, 'use_rle_model', False) else 'DCTPoseTransformer'
     model_data = {
-        'model': 'DCTPoseTransformer',
+        'model': model_name,
         'params': state.params,
         'config': {
             'input_dim': config.input_dim,
@@ -928,7 +1081,7 @@ def train_stage(
         )
 
         # Evaluate
-        eval_metrics = evaluate(state, valid_loader, epoch)
+        eval_metrics = evaluate(state, valid_loader, epoch, config=config)
 
         # Combine metrics
         all_metrics = {**train_metrics, **eval_metrics, 'epoch': epoch, 'stage': stage}
@@ -1255,6 +1408,9 @@ def main(args):
             wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity,
             use_wandb=args.use_wandb,
+            use_rle_model=args.use_rle_model,
+            flow_hidden_dim=args.flow_hidden_dim,
+            flow_n_layers=args.flow_n_layers,
         )
         config.save(config_path)
         print(f"Saved configuration to {config_path}")
@@ -1431,7 +1587,7 @@ def main(args):
 
     # Final evaluation on test set
     print("\nFinal evaluation on test set...")
-    test_metrics = evaluate(state, test_loader, epoch=0)
+    test_metrics = evaluate(state, test_loader, epoch=0, config=config)
     print("Test metrics:", test_metrics)
 
     if config.use_wandb:
@@ -1461,6 +1617,14 @@ if __name__ == "__main__":
     parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--seq_len", type=int, default=50)
     parser.add_argument("--seq_len_output", type=int, default=10)
+
+    # RLE model options
+    parser.add_argument("--use_rle_model", action="store_true", default=False,
+                        help="Use DCTPoseTransformerRLE with normalising-flow uncertainty head")
+    parser.add_argument("--flow_hidden_dim", type=int, default=64,
+                        help="Hidden size for RealNVP coupling MLPs")
+    parser.add_argument("--flow_n_layers", type=int, default=6,
+                        help="Number of RealNVP coupling layers (must be even)")
 
     # Training hyperparameters
     parser.add_argument("--batch_size", type=int, default=32)
