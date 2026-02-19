@@ -87,6 +87,7 @@ def main():
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection')
     parser.add_argument('--output_dir', type=str, default='results/pose_3d', help='Output directory for results')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use (cuda or cpu)')
+    parser.add_argument('--subsample', type=int, default=2, help='Subsampling of frames to match training camera frequency. 1 = no subsampling.')
 
     args = parser.parse_args()
 
@@ -100,6 +101,7 @@ def main():
     action = args.action
     camera_ids = args.camera_ids
     device = args.device
+    subsample = args.subsample
 
     # Initialize models
     print("\nInitializing models...")
@@ -208,14 +210,14 @@ def main():
         # Iterate through frames in a batched manner
         frame_counter = 0
         # Subsample every second frame to match motion prediction frequency.
-        for frame_idx in tqdm(range(0, frames_to_process, 2), f"Evaluating sequence {counter}/{n_sequences} of split {split}."):
+        for frame_idx in tqdm(range(0, frames_to_process, subsample), f"Evaluating sequence {counter}/{n_sequences} of split {split}."):
             # Interleave left and right frames
             interleaved_frames = [
                 all_camera_frames[0][frame_idx],
                 all_camera_frames[1][frame_idx]
             ]
 
-            points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected = process_frame_3d(
+            points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, _, _, _ = process_frame_3d(
                 frames=interleaved_frames,
                 projection_matrices=projection_matrices,
                 pose_estimation_jit_fn=pose_estimation_jit_fn,
@@ -234,6 +236,8 @@ def main():
             points_3d = points_3d[0]
             C_3d_all = C_3d_all[0]
             # Valid prediction if not OOD and human detected
+            pose_is_ood = bool(pose_is_ood)
+            human_detected = bool(human_detected)
             is_valid = (not pose_is_ood) and human_detected
 
             points_3d_buffer, covariance_buffer, pose_valid_buffer, pose_buffer_good = fill_pose_buffer(
@@ -289,6 +293,8 @@ def main():
                     hand_indices=COV_CALIBRATION_HI,
                     feet_indices=COV_CALIBRATION_FI
                 )
+                if isinstance(motion_cov_predicted, np.ndarray):
+                    motion_cov_predicted = jnp.array(motion_cov_predicted)
                 motion_is_ood = bool(motion_ood_score > MOTION_OOD_THRESHOLD)
                 # Update motion prediction buffer
                 motion_prediction_buffer, motion_uncertainty_buffer, valid_motion = update_motion_prediction_buffer(
@@ -317,7 +323,8 @@ def main():
             motions_predicted.append(motion_predicted)
             motions_cov_predicted.append(motion_cov_predicted)
             motions_set_radius.append(motion_prediction_set_radius)
-            motions_gt.append(pose_sequence[frame_idx + 1 : frame_idx + PREDICTION_HORIZON_LENGTH + 1])
+            # Incorporate subsampling!
+            motions_gt.append(pose_sequence[frame_idx + 1 : frame_idx + subsample * PREDICTION_HORIZON_LENGTH + 1 : subsample])
             motions_ood_scores.append(motion_ood_score)
             motions_is_ood.append(motion_is_ood)
             motions_is_valid.append(valid_motion)
@@ -327,7 +334,6 @@ def main():
 
             # Remove GPU tensors to free memory
             # del points_3d, C_3d_all, ood_score, is_ood
-
     # Convert to numpy arrays
     num_frames = sum(poses_3d_gt)
     print("Full pipeline completed!")

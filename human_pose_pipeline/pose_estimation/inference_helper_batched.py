@@ -8,7 +8,7 @@ Based on Marian's Inference_Helper.py but adapted for JAX instead of PyTorch.
 import json
 import pickle
 from time import time
-from typing import Tuple, Union
+from typing import Sequence, Tuple, Union
 from matplotlib.pylab import f
 import numpy as np
 import jax
@@ -592,15 +592,24 @@ def set_depth_uncertainty_to_constant(
 
 
 def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device='cpu',
-                             depth_outlier_threshold=1.5):
+                             depth_outlier_threshold=1.5, search_radius=10,
+                             border_clip=30):
     """
     Lift 2D keypoints to 3D using depth information (fully vectorized).
+
+    For each joint, searches within `search_radius` pixels to handle zero-depth at
+    object edges. The joint's (u, v) is moved to the minimum-depth pixel in that
+    radius, and the final depth Z is set to the median of all valid depths in the
+    radius (robust to noise).
 
     Args:
         keypoints_2d: 2D keypoint positions [B, N_joints, 2] in pixel coordinates
         depth_map: Depth image [B, H, W] in meters (or mm, will be handled)
         camera_intrinsics: Dict with keys 'fx', 'fy', 'cx', 'cy'
         device: Device for torch tensors
+        depth_outlier_threshold: Max deviation from per-frame median depth (meters)
+        search_radius: Pixel radius to search around each joint for valid depth
+        border_clip: Pixel to remove from the border due to missing depth data at the edge.
 
     Returns:
         points_3d: 3D joint positions [B, N_joints, 3] in meters
@@ -608,6 +617,9 @@ def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device=
     """
     B, N_joints, _ = keypoints_2d.shape
     H, W = depth_map.shape[1], depth_map.shape[2]
+
+    # Convert depth to meters if in millimeters (depth > 10 means mm)
+    depth_map = torch.where(depth_map > 10, depth_map * 0.001, depth_map)
 
     fx = camera_intrinsics['fx']
     fy = camera_intrinsics['fy']
@@ -623,32 +635,58 @@ def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device=
     v_int = torch.round(v).long()
 
     # Check bounds - create validity mask [B, N_joints]
-    valid_bounds = (u_int >= 0) & (u_int < W) & (v_int >= 0) & (v_int < H)
+    valid_bounds = (u_int >= 0) & (u_int <= W) & (v_int >= 0) & (v_int <= H)
 
     # Clamp indices to valid range to prevent indexing errors
-    u_clamped = torch.clamp(u_int, 0, W - 1)
-    v_clamped = torch.clamp(v_int, 0, H - 1)
+    u_clamped = torch.clamp(u_int, border_clip, W - (border_clip + 1))
+    v_clamped = torch.clamp(v_int, border_clip, H - (border_clip + 1))
 
-    # Create batch indices [B, N_joints]
+    # --- Radius-based depth search ---
+    # Build offset grid [P] where P = (2*search_radius+1)^2
+    dy, dx = torch.meshgrid(
+        torch.arange(-search_radius, search_radius + 1, device=device),
+        torch.arange(-search_radius, search_radius + 1, device=device),
+        indexing='ij'
+    )
+    dy = dy.reshape(-1)  # [P]
+    dx = dx.reshape(-1)  # [P]
+    P = dy.shape[0]
+
+    # Sample positions for every joint across the radius [B, N_joints, P]
+    u_patch = torch.clamp(u_clamped.unsqueeze(-1) + dx.view(1, 1, P), 0, W - 1)
+    v_patch = torch.clamp(v_clamped.unsqueeze(-1) + dy.view(1, 1, P), 0, H - 1)
+
+    # Gather depth at all patch positions [B, N_joints, P]
+    B_exp = torch.arange(B, device=device).view(B, 1, 1).expand(B, N_joints, P)
+    depth_patch = depth_map[B_exp, v_patch, u_patch].float()
+
+    # Step 1: Find the pixel with the minimum valid depth → update (u, v) only when
+    # the original position has zero depth (edge of object).
     batch_indices = torch.arange(B, device=device).unsqueeze(1).expand(B, N_joints)
+    Z_orig = depth_map[batch_indices, v_clamped, u_clamped].float()
+    needs_snap = Z_orig <= 0  # [B, N_joints]
 
-    # Gather depth values at keypoint locations [B, N_joints]
-    # Using advanced indexing: depth_map[batch_idx, v_idx, u_idx]
-    Z = depth_map[batch_indices, v_clamped, u_clamped]
+    depth_for_argmin = depth_patch.masked_fill(depth_patch <= 0, float('inf'))
+    min_idx = depth_for_argmin.argmin(dim=-1)  # [B, N_joints]
 
-    # Convert depth to meters if in millimeters (depth > 10 means mm)
-    Z = torch.where(Z > 10, Z * 0.001, Z)
+    u_snapped = torch.gather(u_patch, dim=-1, index=min_idx.unsqueeze(-1)).squeeze(-1)
+    v_snapped = torch.gather(v_patch, dim=-1, index=min_idx.unsqueeze(-1)).squeeze(-1)
 
-    # Median-based outlier rejection: compute per-frame median over valid joints,
-    # then discard joints whose depth deviates by more than depth_outlier_threshold.
-    Z_for_median = Z.masked_fill(Z <= 0, float('nan'))
-    Z_median = torch.nanmedian(Z_for_median, dim=1).values  # [B]
-    median_diff = torch.abs(Z - Z_median.unsqueeze(1))      # [B, N_joints]
+    u_final = torch.where(needs_snap, u_snapped, u_clamped)
+    v_final = torch.where(needs_snap, v_snapped, v_clamped)
+
+    Z = depth_map[batch_indices, v_final, u_final].float()
+
+    # Cross-joint outlier rejection: discard joints whose depth deviates too much
+    # from the per-frame median across all joints.
+    Z_for_global = Z.masked_fill(Z <= 0, float('nan'))
+    Z_global_median = torch.nanmedian(Z_for_global, dim=1).values  # [B]
+    median_diff = torch.abs(Z - Z_global_median.unsqueeze(1))       # [B, N_joints]
     valid_depth_values = (Z > 0) & (median_diff <= depth_outlier_threshold)
 
-    # Back-projection formula (vectorized) [B, N_joints]
-    X = (u - cx) * Z / fx
-    Y = (v - cy) * Z / fy
+    # Back-projection: use updated (u_final, v_final) for X/Y, median depth for Z
+    X = (u_final - cx) * Z / fx
+    Y = (v_final - cy) * Z / fy
 
     # Stack into 3D points [B, N_joints, 3]
     points_3d = torch.stack([X, Y, Z], dim=2)
@@ -1491,8 +1529,8 @@ def process_frame_3d_yolo(
 
 
 def process_frame_3d_from_rgbd_yolo(
-    rgb_frames: Union[torch.Tensor, np.ndarray],
-    depth_frames: Union[torch.Tensor, np.ndarray],
+    rgb_frames: Union[torch.Tensor, np.ndarray, Sequence],
+    depth_frames: Union[torch.Tensor, np.ndarray, Sequence],
     camera_intrinsics: dict,
     yolo_pose_model,
     mirror_map,
@@ -1501,7 +1539,9 @@ def process_frame_3d_from_rgbd_yolo(
     verbose: bool = False,
     device: str = 'cpu',
     depth_uncertainty: float = 0.01,
-    tracker_config: str = 'botsort.yaml'
+    tracker_config: str = 'botsort.yaml',
+    R_rect_to_world=None,
+    t_rect_to_world=None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Process RGB-D frames using YOLO pose estimation and lift to 3D using depth.
@@ -1518,6 +1558,11 @@ def process_frame_3d_from_rgbd_yolo(
         device: Device to place output tensors on ('cpu' or 'cuda')
         depth_uncertainty: Uncertainty in depth measurement (std dev in meters)
         tracker_config: Tracker configuration file
+        R_rect_to_world: Rotation from rectified camera to world frame.
+            Shape (3, 3) broadcast to all frames, or (B, 3, 3) per-frame.
+            numpy array or torch.Tensor. When None outputs remain in rectified camera frame.
+        t_rect_to_world: Translation from rectified camera to world frame in meters.
+            Shape (3,) or (B, 3). numpy array or torch.Tensor.
 
     Returns:
         - points_3d: 3D joint coordinates [B, 13, 3]
@@ -1582,5 +1627,30 @@ def process_frame_3d_from_rgbd_yolo(
     ood_score = torch.zeros(keypoints_2d.shape[0], device=device)
     is_ood = torch.zeros(keypoints_2d.shape[0], dtype=torch.bool, device=device)
     is_ood = torch.logical_or(is_ood, torch.any(combined_valid == 0, dim=1))
+
+    # Optionally rotate from rectified camera frame to world frame.
+    if R_rect_to_world is not None:
+        if isinstance(R_rect_to_world, np.ndarray):
+            R = torch.tensor(R_rect_to_world, dtype=torch.float32, device=device)
+        else:
+            R = R_rect_to_world.to(device=device, dtype=torch.float32)
+        if R.ndim == 2:
+            R = R.unsqueeze(0).expand(points_3d.shape[0], -1, -1)  # (B, 3, 3)
+
+        # Rotate 3D points: X_world[b,k] = R[b] @ X_cam[b,k]
+        points_3d = torch.einsum('bij,bkj->bki', R, points_3d)
+
+        if t_rect_to_world is not None:
+            if isinstance(t_rect_to_world, np.ndarray):
+                t = torch.tensor(t_rect_to_world, dtype=torch.float32, device=device)
+            else:
+                t = t_rect_to_world.to(device=device, dtype=torch.float32)
+            if t.ndim == 1:
+                t = t.unsqueeze(0)              # (1, 3)
+            points_3d = points_3d + t.unsqueeze(1)  # broadcast over joints
+
+        # Rotate covariances: C_world[b,k] = R[b] @ C_cam[b,k] @ R[b]^T
+        R_exp = R.unsqueeze(1)                  # (B, 1, 3, 3)
+        C_3d_all = R_exp @ C_3d_all @ R_exp.transpose(-1, -2)
 
     return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_2d

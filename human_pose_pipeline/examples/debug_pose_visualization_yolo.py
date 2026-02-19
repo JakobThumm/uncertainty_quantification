@@ -21,14 +21,6 @@ import cv2
 from PIL import Image
 import torch
 
-# Add parent directory to path
-root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-sys.path.insert(0, root_dir)
-# The ultralytics/ subfolder is a namespace package (no __init__.py at repo root level),
-# which shadows the editable install when running from this directory.
-# Insert the fork's repo root explicitly so the real package is found first.
-sys.path.insert(0, os.path.join(root_dir, 'ultralytics'))
-
 from ultralytics import YOLO
 from human_pose_pipeline.pose_estimation.inference_helper_batched import (
     process_frame_2d_yolo,
@@ -45,8 +37,13 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
 )
 
 
+# Add parent directory to path
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+sys.path.insert(0, root_dir)
+
+
 def load_single_sample(base_directory, subject='S1', action='Directions',
-                      camera='55011271', frame_idx=100):
+                       camera='55011271', frame_idx=100):
     """
     Load a single sample from H36M dataset
 

@@ -1,6 +1,6 @@
 """Utilities for evaluating uncertainty estimates in human pose predictions."""
 
-from typing import Tuple
+from typing import Tuple, Union
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -420,7 +420,7 @@ def print_simple_coverage_stats_sara(
 
 
 def convert_covariance_matrices_to_set(
-    covariance_matrices: np.ndarray,
+    covariance_matrices: Union[np.ndarray, jnp.ndarray],
     likelihood: float
 ) -> np.ndarray:
     """Convert the covariance matrices to a spherical set covering n_std standard deviations.
@@ -433,9 +433,15 @@ def convert_covariance_matrices_to_set(
     """
     from scipy.stats import chi2
     # largest eigenvalue
-    lambda_max = np.max(np.linalg.eigvalsh(covariance_matrices), axis=-1)
     # chi-square threshold for number of standard deviations in 3D
     chi_squared_val = chi2.ppf(likelihood, df=3)
-    # sphere radius
-    radius = np.sqrt(lambda_max * chi_squared_val)
+    if isinstance(covariance_matrices, np.ndarray):
+        lambda_max = np.max(np.linalg.eigvalsh(covariance_matrices), axis=-1)
+        # sphere radius
+        radius = np.sqrt(lambda_max * chi_squared_val)
+    else:
+        lambda_max = jnp.max(jnp.linalg.eigvalsh(covariance_matrices), axis=-1)
+        # sphere radius
+        radius = np.sqrt(lambda_max * chi_squared_val)
+
     return radius
