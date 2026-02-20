@@ -191,9 +191,10 @@ def main():
     motion_uncertainty_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
 
     # Iterate through frames in a batched manner
+    start_at = 30
     frame_counter = 0
     # Subsample every second frame to match motion prediction frequency.
-    for frame_idx in tqdm(range(0, frames_to_process, subsample), "Evaluating sequence:"):
+    for frame_idx in tqdm(range(start_at, frames_to_process, subsample), "Evaluating sequence:"):
         sample = dataset[frame_idx]
         image_pil = sample['color_raw']
         depth_img = sample['depth_raw']
@@ -204,6 +205,8 @@ def main():
         # Create a batch out of single instances
         rgb_batch = [image_pil]
         depth_batch = [depth_img]
+        R_rect_to_world = sample['R_rect_to_world']  # (3, 3) numpy array
+        t_rect_to_world = sample['t_rect_to_world']  # (3,) numpy array
 
         t3 = time()
         points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, _, _, _ = \
@@ -218,15 +221,11 @@ def main():
                 verbose=False,
                 device=device,
                 depth_uncertainty=args.depth_uncertainty,
+                R_rect_to_world=R_rect_to_world,
+                t_rect_to_world=t_rect_to_world,
             )
         t4 = time()
         print(f"Time for batch processing: {t4 - t3:.3f}s")
-
-        # Optional in the future if we have transform of camera to world.
-        # Transform from rectified camera frame to world frame (metres → mm).
-        # points_3d, C_3d_all = apply_world_transform(
-        #     points_3d, C_3d_all, R_batch, t_batch, device=device
-        # )
 
         # process frame 3D has a batch size of 1, remove first dimension.
         points_3d = points_3d[0]

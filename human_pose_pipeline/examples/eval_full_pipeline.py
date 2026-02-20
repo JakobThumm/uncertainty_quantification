@@ -198,7 +198,7 @@ def main():
 
         # Process a limited number of frames for testing
         frames_to_process = min(len(all_camera_frames[0]), len(pose_sequence))
-        frames_to_process -= PREDICTION_HORIZON_LENGTH
+        frames_to_process -= subsample * PREDICTION_HORIZON_LENGTH
 
         points_3d_buffer = jnp.zeros([INPUT_HORIZON_LENGTH, N_JOINTS, 3])
         covariance_buffer = jnp.zeros([INPUT_HORIZON_LENGTH, N_JOINTS, 3, 3])

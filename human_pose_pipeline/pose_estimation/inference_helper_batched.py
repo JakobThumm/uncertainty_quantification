@@ -432,7 +432,7 @@ def process_frame_3d(
         device: Device to place output tensors on ('cpu' or 'cuda')
 
     Returns:
-        - points_3d: 3D joint coordinates [B, N_joints, 3]
+        - points_3d: 3D joint coordinates in mm world frame [B, N_joints, 3]
         - C_3d_all: 3D covariance matrices [B, N_joints, 3, 3]
         - ood_score: OOD score for the detected person (0 if no score_fn provided)
         - is_ood: Boolean indicating if the person is classified as OOD based on the threshold (False if no score_fn provided)
@@ -856,7 +856,7 @@ def process_frame_3d_from_rgbd(
             Shape (3,) or (B, 3). numpy array or torch.Tensor.
 
     Returns:
-        - points_3d: 3D joint coordinates [B, N_joints, 3] (world frame if R given, else camera)
+        - points_3d: 3D joint coordinates in mm[B, N_joints, 3] (world frame if R given, else camera)
         - C_3d_all: 3D covariance matrices [B, N_joints, 3, 3] (same frame as points_3d)
         - ood_score: OOD scores [B]
         - is_ood: OOD flags [B]
@@ -915,6 +915,10 @@ def process_frame_3d_from_rgbd(
         device=device
     )
 
+    # Convert to mm
+    points_3d *= 1000.0
+    C_3d_all *= 1000.0 * 1000.0
+
     # Mark invalid joints (no depth or no human detected) - Vectorized
     # Create combined validity mask: [B, N_joints]
     # If human not detected, all joints invalid
@@ -955,9 +959,6 @@ def process_frame_3d_from_rgbd(
         # Rotate covariances: C_world[b,k] = R[b] @ C_cam[b,k] @ R[b]^T
         R_exp = R.unsqueeze(1)                  # (B, 1, 3, 3)
         C_3d_all = R_exp @ C_3d_all @ R_exp.transpose(-1, -2)
-        # Convert to mm
-        points_3d *= 1000
-        C_3d_all *= 1000 * 1000
 
     # Return 2D keypoints for visualization overlay
     return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_2d
@@ -1565,7 +1566,7 @@ def process_frame_3d_from_rgbd_yolo(
             Shape (3,) or (B, 3). numpy array or torch.Tensor.
 
     Returns:
-        - points_3d: 3D joint coordinates [B, 13, 3]
+        - points_3d: 3D joint coordinates in mm world frame [B, 13, 3]
         - C_3d_all: 3D covariance matrices [B, 13, 3, 3]
         - ood_score: Placeholder zeros [B]
         - is_ood: Placeholder False
@@ -1616,6 +1617,10 @@ def process_frame_3d_from_rgbd_yolo(
         device=device
     )
 
+    # Convert to mm
+    points_3d *= 1000.0
+    C_3d_all *= 1000.0 * 1000.0
+
     # Mark invalid joints
     human_detected_expanded = human_detected.unsqueeze(1)
     combined_valid = valid_depth & human_detected_expanded
@@ -1647,7 +1652,7 @@ def process_frame_3d_from_rgbd_yolo(
                 t = t_rect_to_world.to(device=device, dtype=torch.float32)
             if t.ndim == 1:
                 t = t.unsqueeze(0)              # (1, 3)
-            points_3d = points_3d + t.unsqueeze(1)  # broadcast over joints
+            points_3d = points_3d + t.unsqueeze(1) * 1000.0  # broadcast over joints
 
         # Rotate covariances: C_world[b,k] = R[b] @ C_cam[b,k] @ R[b]^T
         R_exp = R.unsqueeze(1)                  # (B, 1, 3, 3)

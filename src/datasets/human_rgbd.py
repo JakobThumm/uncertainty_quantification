@@ -16,6 +16,7 @@ import os
 import numpy as np
 import cv2
 from PIL import Image
+from scipy.spatial.transform import Rotation
 from torch.utils.data import Dataset, DataLoader
 import torch
 from torchvision import transforms
@@ -32,6 +33,15 @@ DEFAULT_CAMERA_INTRINSICS = {
     'cy': 239.5,   # principal point y
 }
 
+# Default camera placement: 0.8 m above ground, pitched 10° downward
+DEFAULT_CAMERA_POSITION = np.array([0.0, -2.0, 0.7], dtype=np.float32)
+DEFAULT_CAMERA_RPY_DEG = np.array([10.0, 0.0, 0.0], dtype=np.float32)
+CAMERA_TO_WORLD_TRANSFORM = np.array(
+    [[1.0, 0.0, 0.0],
+     [0.0, 0.0, 1.0],
+     [0.0, -1.0, 0.0]], dtype=np.float32
+)
+
 
 class HumanRGBDDataset(Dataset):
     """
@@ -45,6 +55,10 @@ class HumanRGBDDataset(Dataset):
         transform: Optional transform to apply to color images
         depth_scale: Scale factor to convert depth values to meters (default 0.001 for mm)
         camera_intrinsics: Dict with camera intrinsic parameters (fx, fy, cx, cy)
+        camera_position: Camera position in world frame [x, y, z] in metres.
+            Defaults to [0, 0, 0.8] (camera mounted 0.8 m above ground).
+        camera_rpy_deg: Camera orientation as (roll, pitch, yaw) in degrees using
+            intrinsic XYZ convention.  Defaults to [0, -10, 0] (pitched 10° down).
     """
 
     def __init__(
@@ -52,13 +66,22 @@ class HumanRGBDDataset(Dataset):
         base_directory: str,
         transform=None,
         depth_scale: float = 0.001,
-        camera_intrinsics: dict = None
+        camera_intrinsics: dict = None,
+        camera_position: np.ndarray = None,
+        camera_rpy_deg: np.ndarray = None,
     ):
         self.base_directory = base_directory
         self.color_dir = os.path.join(base_directory, 'color')
         self.depth_dir = os.path.join(base_directory, 'depth')
         self.depth_scale = depth_scale
         self.camera_intrinsics = camera_intrinsics or DEFAULT_CAMERA_INTRINSICS
+
+        # Compute rotation matrix (camera → world) from RPY angles
+        rpy = camera_rpy_deg if camera_rpy_deg is not None else DEFAULT_CAMERA_RPY_DEG
+        pos = camera_position if camera_position is not None else DEFAULT_CAMERA_POSITION
+        rotation = Rotation.from_euler('xyz', rpy, degrees=True).as_matrix().astype(np.float32)
+        self.R_rect_to_world = CAMERA_TO_WORLD_TRANSFORM @ rotation
+        self.t_rect_to_world = np.asarray(pos, dtype=np.float32)
 
         # Default transform: convert to tensor and normalize
         if transform is None:
@@ -154,7 +177,9 @@ class HumanRGBDDataset(Dataset):
             'depth_raw': depth_raw,
             'filename': sample['filename'],
             'timestamp': sample['timestamp'],
-            'camera_intrinsics': self.camera_intrinsics
+            'camera_intrinsics': self.camera_intrinsics,
+            'R_rect_to_world': self.R_rect_to_world,
+            't_rect_to_world': self.t_rect_to_world,
         }
 
 
