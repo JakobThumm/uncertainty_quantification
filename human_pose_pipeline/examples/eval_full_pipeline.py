@@ -9,6 +9,7 @@ Performs:
 """
 
 import os
+import sys
 import argparse
 import numpy as np
 import torch
@@ -76,18 +77,18 @@ def main():
     parser.add_argument('--cache_dir', type=str, default='cache/', help='Cache directory with score functions')
     parser.add_argument('--data_path', type=str, default='datasets/', help='Path to datasets')
     parser.add_argument('--pose_model_save_path', type=str, default='human_pose_pipeline/models/pose_estimation', help='Path to saved pose model')
-    parser.add_argument('--motion_model_save_path', type=str, default='human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle', help='Path to saved motion model')
     parser.add_argument('--pose_run_name', type=str, default='jax_resnet50_regressflow', help='Pose model run name')
     parser.add_argument('--pose_base_key', type=str, default=None, help='Base key for loading the pose estimation OOD score functions')
+    parser.add_argument('--motion_model_save_path', type=str, default='human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle', help='Path to saved motion model')
     parser.add_argument('--motion_score_fn_path', type=str, default='human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle', help="Path to the OOD score function for the motion prediction.")
+    parser.add_argument('--subsample', type=int, default=2, help='Subsampling of frames to match training camera frequency. 1 = no subsampling.')
     parser.add_argument('--split', type=str, default='validation', help='train, validation, or test')
-    parser.add_argument('--action', type=str, default='WalkingDog', help='Action to visualize')
+    parser.add_argument('--action', type=str, default='Directions', help='Action to evaluate')
     parser.add_argument('--camera_ids', type=str, nargs=2, default=['55011271', '60457274'], help='Camera IDs')
     parser.add_argument('--max_sequences', type=int, default=10000000000, help='Maximum number of sequences to process')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection')
     parser.add_argument('--output_dir', type=str, default='results/pose_3d', help='Output directory for results')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use (cuda or cpu)')
-    parser.add_argument('--subsample', type=int, default=2, help='Subsampling of frames to match training camera frequency. 1 = no subsampling.')
 
     args = parser.parse_args()
 
@@ -132,7 +133,7 @@ def main():
             print(f"\nLoading OOD score functions with cache key: {args.pose_base_key}")
             pose_ood_score_fn, _, _, _ = load_score_functions(args.cache_dir, args.pose_base_key)
             print("OOD score functions loaded successfully!")
-            print(f"Using OOD threshold: {args.ood_threshold:.6f}")
+            print(f"Using OOD threshold: {POSE_OOD_THRESHOLD:.6f}")
 
         if not os.path.exists(args.motion_score_fn_path):
             raise FileNotFoundError(

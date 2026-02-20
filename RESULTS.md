@@ -32,6 +32,16 @@ Results
 
 Run with:
 ```
+{
+  "name": "Pose Estimation 2D",
+  "type": "debugpy",
+  "request": "launch",
+  "program": "human_pose_pipeline/examples/pose_estimation_2D.py",
+  "console": "integratedTerminal"
+},
+```
+Results:
+```
     Total frames processed: 4988
     Total joints evaluated: 64844
     Average MPJPE: 7.83

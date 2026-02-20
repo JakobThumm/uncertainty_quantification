@@ -20,6 +20,9 @@ from PIL import Image
 from tqdm import tqdm
 import torch
 
+from human_pose_pipeline.pose_estimation.inference_helper_batched import predict_pose
+from human_pose_pipeline.utils.gpu_accelerated_utils import extract_bounding_box_images_gpu
+from human_pose_pipeline.utils.transform_utils import preprocess_image_with_bbox, transform_predictions_to_original_space
 from src.datasets.h36m import Human36mDatasetSequence
 from src.datasets.tiger_pose import TigerPoseDataset, tiger_pose_to_h36m_format
 from human_pose_pipeline.pose_estimation.inference_helper import (
@@ -27,7 +30,6 @@ from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_human_detector,
     resize_image,
     process_frame_2d,
-    get_pose_estimations_jax,
     joint_mapping
 )
 from human_pose_pipeline.evaluation.pose_metrics import (
@@ -450,24 +452,28 @@ def predict_poses_on_tiger_dataset(pose_estimation_jit_fn, params, batch_stats, 
             person_boxes = [[0.0, 0.0, YOLO_IMAGE_SIZE[0], YOLO_IMAGE_SIZE[1]]]
 
             # Step 3: Perform pose estimation
-            pose_estimations = get_pose_estimations_jax(
-                transformed_image, original_dimensions, scale_factors, person_boxes,
-                pose_estimation_jit_fn, params, batch_stats, False
+            device_str = 'cuda' if str(device_torch).startswith('cuda') else 'cpu'
+            resized_image_np = np.array(resized_image)
+            bounding_box_images = extract_bounding_box_images_gpu(
+                image_pil, person_boxes, scale_factors, resized_image_np, device=device_str
             )
+            bounding_box_image, _, center, scale, trans, processed_bbox = preprocess_image_with_bbox(resized_image_np, person_boxes[0])
+            pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats)
+            result = transform_predictions_to_original_space(
+                pred_joints_13, trans, scale[0], scale[1],
+                uncertainties=uncertainties_13,
+                covariance=covariance_13
+            )
+            pred_joints_13 = result['keypoints'].tolist()
 
-            if pose_estimations:
-                first_pose = np.array(pose_estimations[0]['keypoints'])
-                first_uncertainty = np.array(pose_estimations[0]['uncertainties'])
-                first_covariance = np.array(pose_estimations[0]['covariance'])
-                # Apply mirror mapping to correct left/right joint swapping
-                mapped_pose = joint_mapping(first_pose, MIRROR_13_JOINT_MODEL_MAP)
-                mapped_uncertainty = joint_mapping(first_uncertainty, MIRROR_13_JOINT_MODEL_MAP)
-                mapped_covariance = joint_mapping(first_covariance, MIRROR_13_JOINT_MODEL_MAP)
-                successful_predictions += 1
-            else:
-                mapped_pose = np.zeros((13, 2))
-                mapped_uncertainty = np.zeros((13, 2))
-                mapped_covariance = np.zeros(13)
+            first_pose = np.array(pred_joints_13[0])
+            first_uncertainty = np.array(result['uncertainties'][0])
+            first_covariance = np.array(result['covariance'][0])
+            # Apply mirror mapping to correct left/right joint swapping
+            mapped_pose = joint_mapping(first_pose, MIRROR_13_JOINT_MODEL_MAP)
+            mapped_uncertainty = joint_mapping(first_uncertainty, MIRROR_13_JOINT_MODEL_MAP)
+            mapped_covariance = joint_mapping(first_covariance, MIRROR_13_JOINT_MODEL_MAP)
+            successful_predictions += 1
 
             # Get ground truth and transform keypoints to match transformed image
             gt_keypoints_original = batch['keypoints'][i].numpy()  # (13, 2)

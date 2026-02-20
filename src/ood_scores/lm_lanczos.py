@@ -11,8 +11,22 @@ from src.sketches import No_sketch, Dense_sketch, SRFT_sketch
 import numpy as np
 import time
 import os
+import sys
 import cloudpickle
 import hashlib
+
+# Compatibility shim: cloudpickle files saved with NumPy 2.x reference numpy._core
+# submodules (e.g. numpy._core.numeric) that don't exist in NumPy 1.x. NumPy 1.26
+# has a partial numpy/_core/ stub (used by JAX) but is missing many submodules.
+# Register numpy.core submodules under numpy._core.* so unpickling works.
+import numpy.core as _np_core
+if not hasattr(np, '_core') or np._core is not _np_core:
+    np._core = _np_core  # type: ignore[attr-defined]
+    sys.modules['numpy._core'] = _np_core
+for _attr in dir(_np_core):
+    _sub = getattr(_np_core, _attr, None)
+    if _sub is not None and isinstance(_sub, type(_np_core)):
+        sys.modules.setdefault(f'numpy._core.{_attr}', _sub)
 
 
 def _get_cache_base_key(args_dict, trainset_size, n_params):

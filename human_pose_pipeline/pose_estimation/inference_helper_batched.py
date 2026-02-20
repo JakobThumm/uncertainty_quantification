@@ -155,7 +155,8 @@ def pose_estimation_2d(
         ood_score = float(np.asarray(ood_future.result()))
     else:
         pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats, num_output_joints, device=device)
-        ood_score = torch.tensor(score_fn(bounding_box_image), device=device)
+        jax_image = jnp.asarray(bounding_box_image) if isinstance(bounding_box_image, torch.Tensor) else bounding_box_image
+        ood_score = torch.tensor(np.asarray(score_fn(jax_image)), device=device)
     is_ood = ood_score > ood_threshold
 
     # Transform back to original image space
