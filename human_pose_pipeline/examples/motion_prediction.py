@@ -56,6 +56,8 @@ def main():
     parser.add_argument(
         "--output_dir", type=str, default="results/motion_prediction", help="Output directory for results"
     )
+    parser.add_argument("--dataset_name", default="Human36mMotionDataset3DWithInputUncertainty", help="Dataset name to\
+        validate on. Choose from: Human36mMotionDataset3D and Human36mMotionDataset3DWithInputUncertainty (Default).")
 
     args = parser.parse_args()
 
@@ -86,8 +88,7 @@ def main():
     # Load dataset
     print("\nLoading H36M dataset...")
     data_path = os.path.join(root_dir, args.data_path)  # , "H36M", "extracted")
-    dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
-    # dataset_name = "Human36mMotionDataset3D"
+    dataset_name = args.dataset_name
     train_loader, valid_loader, test_loader = dataloader_from_string(
         dataset_name,
         batch_size=BATCH_SIZE,

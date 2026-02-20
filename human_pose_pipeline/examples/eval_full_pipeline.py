@@ -395,6 +395,9 @@ def main():
         predictions=motions_predicted_np,
         targets=motions_gt_np,
     )
+    print("================================")
+    print("Evaluating motion uncertainty prediction.")
+    print("================================")
     coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=motions_predicted_np,
         true_poses=motions_gt_np,
@@ -404,6 +407,9 @@ def main():
     save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split)
     print_coverage_stats(coverage_stats)
     save_coverage_stats(coverage_stats, split=split)
+    print("================================")
+    print("Evaluating motion SARA uncertainty.")
+    print("================================")
     coverage_stats_predictions_sara, _ = simple_coverage_stats_sara(
         predictions=motions_predicted_np,
         radius=motions_set_radius_np,
