@@ -396,15 +396,19 @@ def simple_coverage_stats_sara(
             "overall_within_set", "per_joint_within_set", "per_frame_within_set"
         - within set object
     """
+    mask = np.all(predictions == 0.0, axis=(2, 3))  # [N, T], True = invalid
+    full_mask = np.repeat(mask[:, :, np.newaxis], predictions.shape[2], axis=-1)  # [N, T, J]
     distances = np.linalg.norm(predictions - targets, axis=-1)  # Shape: [N, T, J]
     within_set = distances <= radius
+    masked_within_set = np.ma.array(within_set, mask=full_mask)
+    masked_radius = np.ma.array(radius / 1000.0, mask=full_mask)
     coverage_stats = {
-        "overall_within_set": np.mean(within_set),
-        "per_joint_within_set": np.mean(within_set, axis=(0, 1)),
-        "per_frame_within_set": np.mean(within_set, axis=(0, 2)),
-        "overall_volume": 4.0 / 3.0 * np.pi * np.power(np.mean(radius / 1000.0), 3.0),
-        "per_joint_volume": 4.0 / 3.0 * np.pi * np.power(np.mean(radius / 1000.0, axis=(0, 1)), 3.0),
-        "per_frame_volume": 4.0 / 3.0 * np.pi * np.power(np.mean(radius / 1000.0, axis=(0, 2)), 3.0),
+        "overall_within_set": float(masked_within_set.mean()),
+        "per_joint_within_set": np.array(masked_within_set.mean(axis=(0, 1))),
+        "per_frame_within_set": np.array(masked_within_set.mean(axis=(0, 2))),
+        "overall_volume": 4.0 / 3.0 * np.pi * np.power(float(masked_radius.mean()), 3.0),
+        "per_joint_volume": 4.0 / 3.0 * np.pi * np.power(np.array(masked_radius.mean(axis=(0, 1))), 3.0),
+        "per_frame_volume": 4.0 / 3.0 * np.pi * np.power(np.array(masked_radius.mean(axis=(0, 2))), 3.0),
     }
     return coverage_stats, within_set
 

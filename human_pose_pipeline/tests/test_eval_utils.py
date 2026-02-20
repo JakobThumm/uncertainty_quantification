@@ -13,6 +13,7 @@ from human_pose_pipeline.utils.eval_utils import (
     evaluate_pose_prediction_scores_jax,
     evaluate_uncertainty_coverage_jax,
     evaluate_uncertainty_coverage_with_covariance,
+    simple_coverage_stats_sara,
 )
 
 # Shared test dimensions
@@ -269,6 +270,67 @@ class TestEvaluateUncoverageCoverageWithCovariance(unittest.TestCase):
                 stats_clean[f'overall_within_{i}std'],
                 places=5,
             )
+
+
+class TestSimpleCoverageStatsSara(unittest.TestCase):
+
+    def test_output_keys_and_shapes(self):
+        predictions = np.ones((B, T, J, 3), dtype=np.float64)
+        targets = np.ones((B, T, J, 3), dtype=np.float64)
+        radius = np.ones((B, T, J), dtype=np.float64)
+        stats, within_set = simple_coverage_stats_sara(predictions, radius, targets)
+
+        self.assertIn('overall_within_set', stats)
+        self.assertEqual(stats['per_joint_within_set'].shape, (J,))
+        self.assertEqual(stats['per_frame_within_set'].shape, (T,))
+        self.assertEqual(within_set.shape, (B, T, J))
+
+    def test_all_inside_when_distance_zero(self):
+        """Identical predictions and targets → all inside any positive radius."""
+        poses = np.ones((B, T, J, 3), dtype=np.float64)
+        radius = np.ones((B, T, J), dtype=np.float64)
+        stats, _ = simple_coverage_stats_sara(poses, radius, poses)
+        self.assertAlmostEqual(stats['overall_within_set'], 1.0, places=6)
+        np.testing.assert_allclose(stats['per_joint_within_set'], 1.0, atol=1e-6)
+        np.testing.assert_allclose(stats['per_frame_within_set'], 1.0, atol=1e-6)
+
+    def test_masking_excludes_zero_pred_frames(self):
+        """Invalid (all-zero) frames must be excluded from coverage and volume stats.
+
+        Setup: all valid frames are inside the reachable set (distance 0, radius 1).
+          Batch 0 / frame 3 is invalid (pred = 0).  The true pose at that frame
+          is 1.0, so distance = sqrt(3) >> radius = 1 → would be outside.
+          With masking the overall coverage must still be 1.0.
+        """
+        targets = np.ones((B, T, J, 3), dtype=np.float64)
+        predictions = np.ones((B, T, J, 3), dtype=np.float64)
+        predictions[0, 3] = 0.0  # invalid frame; distance to target = sqrt(3) > 1
+        radius = np.ones((B, T, J), dtype=np.float64)
+
+        stats_masked, _ = simple_coverage_stats_sara(predictions, radius, targets)
+        stats_clean, _ = simple_coverage_stats_sara(targets, radius, targets)
+
+        self.assertAlmostEqual(
+            stats_masked['overall_within_set'],
+            stats_clean['overall_within_set'],
+            places=5,
+        )
+
+    def test_volume_computed_from_valid_frames_only(self):
+        """Volume must be computed from valid radii only.
+
+        Set radius = 1 for valid frames and radius = 1000 for the invalid frame.
+        Without masking the mean radius would be inflated; with masking it stays ≈ 1.
+        """
+        targets = np.ones((B, T, J, 3), dtype=np.float64)
+        predictions = np.ones((B, T, J, 3), dtype=np.float64)
+        predictions[0, 3] = 0.0  # invalid frame
+        radius = np.ones((B, T, J), dtype=np.float64)
+        radius[0, 3] = 1000.0  # large radius on invalid frame
+
+        stats, _ = simple_coverage_stats_sara(predictions, radius, targets)
+        expected_volume = 4.0 / 3.0 * np.pi * (1.0 / 1000.0) ** 3
+        self.assertAlmostEqual(stats['overall_volume'], expected_volume, places=10)
 
 
 if __name__ == '__main__':

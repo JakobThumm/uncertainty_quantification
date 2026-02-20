@@ -95,7 +95,7 @@ def process_sequence_batched(
         both_frames = left_batch + right_batch
 
         # Process the batch
-        points_3d, C_3d_all, ood_score, is_ood = process_frame_3d(
+        points_3d, C_3d_all, ood_score, is_ood, _, _, _, _ = process_frame_3d(
             frames=both_frames,
             projection_matrices=projection_matrices,
             pose_estimation_jit_fn=pose_estimation_jit_fn,

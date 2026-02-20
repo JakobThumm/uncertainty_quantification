@@ -101,6 +101,18 @@ def main():
     # Print coverage statistics
     print_coverage_stats(coverage_stats)
 
+    radius_predictions = convert_covariance_matrices_to_set(
+        covariance_matrices,
+        likelihood=SET_LIKELIHOOD
+    )
+    coverage_stats_predictions, _ = simple_coverage_stats_sara(
+        predictions=predictions,
+        radius=radius_predictions,
+        targets=targets,
+    )
+    print(f"Predicted spherical reachable set coverage stats for {SET_LIKELIHOOD} likelihood:")
+    print_simple_coverage_stats_sara(coverage_stats_predictions)
+
     dt = 1.0 / 25.0
     prediction_horizon_times = [(t + 1) * dt for t in range(PREDICTION_HORIZON_LENGTH)]
 
@@ -117,18 +129,6 @@ def main():
     )
     print("SARA simple velocity model coverage stats:")
     print_simple_coverage_stats_sara(coverage_stats_sara)
-
-    radius_predictions = convert_covariance_matrices_to_set(
-        covariance_matrices,
-        likelihood=SET_LIKELIHOOD
-    )
-    coverage_stats_predictions, _ = simple_coverage_stats_sara(
-        predictions=predictions,
-        radius=radius_predictions,
-        targets=targets,
-    )
-    print(f"Predicted spherical reachable set coverage stats for {SET_LIKELIHOOD} likelihood:")
-    print_simple_coverage_stats_sara(coverage_stats_predictions)
 
     # Plot predicted uncertainty increase over frame for each joint
     plt.figure(figsize=(12, 8))

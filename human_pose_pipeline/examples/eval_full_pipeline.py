@@ -19,6 +19,7 @@ import jax.numpy as jnp
 
 from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
 from human_pose_pipeline.utils.eval_utils import (
+    compute_sara_predictions,
     convert_covariance_matrices_to_set,
     evaluate_pose_prediction_scores_np,
     evaluate_uncertainty_coverage_with_covariance,
@@ -83,7 +84,7 @@ def main():
     parser.add_argument('--motion_score_fn_path', type=str, default='human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle', help="Path to the OOD score function for the motion prediction.")
     parser.add_argument('--subsample', type=int, default=2, help='Subsampling of frames to match training camera frequency. 1 = no subsampling.')
     parser.add_argument('--split', type=str, default='validation', help='train, validation, or test')
-    parser.add_argument('--action', type=str, default='Directions', help='Action to evaluate')
+    parser.add_argument('--action', type=str, default=None, help='Action to evaluate. Evaluate all actions if None.')
     parser.add_argument('--camera_ids', type=str, nargs=2, default=['55011271', '60457274'], help='Camera IDs')
     parser.add_argument('--max_sequences', type=int, default=10000000000, help='Maximum number of sequences to process')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection')
@@ -99,7 +100,7 @@ def main():
     # Configuration
     base_directory = os.path.join(root_dir, args.data_path, "H36M", "extracted")
     split = args.split
-    action = args.action
+    eval_action = args.action
     camera_ids = args.camera_ids
     device = args.device
     subsample = args.subsample
@@ -181,14 +182,19 @@ def main():
     motions_is_valid = []
     pose_buffers_good = []
     n_sequences = min(len(dataset), args.max_sequences)
-    for sample in dataset:
-        if counter >= n_sequences:
-            break
-        counter += 1
+    if eval_action is not None:
+        eval_id = np.where(np.array([dataset.data[i]['action'] == eval_action for i in range(len(dataset.data))]))[0]
+    for sample_id in range(len(dataset.data)):
+        if sample_id != eval_id:
+            continue
+        sample = dataset[sample_id]
         all_camera_frames = sample['all_camera_frames']
         pose_sequence = sample['pose_sequence']  # Ground truth poses
         subject = sample['subject']
         action = sample['action']
+        if counter >= n_sequences:
+            break
+        counter += 1
         intrinsics, extrinsics, projection_matrices = load_camera_parameters(camera_parameters_path, subject, camera_ids)
         # Compute projection matrices
         P1 = projection_matrices[camera_ids[0]]
@@ -262,6 +268,9 @@ def main():
 
             # If enough datapoints, predict motion
             if frame_counter >= INPUT_HORIZON_LENGTH - 1 and pose_buffer_good:
+                # DEBUG HACK: Use GT Poses as test
+                # pose_input = jnp.stack(poses_3d_gt[-INPUT_HORIZON_LENGTH:], axis=0).reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
+                # REAL CODE
                 pose_input = points_3d_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
                 motion_prediction_input = jnp.concatenate([
                     pose_input,
@@ -408,15 +417,34 @@ def main():
     save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split)
     print_coverage_stats(coverage_stats)
     save_coverage_stats(coverage_stats, split=split)
-    print("================================")
-    print("Evaluating motion SARA uncertainty.")
-    print("================================")
-    coverage_stats_predictions_sara, _ = simple_coverage_stats_sara(
+
+    coverage_stats_predictions, _ = simple_coverage_stats_sara(
         predictions=motions_predicted_np,
         radius=motions_set_radius_np,
         targets=motions_gt_np,
     )
-    print_simple_coverage_stats_sara(coverage_stats_predictions_sara)
+    print(f"Predicted spherical reachable set coverage stats for {SET_LIKELIHOOD} likelihood:")
+    print_simple_coverage_stats_sara(coverage_stats_predictions)
+
+    print("================================")
+    print("Evaluating motion SARA uncertainty.")
+    print("================================")
+    dt = 1.0 / 25.0
+    prediction_horizon_times = [(t + 1) * dt for t in range(PREDICTION_HORIZON_LENGTH)]
+
+    # Evaluate SARA-style
+    sara_predictions, sara_radius = compute_sara_predictions(
+        last_input_poses=poses_3d_estimated_np[INPUT_HORIZON_LENGTH:-PREDICTION_HORIZON_LENGTH, 0, ...],
+        prediction_horizon_times=prediction_horizon_times,
+        v_human=1.6
+    )
+    coverage_stats_sara, _ = simple_coverage_stats_sara(
+        predictions=sara_predictions,
+        radius=sara_radius,
+        targets=motions_gt_np[INPUT_HORIZON_LENGTH:-PREDICTION_HORIZON_LENGTH],
+    )
+    print("SARA simple velocity model coverage stats:")
+    print_simple_coverage_stats_sara(coverage_stats_sara)
 
     # Print OOD statistics if enabled
     # TODO
