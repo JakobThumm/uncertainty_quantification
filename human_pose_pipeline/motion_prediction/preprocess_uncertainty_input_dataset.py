@@ -91,8 +91,9 @@ def process_sequence_batched(
         left_batch = left_frames[frame_idx:frame_idx + current_batch_size]
         right_batch = right_frames[frame_idx:frame_idx + current_batch_size]
 
-        # Combine frames for batched processing
-        both_frames = left_batch + right_batch
+        # Combine frames for batched processing: interleave left/right so that
+        # process_frame_3d receives [l0, r0, l1, r1, ...] as expected.
+        both_frames = [f for pair in zip(left_batch, right_batch) for f in pair]
 
         # Process the batch
         points_3d, C_3d_all, ood_score, is_ood, _, _, _, _ = process_frame_3d(
@@ -110,7 +111,6 @@ def process_sequence_batched(
             verbose=False,
             device=device
         )
-
         # Store results (move to CPU to free GPU memory)
         all_3d_points_list.append(points_3d.to('cpu').numpy())
         all_3d_covariances_list.append(C_3d_all.to('cpu').numpy())

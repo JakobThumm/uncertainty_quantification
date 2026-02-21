@@ -1250,6 +1250,24 @@ Conclusion:
     --> Clearly different pose.
     --> Let's save the images of the two.
  - The two pictures are identical.
+ - Bug identified: 3D pose pipeline had wrongly interleaved frames.
+ - New pose pipeline first frame:
+    ```
+    tensor([[ -12.2000,   28.2056, 1656.4937],
+          [-160.7874,   64.0689, 1455.9438],
+          [ 162.8575,   63.5299, 1465.9227],
+          [-415.8966,   40.5332, 1404.0481],
+          [ 429.0766,   52.4080, 1418.6569],
+          [-677.6769,  -16.7806, 1419.4001],
+          [ 666.0436,  -39.1271, 1436.3857],
+          [-136.9982,   33.3927,  988.2427],
+          [ 137.4785,   17.4955,  965.0720],
+          [-138.8949,   57.0178,  529.8861],
+          [ 153.9251,   36.8651,  504.6164],
+          [-107.1774,  194.4265,   85.9076],
+          [ 134.7430,  167.1596,   65.7536]], device='cuda:0')
+    ```
+  - The problem with the Pose 0 of the `Human36mMotionDataset3D` was that I did not skip the training subject. The pose of the validation subject is correct.
 
 ### ALL RUNS, no OOD
 Run with:
