@@ -1136,7 +1136,28 @@ Conclusion:
  - Recreated the `S11` `Directions` data with the `jax_resnet50_regressflow` model and re-ran the `motion_prediction.py` with the action hack.
  - Result: `Overall MPJPE: 19.90 mm, Std: 35.23 mm`
  - MPJPE is 2.2 mm worse, but not that significant!
- - Pose 0 of preprocessing script is:
+ - Pose 0 of preprocessing script (human_pose_pipeline/motion_prediction/preprocess_uncertainty_input_dataset.py) is:
+    Run with:
+    ```
+    {
+      "name": "Preprocess Uncertainty Input Dataset",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/preprocess_uncertainty_input_dataset.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--data_path", "datasets/",
+          "--output_dir", "datasets/H36M/pre_processed_motion",
+          "--split", "validation",
+          "--action", "Directions",
+          "--batch_size", "32",
+          "--device", "cuda",
+          "--camera_ids", "55011271", "60457274",
+          "--run_name", "jax_resnet50_regressflow",
+      ]
+    },
+    ```
+    Pose:
     ```
     tensor([[  16.8728,  -78.0922, 1531.3827],
         [ -94.2538, -126.4125, 1355.6584],
@@ -1153,6 +1174,25 @@ Conclusion:
         [ 240.4646, -109.7605,  147.5805]], device='cuda:0')
     ```
  - Pose 0 of the `Human36mMotionDataset3D` data is:
+    Run with:
+    ```
+        {
+      "name": "Motion Prediction Evaluation",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/motion_prediction.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--data_path", "datasets/",
+          "--dataset_name", "Human36mMotionDataset3DWithInputUncertainty",
+          "--split", "validation",
+          "--model_save_path", "human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle",
+          // "--enable_ood",
+          "--motion_score_fn_path", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle"
+      ]
+    },
+    ```
+    Pose:
     ```
     array([[-100.67910767,  257.09390259, 1593.44750977],
        [-208.77192688,  258.03857422, 1343.73461914],
@@ -1169,6 +1209,29 @@ Conclusion:
        [   4.63807917,  311.10803223,   52.23132324]])
     ```
  - Pose 0 of the Eval Full Pipeline is:
+    Run with:
+    ```
+        {
+      "name": "Eval Full Pipeline",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/eval_full_pipeline.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--pose_model_save_path", "human_pose_pipeline/models/pose_estimation",
+        "--pose_run_name", "jax_resnet50_regressflow",  // "jax_resnet50_regressflow", finetuned_h36m_regressflow_with_unc
+        "--pose_base_key", "H36M_RegressFlowResNet18_3Joints_n9000_4998731f",
+        "--motion_model_save_path", "human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle",
+        // "--motion_model_save_path", "human_pose_pipeline/models/motion_prediction/final_training_run/checkpoints/stage_2/dct_pose_transformer.pickle",
+        "--motion_score_fn_path", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle",
+        "--split", "validation",
+        "--action", "Directions",
+        "--max_sequences", "1",
+        //"--enable_ood"
+      ]
+    },
+    ```
+    Pose
     ```
     array([[    -12.226,      28.202,      1656.5],
        [    -160.77,      64.113,      1455.9],
