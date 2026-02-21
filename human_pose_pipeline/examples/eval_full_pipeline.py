@@ -185,7 +185,7 @@ def main():
     if eval_action is not None:
         eval_id = np.where(np.array([dataset.data[i]['action'] == eval_action for i in range(len(dataset.data))]))[0]
     for sample_id in range(len(dataset.data)):
-        if sample_id != eval_id:
+        if eval_action is not None and sample_id != eval_id:
             continue
         sample = dataset[sample_id]
         all_camera_frames = sample['all_camera_frames']
@@ -291,7 +291,7 @@ def main():
                 if motion_ood_score_fn is not None:
                     motion_ood_score = motion_ood_score_fn(pose_input)
                 else:
-                    motion_ood_score = 0.0
+                    motion_ood_score = jnp.zeros([1])
                 motion_predicted = motion_predicted.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)[0]
                 motion_cov_predicted = motion_cov_predicted[0]
                 motion_cov_predicted = calibrate_covariance_matrices(

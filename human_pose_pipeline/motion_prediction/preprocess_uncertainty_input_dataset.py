@@ -155,6 +155,7 @@ def preprocess_subject(
     device='cpu',
     score_fn=None,
     ood_threshold=OOD_THRESHOLD,
+    action_to_process=None
 ):
     """Preprocess all sequences for a given subject.
 
@@ -172,16 +173,21 @@ def preprocess_subject(
         device: Device to use for tensors
         score_fn: Optional OOD score function
         ood_threshold: OOD detection threshold
+        action_to_process: Only process a specific action
     """
     subject_output_dir = os.path.join(output_dir, subject)
     os.makedirs(subject_output_dir, exist_ok=True)
 
     print(f"\nProcessing subject {subject}: {len(dataset)} sequences")
-
-    for idx, sample in enumerate(tqdm(dataset, desc=f"Processing {subject}")):
+    if action_to_process is not None:
+        eval_id = np.where(np.array([dataset.data[i]['action'] == action_to_process for i in range(len(dataset.data))]))[0]
+    for sample_id in tqdm(range(len(dataset.data)), "Processing data:"):
+        if action_to_process is not None and sample_id != eval_id:
+            continue
+        sample = dataset[sample_id]
         # Extract sequence information from video paths
         # video_paths format: /path/to/Subject/Videos/Action.CameraID.mp4
-        video_paths = dataset.data[idx]['video_paths']
+        video_paths = dataset.data[sample_id]['video_paths']
         if len(video_paths) == 0:
             continue
 
@@ -191,6 +197,8 @@ def preprocess_subject(
         sample_subject = path_parts[-3]  # Subject directory
         action_file = os.path.basename(video_path)  # Action.CameraID.mp4
         action_name = '.'.join(action_file.split('.')[:-2])  # Remove .CameraID.mp4
+        if action_to_process is not None and action_name != action_to_process:
+            continue
 
         # Skip if this sample doesn't belong to the current subject
         if sample_subject != subject:
@@ -272,6 +280,12 @@ def main():
         type=str,
         default=None,
         help='Process only specific subject (e.g., S1). If not specified, processes all subjects in split.'
+    )
+    parser.add_argument(
+        '--action',
+        type=str,
+        default=None,
+        help='Process only specific action (e.g., "Directions"). If not specified, processes all subjects in split.'
     )
     parser.add_argument(
         '--camera_ids',
@@ -426,6 +440,7 @@ def main():
             device=args.device,
             score_fn=score_fn,
             ood_threshold=args.ood_threshold,
+            action_to_process=args.action
         )
 
     print("\n" + "=" * 80)
