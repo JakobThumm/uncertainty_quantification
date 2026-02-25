@@ -28,7 +28,7 @@ from human_pose_pipeline.utils.eval_utils import evaluate_pose_prediction_scores
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
-BATCH_SIZE = 32
+BATCH_SIZE = 16
 
 
 def main():

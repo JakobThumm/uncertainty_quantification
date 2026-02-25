@@ -240,6 +240,7 @@ def main():
                 device=device
             )
             # process frame 3D has a batch size of 1, remove first dimension.
+            # print(f"Frame {frame_counter} = {points_3d[0]}")
             points_3d = points_3d[0]
             C_3d_all = C_3d_all[0]
             # Valid prediction if not OOD and human detected
@@ -268,9 +269,6 @@ def main():
 
             # If enough datapoints, predict motion
             if frame_counter >= INPUT_HORIZON_LENGTH - 1 and pose_buffer_good:
-                # DEBUG HACK: Use GT Poses as test
-                # pose_input = jnp.stack(poses_3d_gt[-INPUT_HORIZON_LENGTH:], axis=0).reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
-                # REAL CODE
                 pose_input = points_3d_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
                 motion_prediction_input = jnp.concatenate([
                     pose_input,
@@ -307,6 +305,7 @@ def main():
                     motion_cov_predicted = jnp.array(motion_cov_predicted)
                 motion_is_ood = bool(motion_ood_score > MOTION_OOD_THRESHOLD)
                 # Update motion prediction buffer
+                # TODO: Check if it makes a big difference if the saved uncertainties are the calibrated ones or not.
                 motion_prediction_buffer, motion_uncertainty_buffer, valid_motion = update_motion_prediction_buffer(
                     motion_prediction_buffer=motion_prediction_buffer,
                     motion_uncertainty_buffer=motion_uncertainty_buffer,
@@ -320,6 +319,16 @@ def main():
                     motion_uncertainty_buffer,
                     likelihood=SET_LIKELIHOOD
                 )
+                # Store motion predictions
+                motions_predicted.append(motion_predicted)
+                motions_cov_predicted.append(motion_cov_predicted)
+                motions_set_radius.append(motion_prediction_set_radius)
+                # Incorporate subsampling!
+                motions_gt.append(pose_sequence[frame_idx + subsample : frame_idx + subsample * (PREDICTION_HORIZON_LENGTH + 1) : subsample])
+                motions_ood_scores.append(motion_ood_score)
+                motions_is_ood.append(motion_is_ood)
+                motions_is_valid.append(valid_motion)
+                pose_buffers_good.append(pose_buffer_good)
             else:
                 motion_predicted = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
                 motion_cov_predicted = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
@@ -329,16 +338,6 @@ def main():
                 motion_prediction_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
                 motion_uncertainty_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
                 motion_prediction_set_radius = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS])
-            # Store motion predictions
-            motions_predicted.append(motion_predicted)
-            motions_cov_predicted.append(motion_cov_predicted)
-            motions_set_radius.append(motion_prediction_set_radius)
-            # Incorporate subsampling!
-            motions_gt.append(pose_sequence[frame_idx + 1 : frame_idx + subsample * PREDICTION_HORIZON_LENGTH + 1 : subsample])
-            motions_ood_scores.append(motion_ood_score)
-            motions_is_ood.append(motion_is_ood)
-            motions_is_valid.append(valid_motion)
-            pose_buffers_good.append(pose_buffer_good)
 
             frame_counter += 1
 
@@ -434,14 +433,14 @@ def main():
 
     # Evaluate SARA-style
     sara_predictions, sara_radius = compute_sara_predictions(
-        last_input_poses=poses_3d_estimated_np[INPUT_HORIZON_LENGTH:-PREDICTION_HORIZON_LENGTH, 0, ...],
+        last_input_poses=poses_3d_estimated_np[INPUT_HORIZON_LENGTH - 1:, 0, ...],
         prediction_horizon_times=prediction_horizon_times,
         v_human=1.6
     )
     coverage_stats_sara, _ = simple_coverage_stats_sara(
         predictions=sara_predictions,
         radius=sara_radius,
-        targets=motions_gt_np[INPUT_HORIZON_LENGTH:-PREDICTION_HORIZON_LENGTH],
+        targets=motions_gt_np,
     )
     print("SARA simple velocity model coverage stats:")
     print_simple_coverage_stats_sara(coverage_stats_sara)

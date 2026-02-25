@@ -109,6 +109,17 @@ class Human36mMotionDataset3D(Dataset):
                 pred_poses = pred_poses.reshape(pred_poses.shape[0], -1)  # (num_frames, 13*3)
                 covariances = covariances.reshape(covariances.shape[0], -1)  # (num_frames, 13*3*3)
                 valid_mask = valid_mask.astype(bool)
+                # Mark frames with degenerate covariance or pose values as invalid.
+                # Normal pose p99.9 is ~2800 mm; failed triangulations can reach 1e6 mm.
+                # Normal cov p99 is ~500k mm²; failed triangulations can reach 1e17 mm².
+                # These are not caught by valid_mask (which only checks human detection).
+                pose_valid = np.all(np.abs(pred_poses) <= 4000, axis=1)
+                cov_valid = np.all(np.abs(covariances) <= 1e5, axis=1)
+                valid_mask = valid_mask & pose_valid & cov_valid
+
+                # For DEBUG
+                # if action != "Directions":
+                #     continue
 
                 gt_file = os.path.join(base_directory_gt, subject, "Poses_D3_Positions", f"{action}.cdf")
                 if os.path.exists(gt_file):
