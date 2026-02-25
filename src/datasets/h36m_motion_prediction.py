@@ -135,7 +135,7 @@ class Human36mMotionDataset3D(Dataset):
                     downsampled_valid_mask = valid_mask[offset::2]
                     downsampled_gt_poses = gt_poses_13[offset::2]
                     for i in range(len(downsampled_poses) - self.input_frames - self.predict_frames + 1):
-                        poses_window = downsampled_poses[i : i + self.input_frames + self.predict_frames]
+                        poses_window = downsampled_poses[i : i + self.input_frames + self.predict_frames].copy()
                         # Replace the target frames with ground truth poses
                         poses_window[-self.predict_frames:] = downsampled_gt_poses[i + self.input_frames : i + self.input_frames + self.predict_frames]
                         covariances_window = downsampled_covariances[i : i + self.input_frames + self.predict_frames]
