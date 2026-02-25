@@ -37,7 +37,8 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_IDX_13_MODEL,
     YOLO_IMAGE_SIZE,
     YOLO_CONFIDENCE_THRESHOLD,
-    OOD_THRESHOLD
+    OOD_THRESHOLD,
+    COVARIANCE_OOD_THRESHOLD
 )
 
 
@@ -406,6 +407,7 @@ def process_frame_3d(
     frames, projection_matrices, pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
     mirror_map, score_fn=None,
     human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD, ood_threshold=OOD_THRESHOLD,
+    covariance_ood_threshold=COVARIANCE_OOD_THRESHOLD,
     num_output_joints=17, use_gpu_acceleration=True, verbose=True, device='cpu'
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: 
     """
@@ -428,6 +430,8 @@ def process_frame_3d(
         score_fn: Function to compute OOD score from model outputs. If None -> No OOD scoring.
         human_detection_threshold (float, optional): Confidence threshold for human detection
         ood_threshold (float, optional): Threshold for OOD detection in pose estimation
+        covariance_ood_threshold (float, optional): Labelling a 3D prediction as OOD if any cov value exceeds this threshold.
+            Introduced as incorrect triangulation can cause extreme covariance values. 
         num_output_joints (int, optional): Number of joints the model outputs
         use_gpu_acceleration (bool, optional): Whether to use GPU-accelerated preprocessing (default True)
         device: Device to place output tensors on ('cpu' or 'cuda')
@@ -527,6 +531,9 @@ def process_frame_3d(
     points_3d, C_3d_all = triangulate_points_with_covariance_batched(
         left_pose, right_pose, P1, P2, C_2D
     )
+
+    cov_valid = torch.all(torch.abs(C_3d_all) <= 1e5, dim=[1, 2, 3])
+    is_ood = torch.logical_or(is_ood, ~cov_valid)
 
     # Extract 2D keypoints from left camera for overlay visualization
     keypoints_2d = left_pose  # [B, 13, 2]

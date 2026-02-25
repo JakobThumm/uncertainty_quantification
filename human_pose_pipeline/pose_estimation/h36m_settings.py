@@ -32,3 +32,4 @@ TRANSFORM_HEATMAP_SIZE = [48, 64]  # Width, Height
 NORMALIZATION_OFFSET = [-0.406, -0.457, -0.480]
 
 OOD_THRESHOLD = 0.3  # Threshold for OOD detection in pose estimation
+COVARIANCE_OOD_THRESHOLD = 1e5
