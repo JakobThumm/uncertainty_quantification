@@ -199,6 +199,7 @@ class TrainingConfig:
         # Data settings
         data_path: str = "../datasets",
         seed: int = 420,
+        augment: bool = False,
 
         # RLE model options
         use_rle_model: bool = False,
@@ -243,6 +244,7 @@ class TrainingConfig:
         # Data settings
         self.data_path = data_path
         self.seed = seed
+        self.augment = augment
 
         # RLE model options
         self.use_rle_model = use_rle_model
@@ -1024,9 +1026,9 @@ def load_dataloaders_for_stage(
         tuple: (train_loader, valid_loader, test_loader)
     """
     if stage <= 3:
-        dataset_name = "Human36mMotionDataset3D"
+        dataset_name = "Human36mMotionDataset3DAugmented" if config.augment else "Human36mMotionDataset3D"
     else:
-        dataset_name = "Human36mMotionDataset3DWithInputUncertainty"
+        dataset_name = "Human36mMotionDataset3DWithInputUncertaintyAugmented" if config.augment else "Human36mMotionDataset3DWithInputUncertainty"
 
     print(f"Loading dataset: {dataset_name}")
     train_loader, valid_loader, test_loader = dataloader_from_string(
@@ -1191,6 +1193,7 @@ def objective(trial: optuna.Trial, base_args) -> float:
         stage3_epochs=base_args.stage3_epochs,
         data_path=base_args.data_path,
         seed=base_args.seed,
+        augment=base_args.augment,
         run_id=trial_run_id,
         wandb_project=base_args.wandb_project,
         wandb_entity=base_args.wandb_entity,
@@ -1408,6 +1411,7 @@ def main(args):
             stage4_epochs=args.stage4_epochs,
             data_path=args.data_path,
             seed=args.seed,
+            augment=args.augment,
             run_id=run_id,
             wandb_project=args.wandb_project,
             wandb_entity=args.wandb_entity,
@@ -1661,6 +1665,8 @@ if __name__ == "__main__":
     # Data
     parser.add_argument("--data_path", type=str, default="../datasets")
     parser.add_argument("--seed", type=int, default=420)
+    parser.add_argument("--augment", action="store_true", default=False,
+                        help="Apply Z-rotation and scale augmentation to training data")
     parser.add_argument("--n_samples", type=int, default=None,
                         help="Number of samples to use from dataset (for debugging)")
 

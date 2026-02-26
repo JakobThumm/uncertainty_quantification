@@ -792,6 +792,16 @@ Per-Joint Volume [m^3]:
     Joint 12: 0.1827
 ```
 
+### Tried Different Offset Strategy
+
+```
+        # Subtract only the head position (first 3 entries) from all joints
+        offset = x[:, -1:, 0:3]
+        offset = jnp.tile(offset, (1, 1, x.shape[-1] // 3))
+```
+Eval MPJPE = 55mm slightly worse!
+-> Reverse Change.
+
 ## Full Evaluation Pipeline
 
 ### Action = Directions, 1 Sequence
@@ -1210,3 +1220,229 @@ Per-Joint Volume [m^3]:
 Findings:
  - MPJPE in this simple task slightly better than average evaluation performance.
  - Everything is working now!
+
+### Model Trained on Augmented Data
+
+Results:
+```
+================================
+Evaluating motion prediction.
+================================
+================================
+Evaluating motion uncertainty prediction.
+================================
+
+Overall MPJPE: 34.59 mm
+
+Per-Time Errors:
+  Time point 1 error =   23.09 mm
+  Time point 2 error =   24.09 mm
+  Time point 3 error =   26.75 mm
+  Time point 4 error =   29.71 mm
+  Time point 5 error =   33.08 mm
+  Time point 6 error =   36.02 mm
+  Time point 7 error =   39.12 mm
+  Time point 8 error =   41.99 mm
+  Time point 9 error =   44.85 mm
+  Time point 10 error =   47.23 mm
+
+Per-Joint Errors:
+  Joint 1 error =   27.29 mm
+  Joint 2 error =   29.98 mm
+  Joint 3 error =   26.82 mm
+  Joint 4 error =   54.43 mm
+  Joint 5 error =   48.96 mm
+  Joint 6 error =   93.83 mm
+  Joint 7 error =   62.41 mm
+  Joint 8 error =   24.25 mm
+  Joint 9 error =   20.55 mm
+  Joint 10 error =   17.26 mm
+  Joint 11 error =   15.34 mm
+  Joint 12 error =   15.31 mm
+  Joint 13 error =   13.27 mm
+Saved overall MPJPE results to results/motion_prediction/mpjpe_results_validation.csv
+Saved per-time MPJPE results to results/motion_prediction/per_time_mpjpe_results_validation.csv
+Saved per-joint MPJPE results to results/motion_prediction/per_joint_mpjpe_results_validation.csv
+
+Uncertainty Coverage Stats:
+  Overall coverage within 1 std: 90.91%
+  Overall coverage within 2 std: 97.39%
+  Overall coverage within 3 std: 99.13%
+  Overall coverage within 4 std: 99.77%
+
+Per-Time Coverage Stats:
+
+  Overall coverage within 1 std:
+    Frame 0: 81.47%
+    Frame 1: 87.52%
+    Frame 2: 89.45%
+    Frame 3: 91.04%
+    Frame 4: 91.88%
+    Frame 5: 92.56%
+    Frame 6: 93.17%
+    Frame 7: 93.53%
+    Frame 8: 94.06%
+    Frame 9: 94.44%
+
+  Overall coverage within 2 std:
+    Frame 0: 95.32%
+    Frame 1: 96.56%
+    Frame 2: 97.25%
+    Frame 3: 97.44%
+    Frame 4: 97.45%
+    Frame 5: 97.65%
+    Frame 6: 97.83%
+    Frame 7: 97.97%
+    Frame 8: 98.11%
+    Frame 9: 98.27%
+
+  Overall coverage within 3 std:
+    Frame 0: 98.97%
+    Frame 1: 99.16%
+    Frame 2: 99.23%
+    Frame 3: 99.14%
+    Frame 4: 99.08%
+    Frame 5: 99.03%
+    Frame 6: 99.00%
+    Frame 7: 99.14%
+    Frame 8: 99.23%
+    Frame 9: 99.30%
+
+  Overall coverage within 4 std:
+    Frame 0: 99.77%
+    Frame 1: 99.81%
+    Frame 2: 99.77%
+    Frame 3: 99.70%
+    Frame 4: 99.69%
+    Frame 5: 99.73%
+    Frame 6: 99.76%
+    Frame 7: 99.77%
+    Frame 8: 99.82%
+    Frame 9: 99.84%
+
+Per-Joint Coverage Stats:
+
+  Overall coverage within 1 std:
+    Joint 0: 89.11%
+    Joint 1: 88.74%
+    Joint 2: 92.66%
+    Joint 3: 76.04%
+    Joint 4: 78.59%
+    Joint 5: 74.64%
+    Joint 6: 87.75%
+    Joint 7: 96.73%
+    Joint 8: 99.54%
+    Joint 9: 99.18%
+    Joint 10: 99.52%
+    Joint 11: 99.81%
+    Joint 12: 99.54%
+
+  Overall coverage within 2 std:
+    Joint 0: 98.08%
+    Joint 1: 98.40%
+    Joint 2: 98.72%
+    Joint 3: 93.19%
+    Joint 4: 92.18%
+    Joint 5: 89.96%
+    Joint 6: 95.55%
+    Joint 7: 99.93%
+    Joint 8: 100.00%
+    Joint 9: 100.00%
+    Joint 10: 100.00%
+    Joint 11: 100.00%
+    Joint 12: 100.00%
+
+  Overall coverage within 3 std:
+    Joint 0: 99.58%
+    Joint 1: 99.95%
+    Joint 2: 99.70%
+    Joint 3: 97.81%
+    Joint 4: 96.99%
+    Joint 5: 96.52%
+    Joint 6: 98.14%
+    Joint 7: 100.00%
+    Joint 8: 100.00%
+    Joint 9: 100.00%
+    Joint 10: 100.00%
+    Joint 11: 100.00%
+    Joint 12: 100.00%
+
+  Overall coverage within 4 std:
+    Joint 0: 99.94%
+    Joint 1: 100.00%
+    Joint 2: 99.84%
+    Joint 3: 99.44%
+    Joint 4: 98.86%
+    Joint 5: 99.33%
+    Joint 6: 99.56%
+    Joint 7: 100.00%
+    Joint 8: 100.00%
+    Joint 9: 100.00%
+    Joint 10: 100.00%
+    Joint 11: 100.00%
+    Joint 12: 100.00%
+Saved overall coverage results to results/motion_prediction/coverage_results_validation.csv
+Saved per-time coverage results to results/motion_prediction/per_time_coverage_results_validation.csv
+Saved per-joint coverage results to results/motion_prediction/per_joint_coverage_results_validation.csv
+Predicted spherical reachable set coverage stats for 0.99 likelihood:
+Overall coverage within set: 98.82%
+Mean volume = 0.0093 m^3
+
+Per-Time Coverage Stats:
+    Frame 0: 98.48%
+    Frame 1: 98.75%
+    Frame 2: 98.94%
+    Frame 3: 98.78%
+    Frame 4: 98.79%
+    Frame 5: 98.77%
+    Frame 6: 98.80%
+    Frame 7: 98.85%
+    Frame 8: 98.99%
+    Frame 9: 99.03%
+
+Per-Time Volume [m^3]:
+    Frame 0: 0.0011
+    Frame 1: 0.0018
+    Frame 2: 0.0029
+    Frame 3: 0.0045
+    Frame 4: 0.0069
+    Frame 5: 0.0103
+    Frame 6: 0.0149
+    Frame 7: 0.0208
+    Frame 8: 0.0285
+    Frame 9: 0.0379
+
+Per-Joint Coverage Stats:
+    Joint 0: 99.29%
+    Joint 1: 99.78%
+    Joint 2: 99.64%
+    Joint 3: 97.05%
+    Joint 4: 96.16%
+    Joint 5: 95.05%
+    Joint 6: 97.67%
+    Joint 7: 100.00%
+    Joint 8: 100.00%
+    Joint 9: 100.00%
+    Joint 10: 100.00%
+    Joint 11: 100.00%
+    Joint 12: 100.00%
+
+Per-Joint Volume [m^3]:
+    Joint 0: 0.0042
+    Joint 1: 0.0048
+    Joint 2: 0.0048
+    Joint 3: 0.0115
+    Joint 4: 0.0098
+    Joint 5: 0.0525
+    Joint 6: 0.0450
+    Joint 7: 0.0053
+    Joint 8: 0.0049
+    Joint 9: 0.0042
+    Joint 10: 0.0030
+    Joint 11: 0.0113
+    Joint 12: 0.0070
+```
+
+ - Very comparable results. 
+ - Not much changed, however, probably good to have it.
+ - Use model trained on augmented data `r42sn31c` as new final model from now on.

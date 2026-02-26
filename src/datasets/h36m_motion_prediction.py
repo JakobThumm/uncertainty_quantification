@@ -39,7 +39,9 @@ class Human36mMotionDataset3D(Dataset):
         ood=False,
         input_uncertainty=False,
         directory_uncertain=None,
-        seed=None
+        seed=None,
+        augment=False,
+        scale_range=(0.8, 1.2),
     ):
         self.input_frames = input_frames
         self.predict_frames = predict_frames
@@ -62,6 +64,8 @@ class Human36mMotionDataset3D(Dataset):
         if seed:
             np.random.seed(seed)
         self.input_uncertainty = input_uncertainty
+        self.augment = augment
+        self.scale_range = scale_range
 
     def load_data(self, base_directory, split):
         all_data = []
@@ -160,11 +164,80 @@ class Human36mMotionDataset3D(Dataset):
         print(f"Loaded {len(all_poses)} sequences for {split} split from preprocessed data")
         return all_poses, all_covariances
 
+    def _augment_sequence(self, sequence, covariances=None):
+        """Apply random Z-axis rotation and isotropic scaling augmentation.
+
+        The head joint (joint 0) at the first frame is used as the center of
+        rotation and scaling. All joints (and optionally covariance matrices)
+        are transformed consistently across the full sequence, so both body
+        proportions and global travel distance scale together.
+
+        Args:
+            sequence: np.ndarray [seq_len, N_JOINTS * 3]
+            covariances: optional np.ndarray [seq_len, N_JOINTS * 9]
+
+        Returns:
+            Augmented sequence (and covariances if provided).
+        """
+        n_joints = sequence.shape[1] // 3
+        seq = sequence.reshape(-1, n_joints, 3).copy()
+
+        # Head position at the first frame (joint 0, columns 0:3)
+        head_pos = seq[0, 0, :].copy()
+
+        # Translate to head-centred coordinates
+        seq -= head_pos
+
+        # Random rotation around Z-axis in [-180, +180] deg
+        angle = np.random.uniform(-np.pi, np.pi)
+        cos_a, sin_a = np.cos(angle), np.sin(angle)
+        R = np.array(
+            [[cos_a, -sin_a, 0.0],
+             [sin_a,  cos_a, 0.0],
+             [0.0,    0.0,   1.0]],
+            dtype=sequence.dtype,
+        )
+        # seq shape: [seq_len, n_joints, 3]  ->  apply R to last axis
+        seq = np.einsum('ij,...j->...i', R, seq)
+
+        # Random isotropic scale (body size and travel distance scale together)
+        scale = np.random.uniform(self.scale_range[0], self.scale_range[1])
+        seq *= scale
+
+        # Translate back to original head position
+        seq += head_pos
+
+        sequence_aug = seq.reshape(-1, n_joints * 3)
+
+        if covariances is not None:
+            n_cov_joints = covariances.shape[1] // 9
+            covs = covariances.reshape(-1, n_cov_joints, 3, 3).copy()
+            # Rotate: C' = R C R^T
+            RC = np.einsum('ac,nkcb->nkab', R, covs)
+            covs = np.einsum('nkac,bc->nkab', RC, R)
+            # Scale: C' = scale^2 * C
+            covs *= scale ** 2
+            return sequence_aug, covs.reshape(-1, n_cov_joints * 9)
+
+        return sequence_aug
+
     def __len__(self):
         return len(self.pose_data)
 
     def __getitem__(self, idx):
         sequence = self.pose_data[idx]
+        covariance_sequence = (
+            self.covariance_data[idx]
+            if (self.input_uncertainty and self.covariance_data is not None)
+            else None
+        )
+
+        if self.augment:
+            if covariance_sequence is not None:
+                sequence, covariance_sequence = self._augment_sequence(sequence, covariance_sequence)
+            else:
+                sequence = self._augment_sequence(sequence)
+
         input_pose = sequence[: self.input_frames]
         if self.ood:
             # Randomly shuffle the input sequence in the first dimension for OOD testing
@@ -177,8 +250,7 @@ class Human36mMotionDataset3D(Dataset):
             target_pose_timestep = target_pose_timestep.reshape(-1, 3)  # [num_joints, 3]
             reduced_target = target_pose_timestep[self.reduced_joints, :]  # [len(reduced_joints), 3]
             target_pose = reduced_target.reshape(-1)  # [len(reduced_joints)*3]
-        if self.input_uncertainty and self.covariance_data is not None:
-            covariance_sequence = self.covariance_data[idx]
+        if covariance_sequence is not None:
             input_covariances = covariance_sequence[: self.input_frames]
             if self.ood:
                 # Randomly shuffle the input covariances in the first dimension for OOD testing
@@ -232,7 +304,8 @@ def get_h36m_motion_dataset_function(
     reduce_size: bool = False,
     ood: bool = False,
     directory_uncertain: Optional[str] = None,
-    
+    augment: bool = False,
+    scale_range: tuple = (0.8, 1.2),
 ):
     """
     Get data loaders for preprocessed H36M dataset
@@ -263,7 +336,9 @@ def get_h36m_motion_dataset_function(
         reduce_size=reduce_size,
         ood=ood,
         directory_uncertain=directory_uncertain,
-        seed=seed
+        seed=seed,
+        augment=augment,
+        scale_range=scale_range,
     )
 
     validation_dataset = Human36mMotionDataset3D(
@@ -331,7 +406,9 @@ def get_h36m_motion_dataset(
     shuffle=False,
     seed=0,
     split_train_val_ratio=0.9,
-    n_samples=None
+    n_samples=None,
+    augment=False,
+    scale_range=(0.8, 1.2),
 ):
     """
     Get data loaders for preprocessed H36M dataset
@@ -344,6 +421,8 @@ def get_h36m_motion_dataset(
         split_train_val_ratio: Ratio for splitting train set into train/val
         return_metadata: Whether to return metadata with samples
         n_samples: Number of samples to use from dataset (None = use all)
+        augment: Whether to apply Z-rotation and scale augmentation to the train split
+        scale_range: (min, max) scale factor range for augmentation
 
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
@@ -354,6 +433,8 @@ def get_h36m_motion_dataset(
         shuffle=shuffle,
         seed=seed,
         n_samples=n_samples,
+        augment=augment,
+        scale_range=scale_range,
     )
 
 
@@ -364,7 +445,9 @@ def get_h36m_motion_dataset_with_uncertainty(
     shuffle=False,
     seed=0,
     split_train_val_ratio=0.9,
-    n_samples=None
+    n_samples=None,
+    augment=False,
+    scale_range=(0.8, 1.2),
 ):
     """
     Get data loaders for preprocessed H36M dataset
@@ -378,6 +461,8 @@ def get_h36m_motion_dataset_with_uncertainty(
         split_train_val_ratio: Ratio for splitting train set into train/val
         return_metadata: Whether to return metadata with samples
         n_samples: Number of samples to use from dataset (None = use all)
+        augment: Whether to apply Z-rotation and scale augmentation to the train split
+        scale_range: (min, max) scale factor range for augmentation
 
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
@@ -389,7 +474,9 @@ def get_h36m_motion_dataset_with_uncertainty(
         seed=seed,
         n_samples=n_samples,
         input_uncertainty=True,
-        directory_uncertain=directory_uncertain
+        directory_uncertain=directory_uncertain,
+        augment=augment,
+        scale_range=scale_range,
     )
 
 
