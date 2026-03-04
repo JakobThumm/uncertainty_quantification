@@ -21,6 +21,7 @@ from PIL import Image
 from ultralytics import YOLO
 from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
 from human_pose_pipeline.utils.eval_utils import (
+    compute_sara_predictions,
     convert_covariance_matrices_to_set,
     evaluate_pose_prediction_scores_np,
     evaluate_uncertainty_coverage_with_covariance,
@@ -225,7 +226,7 @@ def main():
                 t_rect_to_world=t_rect_to_world,
             )
         t4 = time()
-        print(f"Time for batch processing: {t4 - t3:.3f}s")
+        # print(f"Time for batch processing: {t4 - t3:.3f}s")
 
         # process frame 3D has a batch size of 1, remove first dimension.
         points_3d = points_3d[0]
@@ -258,7 +259,7 @@ def main():
 
         # If enough datapoints, predict motion
         if frame_counter >= INPUT_HORIZON_LENGTH - 1 and \
-           frame_counter < frames_to_process - PREDICTION_HORIZON_LENGTH and \
+           frame_counter < frames_to_process - start_at - PREDICTION_HORIZON_LENGTH and \
            pose_buffer_good:
             pose_input = points_3d_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
             motion_prediction_input = jnp.concatenate([
@@ -398,27 +399,46 @@ def main():
         predictions=motions_predicted_np,
         targets=motions_gt_np,
     )
+    print("================================")
+    print("Evaluating motion uncertainty prediction.")
+    print("================================")
     coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=motions_predicted_np,
         true_poses=motions_gt_np,
         cov_matrices=motions_cov_predicted_np
     )
-    print("================================")
-    print("Motion prediction coverage stats:")
-    print("================================")
     print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
     save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
     print_coverage_stats(coverage_stats)
     save_coverage_stats(coverage_stats)
-    coverage_stats_predictions_sara, _ = simple_coverage_stats_sara(
+
+    coverage_stats_predictions, _ = simple_coverage_stats_sara(
         predictions=motions_predicted_np,
         radius=motions_set_radius_np,
         targets=motions_gt_np,
     )
+    print(f"Predicted spherical reachable set coverage stats for {SET_LIKELIHOOD} likelihood:")
+    print_simple_coverage_stats_sara(coverage_stats_predictions)
+
     print("================================")
-    print("SARA coverage stats:")
+    print("Evaluating motion SARA uncertainty.")
     print("================================")
-    print_simple_coverage_stats_sara(coverage_stats_predictions_sara)
+    dt = 1.0 / 25.0
+    prediction_horizon_times = [(t + 1) * dt for t in range(PREDICTION_HORIZON_LENGTH)]
+
+    # Evaluate SARA-style
+    sara_predictions, sara_radius = compute_sara_predictions(
+        last_input_poses=poses_3d_estimated_np[INPUT_HORIZON_LENGTH - 1:-PREDICTION_HORIZON_LENGTH, 0, ...],
+        prediction_horizon_times=prediction_horizon_times,
+        v_human=1.6
+    )
+    coverage_stats_sara, _ = simple_coverage_stats_sara(
+        predictions=sara_predictions,
+        radius=sara_radius,
+        targets=motions_gt_np,
+    )
+    print("SARA simple velocity model coverage stats:")
+    print_simple_coverage_stats_sara(coverage_stats_sara)
 
     # Print OOD statistics if enabled
     # TODO
