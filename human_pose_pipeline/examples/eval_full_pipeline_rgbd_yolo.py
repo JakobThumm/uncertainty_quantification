@@ -87,6 +87,7 @@ def main():
     parser.add_argument('--pose_run_name', type=str, default='jax_resnet50_regressflow', help='Pose model run name')
     parser.add_argument('--pose_base_key', type=str, default=None, help='Base key for loading the pose estimation OOD score functions')
     parser.add_argument('--motion_score_fn_path', type=str, default='human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle', help="Path to the OOD score function for the motion prediction.")
+    parser.add_argument('--start_at', type=int, default=0, help='Start at this frame index.')
     parser.add_argument('--max_frames', type=int, default=10000000000, help='Maximum number of frames to process')
     parser.add_argument('--subsample', type=int, default=1, help='Subsampling of frames to match training camera frequency. Default 1 = no subsampling.')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection')
@@ -160,9 +161,10 @@ def main():
         print("No data found. Please check the dataset path and camera IDs.")
         return
 
+    start_at = args.start_at
     max_frames = args.max_frames
     # Process a limited number of frames for testing
-    frames_to_process = min(len(dataset), max_frames)
+    frames_to_process = min(len(dataset) - start_at, max_frames)
     subsample = args.subsample
     print(f"Dataset loaded with {len(dataset)} frames, from which we are using {frames_to_process} frames \
             with {subsample} subsampling.")
@@ -192,10 +194,9 @@ def main():
     motion_uncertainty_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
 
     # Iterate through frames in a batched manner
-    start_at = 30
     frame_counter = 0
     # Subsample every second frame to match motion prediction frequency.
-    for frame_idx in tqdm(range(start_at, frames_to_process, subsample), "Evaluating sequence:"):
+    for frame_idx in tqdm(range(start_at, start_at + frames_to_process, subsample), "Evaluating sequence:"):
         sample = dataset[frame_idx]
         image_pil = sample['color_raw']
         depth_img = sample['depth_raw']
@@ -252,14 +253,17 @@ def main():
         # Store pose estimations
         poses_3d_estimated.append(points_3d)
         poses_3d_cov_estimated.append(C_3d_all)
-        poses_3d_gt.append(gt_pose)
+        if is_valid:
+            poses_3d_gt.append(gt_pose)
+        else:
+            poses_3d_gt.append(torch.zeros_like(gt_pose))
         poses_3d_ood_scores.append(pose_ood_score)
         poses_3d_is_ood.append(pose_is_ood)
         poses_3d_human_detected.append(human_detected)
 
         # If enough datapoints, predict motion
         if frame_counter >= INPUT_HORIZON_LENGTH - 1 and \
-           frame_counter < frames_to_process - start_at - PREDICTION_HORIZON_LENGTH and \
+           frame_counter < frames_to_process - PREDICTION_HORIZON_LENGTH and \
            pose_buffer_good:
             pose_input = points_3d_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
             motion_prediction_input = jnp.concatenate([
@@ -335,8 +339,10 @@ def main():
         # del points_3d, C_3d_all, ood_score, is_ood
 
     # Fill motions GT
+    last_poses = []
     for frame_id in motions_frame_ids:
         motions_gt.append(torch.stack(poses_3d_gt[frame_id + 1 : frame_id + PREDICTION_HORIZON_LENGTH + 1], dim=0))
+        last_poses.append(poses_3d_estimated[frame_id])
 
     # Convert to numpy arrays
     num_frames = sum(poses_3d_gt)
@@ -351,6 +357,7 @@ def main():
     motions_set_radius = jnp.stack(motions_set_radius, axis=0)
     motions_cov_predicted = jnp.stack(motions_cov_predicted, axis=0)
     motions_gt = torch.stack(motions_gt, dim=0)
+    last_poses = torch.stack(last_poses, dim=0)
 
     # Move to cpu and numpy
     poses_3d_estimated_np = poses_3d_estimated.cpu().numpy()
@@ -363,33 +370,34 @@ def main():
     motions_set_radius_np = np.array(motions_set_radius)
     motions_cov_predicted_np = np.array(motions_cov_predicted)
     motions_gt_np = motions_gt.cpu().numpy()
+    last_poses_np = last_poses.cpu().numpy()
     motions_ood_scores = np.array(motions_ood_scores)
     motions_is_ood = np.array(motions_is_ood)
     motions_is_valid = np.array(motions_is_valid)
     pose_buffers_good = np.array(pose_buffers_good)
 
     # Evaluate 3D pose estimation MPJPE and coverage
-    print("================================")
-    print("Evaluating 3D pose estimation.")
-    print("================================")
-    N = poses_3d_estimated_np.shape[0]
-    # Convert to [B, T, J, 3] for eval
-    poses_3d_estimated_np = poses_3d_estimated_np.reshape([N, 1, N_JOINTS, 3])
-    poses_3d_cov_estimated_np = poses_3d_cov_estimated_np.reshape([N, 1, N_JOINTS, 3, 3])
-    poses_3d_gt_np = poses_3d_gt_np.reshape([N, 1, N_JOINTS, 3])
-    mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(
-        predictions=poses_3d_estimated_np,
-        targets=poses_3d_gt_np,
-    )
-    coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
-        pred_poses=poses_3d_estimated_np,
-        true_poses=poses_3d_gt_np,
-        cov_matrices=poses_3d_cov_estimated_np
-    )
-    print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
-    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
-    print_coverage_stats(coverage_stats)
-    save_coverage_stats(coverage_stats)
+    # print("================================")
+    # print("Evaluating 3D pose estimation.")
+    # print("================================")
+    # N = poses_3d_estimated_np.shape[0]
+    # # Convert to [B, T, J, 3] for eval
+    # poses_3d_estimated_np = poses_3d_estimated_np.reshape([N, 1, N_JOINTS, 3])
+    # poses_3d_cov_estimated_np = poses_3d_cov_estimated_np.reshape([N, 1, N_JOINTS, 3, 3])
+    # poses_3d_gt_np = poses_3d_gt_np.reshape([N, 1, N_JOINTS, 3])
+    # mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std = evaluate_pose_prediction_scores_np(
+    #     predictions=poses_3d_estimated_np,
+    #     targets=poses_3d_gt_np,
+    # )
+    # coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
+    #     pred_poses=poses_3d_estimated_np,
+    #     true_poses=poses_3d_gt_np,
+    #     cov_matrices=poses_3d_cov_estimated_np
+    # )
+    # print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
+    # save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
+    # print_coverage_stats(coverage_stats)
+    # save_coverage_stats(coverage_stats)
 
     # Evalute motion prediction MPJPE and coverage
     print("================================")
@@ -423,12 +431,12 @@ def main():
     print("================================")
     print("Evaluating motion SARA uncertainty.")
     print("================================")
-    dt = 1.0 / 25.0
+    dt = 1.0 / 30.0
     prediction_horizon_times = [(t + 1) * dt for t in range(PREDICTION_HORIZON_LENGTH)]
 
     # Evaluate SARA-style
     sara_predictions, sara_radius = compute_sara_predictions(
-        last_input_poses=poses_3d_estimated_np[INPUT_HORIZON_LENGTH - 1:-PREDICTION_HORIZON_LENGTH, 0, ...],
+        last_input_poses=last_poses_np,
         prediction_horizon_times=prediction_horizon_times,
         v_human=1.6
     )
@@ -442,6 +450,7 @@ def main():
 
     # Print OOD statistics if enabled
     # TODO
+    stop = 0
 
 
 if __name__ == "__main__":

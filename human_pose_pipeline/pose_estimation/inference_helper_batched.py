@@ -600,7 +600,7 @@ def set_depth_uncertainty_to_constant(
 
 
 def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device='cpu',
-                             depth_outlier_threshold=1.5, search_radius=10,
+                             depth_outlier_threshold=0.8, search_radius=10,
                              border_clip=30):
     """
     Lift 2D keypoints to 3D using depth information (fully vectorized).
@@ -672,7 +672,13 @@ def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device=
     # the original position has zero depth (edge of object).
     batch_indices = torch.arange(B, device=device).unsqueeze(1).expand(B, N_joints)
     Z_orig = depth_map[batch_indices, v_clamped, u_clamped].float()
-    needs_snap = Z_orig <= 0  # [B, N_joints]
+
+    # Cross-joint outlier rejection: discard joints whose depth deviates too much
+    # from the per-frame median across all joints.
+    Z_for_global = Z_orig.masked_fill(Z_orig <= 0, float('nan'))
+    Z_global_median = torch.nanmedian(Z_for_global, dim=1).values  # [B]
+    median_diff = torch.abs(Z_orig - Z_global_median.unsqueeze(1))       # [B, N_joints]
+    needs_snap = (Z_orig <= 0) | (median_diff > depth_outlier_threshold)
 
     depth_for_argmin = depth_patch.masked_fill(depth_patch <= 0, float('inf'))
     min_idx = depth_for_argmin.argmin(dim=-1)  # [B, N_joints]
@@ -825,6 +831,7 @@ def process_frame_3d_from_rgbd(
     depth_uncertainty=0.01,
     R_rect_to_world=None,
     t_rect_to_world=None,
+    convert_to_mm=True
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Process RGB-D frame to extract 3D pose with uncertainty using depth lifting.
@@ -862,6 +869,7 @@ def process_frame_3d_from_rgbd(
             numpy array or torch.Tensor. When None outputs remain in rectified camera frame.
         t_rect_to_world: Translation from rectified camera to world frame in meters.
             Shape (3,) or (B, 3). numpy array or torch.Tensor.
+        convert_to_mm: Output result in mm.
 
     Returns:
         - points_3d: 3D joint coordinates in mm[B, N_joints, 3] (world frame if R given, else camera)
@@ -923,10 +931,6 @@ def process_frame_3d_from_rgbd(
         device=device
     )
 
-    # Convert to mm
-    points_3d *= 1000.0
-    C_3d_all *= 1000.0 * 1000.0
-
     # Mark invalid joints (no depth or no human detected) - Vectorized
     # Create combined validity mask: [B, N_joints]
     # If human not detected, all joints invalid
@@ -967,6 +971,11 @@ def process_frame_3d_from_rgbd(
         # Rotate covariances: C_world[b,k] = R[b] @ C_cam[b,k] @ R[b]^T
         R_exp = R.unsqueeze(1)                  # (B, 1, 3, 3)
         C_3d_all = R_exp @ C_3d_all @ R_exp.transpose(-1, -2)
+
+    # Convert to mm
+    if convert_to_mm:
+        points_3d *= 1000.0
+        C_3d_all *= 1000.0 * 1000.0
 
     # Return 2D keypoints for visualization overlay
     return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_2d

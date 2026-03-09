@@ -16,6 +16,10 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import jax.numpy as jnp
 from src.datasets.utils import get_loader
+from human_pose_pipeline.pose_estimation.h36m_settings import NORMALIZATION_OFFSET
+
+# Shape (3,1,1) for broadcasting over (C,H,W)
+_NORM_OFFSET = np.array(NORMALIZATION_OFFSET, dtype=np.float32).reshape(3, 1, 1)
 
 # Dataset splits matching original H36M
 SPLIT = {
@@ -100,6 +104,10 @@ class Human36mPreprocessedDataset(Dataset):
         # Load image for this frame (using memory mapping for efficiency)
         images = np.load(sample_info['img_path'], mmap_mode='r')
         image = np.array(images[sample_info['frame_idx']])  # Copy to RAM: (3, 256, 192)
+
+        # If stored as uint8, apply normalization: float = uint8/255 + NORMALIZATION_OFFSET
+        if image.dtype == np.uint8:
+            image = image.astype(np.float32) / 255.0 + _NORM_OFFSET
 
         # Load pose data for this frame
         poses_data = np.load(sample_info['poses_path'])

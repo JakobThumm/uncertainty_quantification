@@ -30,8 +30,12 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
     MIRROR_13_JOINT_MODEL_MAP,
     YOLO_IMAGE_SIZE,
     YOLO_CONFIDENCE_THRESHOLD,
-    TRANSFORM_IMAGE_SIZE
+    TRANSFORM_IMAGE_SIZE,
+    NORMALIZATION_OFFSET
 )
+
+# Positive mean for denormalization: float = uint8/255 + offset => uint8 = (float - offset) * 255
+_NORM_MEAN = np.array([-o for o in NORMALIZATION_OFFSET], dtype=np.float32).reshape(1, 3, 1, 1)
 
 try:
     from decord import VideoReader, cpu
@@ -340,9 +344,16 @@ def preprocess_h36m_dataset_gpu(
                     sequence_poses = np.concatenate(all_preprocessed_poses, axis=0)  # (N, 13, 2)
                     sequence_poses_pixel = np.concatenate(all_original_poses, axis=0)  # (N, 13, 2)
 
-                    # Save preprocessed images
+                    # Denormalize float32 -> uint8 to save 4x space.
+                    # Normalization was: float = uint8/255 + NORMALIZATION_OFFSET
+                    # Inverse:           uint8 = round((float - NORMALIZATION_OFFSET) * 255)
+                    sequence_images_uint8 = np.clip(
+                        np.round((sequence_images + _NORM_MEAN) * 255), 0, 255
+                    ).astype(np.uint8)
+
+                    # Save preprocessed images as uint8
                     images_output_path = os.path.join(images_output_dir, f"{base}.npy")
-                    np.save(images_output_path, sequence_images)
+                    np.save(images_output_path, sequence_images_uint8)
 
                     # Save poses and metadata
                     poses_output_path = os.path.join(poses_output_dir, f"{base}.npz")

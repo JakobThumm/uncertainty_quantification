@@ -24,6 +24,7 @@ import sys
 import argparse
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 from PIL import Image
 from tqdm import tqdm
 
@@ -33,7 +34,8 @@ from human_pose_pipeline.pose_estimation.inference_helper_batched import (
     reset_yolo_tracking
 )
 from human_pose_pipeline.utils.visualization import (
-    visualize_poses_matplotlib
+    CONNECTIONS_13,
+    draw_uncertainty_ellipse,
 )
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_NAMES_13,
@@ -47,6 +49,61 @@ from src.datasets.human_rgbd import HumanRGBDDataset
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
+
+
+def visualize_pose_and_depth(color_image, depth_raw, pred_pose, pred_uncertainties,
+                              pred_covariances, save_path, uncertainty_n_std=3):
+    """
+    Create a 2-panel figure:
+      Left:  Predicted pose + uncertainty ellipses on colour image.
+      Right: Predicted pose skeleton on depth image.
+    """
+    if hasattr(color_image, "mode"):
+        color_np = np.array(color_image)
+    else:
+        color_np = color_image
+
+    # Normalise depth to [0, 1] for display, clamped to [0.5 m, 3.0 m]
+    # d_min, d_max = 0.5, 3.0
+    # depth_norm = np.clip((depth_raw - d_min) / (d_max - d_min), 0, 1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # --- Panel 1: predicted pose + uncertainty on colour image ---
+    axes[0].imshow(color_np)
+    axes[0].set_title("Predicted Pose + Uncertainty")
+    axes[0].axis("off")
+    for start_idx, end_idx in CONNECTIONS_13:
+        if start_idx < len(pred_pose) and end_idx < len(pred_pose):
+            xs = [pred_pose[start_idx, 0], pred_pose[end_idx, 0]]
+            ys = [pred_pose[start_idx, 1], pred_pose[end_idx, 1]]
+            axes[0].plot(xs, ys, "b-", linewidth=2)
+    for i, (point, uncertainty) in enumerate(zip(pred_pose, pred_uncertainties)):
+        covariance = pred_covariances[i] if pred_covariances is not None else None
+        draw_uncertainty_ellipse(
+            axes[0], point, uncertainty, covariance,
+            n_std=uncertainty_n_std,
+            facecolor="cyan", alpha=0.3, edgecolor="blue", linewidth=1,
+        )
+        axes[0].scatter(point[0], point[1], c="yellow", s=50, zorder=5)
+
+    # --- Panel 2: predicted pose on depth image ---
+    axes[1].imshow(depth_raw, cmap="viridis")
+    axes[1].set_title("Predicted Pose on Depth Image")
+    axes[1].axis("off")
+    for start_idx, end_idx in CONNECTIONS_13:
+        if start_idx < len(pred_pose) and end_idx < len(pred_pose):
+            xs = [pred_pose[start_idx, 0], pred_pose[end_idx, 0]]
+            ys = [pred_pose[start_idx, 1], pred_pose[end_idx, 1]]
+            axes[1].plot(xs, ys, "r-", linewidth=2)
+    for point in pred_pose:
+        axes[1].scatter(point[0], point[1], c="yellow", s=50, zorder=5)
+
+    plt.tight_layout()
+    if save_path:
+        os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else ".", exist_ok=True)
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 
 def print_pose_summary(pred_pose, confidence_scores):
@@ -129,20 +186,20 @@ def process_single_frame(frame_idx, dataset, yolo_model, mirror_map, save_dir,
         confidence_scores = pose_predictions['confidence'][0].cpu().numpy()
         result['mean_confidence'] = float(np.mean(confidence_scores))
 
-        # YOLO doesn't provide uncertainties, use placeholder
-        pred_uncertainties = np.ones_like(pred_pose_13) * 10.0
+        # Use inverse confidence as uncertainty proxy (low confidence → large ellipse)
+        uncertainty_scale = (1.0 - confidence_scores) * 20.0 + 2.0
+        pred_uncertainties = np.stack([uncertainty_scale, uncertainty_scale], axis=1)
         pred_covariances = np.zeros(13)
 
         # Save visualization
         save_path = os.path.join(save_dir, f"frame_{frame_idx:04d}.png")
-        visualize_poses_matplotlib(
-            image=image_pil,
-            gt_pose=None,
+        visualize_pose_and_depth(
+            color_image=image_pil,
+            depth_raw=sample['depth_raw'],
             pred_pose=pred_pose_13,
             pred_uncertainties=pred_uncertainties,
             pred_covariances=pred_covariances,
             save_path=save_path,
-            show_uncertainty=False  # YOLO doesn't provide uncertainty
         )
 
         result['success'] = True
@@ -312,18 +369,18 @@ def main():
             print("\nCreating visualization...")
             save_path = os.path.join(save_dir, f"debug_rgbd_2d_yolo_frame_{args.frame_idx}.png")
 
-            # YOLO doesn't provide uncertainties
-            pred_uncertainties = np.ones_like(pred_pose_13) * 10.0
+            # Use inverse confidence as uncertainty proxy (low confidence → large ellipse)
+            uncertainty_scale = (1.0 - confidence_scores) * 20.0 + 2.0
+            pred_uncertainties = np.stack([uncertainty_scale, uncertainty_scale], axis=1)
             pred_covariances = np.zeros(13)
 
-            visualize_poses_matplotlib(
-                image=image_pil,
-                gt_pose=None,
+            visualize_pose_and_depth(
+                color_image=image_pil,
+                depth_raw=sample['depth_raw'],
                 pred_pose=pred_pose_13,
                 pred_uncertainties=pred_uncertainties,
                 pred_covariances=pred_covariances,
                 save_path=save_path,
-                show_uncertainty=False
             )
 
             print("\n" + "=" * 60)

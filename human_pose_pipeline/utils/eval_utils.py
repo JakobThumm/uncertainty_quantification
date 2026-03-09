@@ -24,7 +24,9 @@ def evaluate_pose_prediction_scores_np(predictions, targets):
         STD of per joint MPJPE, shape = [J]
     """
     # Mask out all zero predictions
-    mask = np.all(predictions == 0.0, axis=(2, 3))  # [B, T]
+    mask_predictions = np.all(predictions == 0.0, axis=(2, 3))  # [B, T]
+    mask_targets = np.all(targets == 0.0, axis=(2, 3))
+    mask = np.logical_or(mask_predictions, mask_targets)
     errors = np.linalg.norm(predictions - targets, axis=-1)  # Shape = [B, T, J]
     masked_errors = np.ma.array(errors, mask=np.repeat(mask[:, :, np.newaxis], errors.shape[-1], axis=-1))
     mpjpe = float(masked_errors.mean())
@@ -33,6 +35,8 @@ def evaluate_pose_prediction_scores_np(predictions, targets):
     per_time_std = np.array(masked_errors.std(axis=(0, 2)))  # Shape = [T]
     per_joint_errors = np.array(masked_errors.mean(axis=(0, 1)))  # Shape = [J]
     per_joint_std = np.array(masked_errors.std(axis=(0, 1)))  # Shape = [J]
+    per_prediction_error = np.array(masked_errors.mean(axis=(1, 2)))
+    per_dimension_error = np.mean(np.abs(predictions - targets), axis=(0, 1, 2))
     return mpjpe, std, per_time_errors, per_time_std, per_joint_errors, per_joint_std
 
 
@@ -51,7 +55,9 @@ def evaluate_pose_prediction_scores_jax(predictions, targets):
         STD of per joint MPJPE, shape = [J]
     """
     # Mask out all zero predictions: full_mask is True where valid
-    valid = ~jnp.all(predictions == 0.0, axis=(2, 3))  # [B, T]
+    valid_predictions = ~jnp.all(predictions == 0.0, axis=(2, 3))  # [B, T]
+    valid_targets = ~jnp.all(targets == 0.0, axis=(2, 3))
+    valid = jnp.logical_and(valid_predictions, valid_targets)
     errors = jnp.linalg.norm(predictions - targets, axis=-1)  # [B, T, J]
     full_mask = jnp.repeat(valid[:, :, jnp.newaxis], errors.shape[-1], axis=-1)  # [B, T, J]
     mpjpe = jnp.where(full_mask, errors, 0).sum() / full_mask.sum()
@@ -85,7 +91,9 @@ def evaluate_uncertainty_coverage_jax(pred_poses, true_poses, L, std_multipliers
     """
     from jax.scipy.stats import chi2
     # Mask out all zero predictions: full_mask is True where valid
-    valid = ~jnp.all(pred_poses == 0.0, axis=(2, 3))  # [B, T]
+    valid_predictions = ~jnp.all(pred_poses == 0.0, axis=(2, 3))  # [B, T]
+    valid_targets = ~jnp.all(true_poses == 0.0, axis=(2, 3))  # [B, T]
+    valid = jnp.logical_and(valid_predictions, valid_targets)
     # Diff
     diff = true_poses - pred_poses             # [B, T, J, 3]
     B, T, J, C = diff.shape
@@ -177,7 +185,9 @@ def evaluate_uncertainty_coverage_with_covariance(pred_poses, true_poses, cov_ma
         mahalanobis_distances_squared = np.sum(whitened_errors**2, axis=3).squeeze()
 
     # Mask out all zero predictions: full_mask True = invalid (matches np.ma convention)
-    inv_mask = np.all(pred_poses == 0.0, axis=(2, 3))  # [B, T]
+    inv_mask_predictions = np.all(pred_poses == 0.0, axis=(2, 3))  # [B, T]
+    inv_mask_targets = np.all(true_poses == 0.0, axis=(2, 3))  # [B, T]
+    inv_mask = np.logical_or(inv_mask_predictions, inv_mask_targets)
     full_mask = np.repeat(inv_mask[:, :, np.newaxis], n_joints, axis=-1)  # [B, T, J]
 
     within_stds = [mahalanobis_distances_squared <= threshold for threshold in thresholds]
@@ -396,7 +406,9 @@ def simple_coverage_stats_sara(
             "overall_within_set", "per_joint_within_set", "per_frame_within_set"
         - within set object
     """
-    mask = np.all(predictions == 0.0, axis=(2, 3))  # [N, T], True = invalid
+    mask_predictions = np.all(predictions == 0.0, axis=(2, 3))  # [N, T], True = invalid
+    mask_targets = np.all(targets == 0.0, axis=(2, 3))  # [N, T], True = invalid
+    mask = np.logical_or(mask_predictions, mask_targets)
     full_mask = np.repeat(mask[:, :, np.newaxis], predictions.shape[2], axis=-1)  # [N, T, J]
     distances = np.linalg.norm(predictions - targets, axis=-1)  # Shape: [N, T, J]
     within_set = distances <= radius

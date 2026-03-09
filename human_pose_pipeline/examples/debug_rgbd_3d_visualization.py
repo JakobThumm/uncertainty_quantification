@@ -180,7 +180,9 @@ def main():
                 num_output_joints=17,
                 verbose=True,
                 device=args.device,
-                depth_uncertainty=args.depth_uncertainty
+                depth_uncertainty=args.depth_uncertainty,
+                R_rect_to_world=sample["R_rect_to_world"],
+                t_rect_to_world=sample["t_rect_to_world"]
             )
         human_detected = human_detected.cpu()[0]
         is_ood = is_ood.cpu()[0]

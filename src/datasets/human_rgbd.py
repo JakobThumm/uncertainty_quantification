@@ -26,19 +26,37 @@ from src.datasets.utils import get_loader
 
 # Default camera intrinsics for RealSense D435i (640x480)
 # These should be overridden with actual calibration data
-DEFAULT_CAMERA_INTRINSICS = {
-    'fx': 383.12,  # focal length x in pixels
-    'fy': 383.12,  # focal length y in pixels
-    'cx': 319.5,   # principal point x
-    'cy': 239.5,   # principal point y
-}
+# DEFAULT_CAMERA_INTRINSICS = {
+#     'fx': 383.12,  # focal length x in pixels
+#     'fy': 383.12,  # focal length y in pixels
+#     'cx': 319.5,   # principal point x
+#     'cy': 239.5,   # principal point y
+# }
 
-# Default camera placement: 0.8 m above ground, pitched 10° downward
-DEFAULT_CAMERA_POSITION = np.array([0.0, -2.0, 0.7], dtype=np.float32)
-DEFAULT_CAMERA_RPY_DEG = np.array([10.0, 0.0, 0.0], dtype=np.float32)
+# Values for small test set
+# # Default camera placement: 0.8 m above ground, pitched 10° downward
+# DEFAULT_CAMERA_POSITION = np.array([0.0, -2.0, 0.7], dtype=np.float32)
+# DEFAULT_CAMERA_RPY_DEG = np.array([10.0, 0.0, 0.0], dtype=np.float32)
+# CAMERA_TO_WORLD_TRANSFORM = np.array(
+#     [[1.0, 0.0, 0.0],
+#      [0.0, 0.0, 1.0],
+#      [0.0, -1.0, 0.0]], dtype=np.float32
+# )
+
+# === Values for larger test set (1280x720 px) ===
+DEFAULT_CAMERA_INTRINSICS = {
+    'fx': 643.7576293945312,  # focal length x in pixels
+    'fy': 642.9219970703125,  # focal length y in pixels                                                                                                                    
+    'cx': 646.5204467773438,  # principal point x
+    'cy': 373.0503845214844,  # principal point y                                                                                                                           
+}  
+
+# Default camera placement: 0.8 m above ground, pitched 0° downward
+DEFAULT_CAMERA_POSITION = np.array([0.36, -0.67, 0.8], dtype=np.float32)
+DEFAULT_CAMERA_RPY_DEG = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 CAMERA_TO_WORLD_TRANSFORM = np.array(
-    [[1.0, 0.0, 0.0],
-     [0.0, 0.0, 1.0],
+    [[0.0, 0.0, 1.0],
+     [-1.0, 0.0, 0.0],
      [0.0, -1.0, 0.0]], dtype=np.float32
 )
 
