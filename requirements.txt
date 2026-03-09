@@ -27,3 +27,4 @@ empy
 catkin_pkg
 lark
 lap
+zstandard
