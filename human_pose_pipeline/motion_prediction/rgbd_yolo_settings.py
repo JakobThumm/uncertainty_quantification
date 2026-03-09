@@ -11,10 +11,15 @@ OOD_THRESHOLD = 6e5
 N_CORRECT_POSES_REQUIRED = 3
 
 # Covariance calibration for motion prediction
-COV_CALIBRATION_CT = 1.2
-COV_CALIBRATION_IT = 0.4
-COV_CALIBRATION_FACTORS = [1.0, 1.0, 1.0, 1.0, 1.0,
-                           1.7, 1.7, 1.0, 1.0, 1.0,
-                           1.0, 1.5, 1.5]
+COV_CALIBRATION_CT = 4.0
+COV_CALIBRATION_IT = 0.3
+# JOINT_NAMES_13 = [
+#     'Nose', 'LShoulder', 'RShoulder', 'LElbow', 'RElbow',
+#     'LWrist', 'RWrist', 'LHip', 'RHip', 'LKnee',
+#     'RKnee', 'LAnkle', 'RAnkle'
+# ]
+COV_CALIBRATION_FACTORS = [1.3, 1.2, 1.2, 1.4, 1.4,
+                           2.2, 2.2, 1.0, 1.0, 1.0,
+                           1.0, 1.1, 1.1]
 # Likelihood boundary for the predicted set
 SET_LIKELIHOOD = 0.99

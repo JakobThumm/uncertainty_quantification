@@ -58,10 +58,7 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
     N_CORRECT_POSES_REQUIRED,
     COV_CALIBRATION_CT,
     COV_CALIBRATION_IT,
-    COV_CALIBRATION_HF,
-    COV_CALIBRATION_FF,
-    COV_CALIBRATION_HI,
-    COV_CALIBRATION_FI,
+    COV_CALIBRATION_FACTORS,
     SET_LIKELIHOOD
 )
 
@@ -296,10 +293,7 @@ def main():
                     covariance_matrices=motion_cov_predicted,
                     constant_time_factor=COV_CALIBRATION_CT,
                     increase_time_factor=COV_CALIBRATION_IT,
-                    hand_factor=COV_CALIBRATION_HF,
-                    feet_factor=COV_CALIBRATION_FF,
-                    hand_indices=COV_CALIBRATION_HI,
-                    feet_indices=COV_CALIBRATION_FI
+                    joint_calibration_factors=COV_CALIBRATION_FACTORS
                 )
                 if isinstance(motion_cov_predicted, np.ndarray):
                     motion_cov_predicted = jnp.array(motion_cov_predicted)

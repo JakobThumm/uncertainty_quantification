@@ -9,17 +9,6 @@ from pathlib import Path
 
 from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
 from human_pose_pipeline.utils.eval_utils import compute_sara_predictions, convert_covariance_matrices_to_set, evaluate_uncertainty_coverage_with_covariance, print_coverage_stats, print_simple_coverage_stats_sara, simple_coverage_stats_sara
-from human_pose_pipeline.motion_prediction.h36m_settings import (
-    OOD_THRESHOLD, 
-    PREDICTION_HORIZON_LENGTH,
-    COV_CALIBRATION_CT,
-    COV_CALIBRATION_IT,
-    COV_CALIBRATION_HF,
-    COV_CALIBRATION_FF,
-    COV_CALIBRATION_HI,
-    COV_CALIBRATION_FI,
-    SET_LIKELIHOOD
-)
 
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -40,8 +29,32 @@ def main():
         default="results/motion_prediction/coverage_tuning",
         help="Output directory for plots"
     )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="h36m",
+        choices=["h36m", "rgbd_yolo"],
+        help="Settings config to use: 'h36m' for Human3.6M, 'rgbd_yolo' for RGB-D YOLO pipeline"
+    )
 
     args = parser.parse_args()
+
+    if args.config == "rgbd_yolo":
+        from human_pose_pipeline.motion_prediction.rgbd_yolo_settings import (
+            COV_CALIBRATION_FACTORS,
+            PREDICTION_HORIZON_LENGTH,
+            COV_CALIBRATION_CT,
+            COV_CALIBRATION_IT,
+            SET_LIKELIHOOD
+        )
+    else:
+        from human_pose_pipeline.motion_prediction.h36m_settings import (
+            COV_CALIBRATION_FACTORS,
+            PREDICTION_HORIZON_LENGTH,
+            COV_CALIBRATION_CT,
+            COV_CALIBRATION_IT,
+            SET_LIKELIHOOD
+        )
 
     output_dir = os.path.join(root_dir, args.output_dir)
 
@@ -77,15 +90,22 @@ def main():
     print(f"Loaded targets shape: {targets.shape}")
     print(f"Loaded covariance matrices shape: {covariance_matrices.shape}")
 
+    print("====================================")
+    print("Coverage Stats Before Calibration")
+    print("====================================")
+    # Compute coverage
+    coverage_stats, within_stds = evaluate_uncertainty_coverage_with_covariance(
+        pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices
+    )
+    # Print coverage statistics
+    print_coverage_stats(coverage_stats)
+
     # Increase covariance for certain times and joints
     covariance_matrices = calibrate_covariance_matrices(
         covariance_matrices=covariance_matrices,
         constant_time_factor=COV_CALIBRATION_CT,
         increase_time_factor=COV_CALIBRATION_IT,
-        hand_factor=COV_CALIBRATION_HF,
-        feet_factor=COV_CALIBRATION_FF,
-        hand_indices=COV_CALIBRATION_HI,
-        feet_indices=COV_CALIBRATION_FI
+        joint_calibration_factors=COV_CALIBRATION_FACTORS
     )
     # Generate n_std range
     n_std_range = [1, 2, 3, 4]
@@ -93,6 +113,9 @@ def main():
     # Compute ideal coverage
     ideal_coverages = [68.2, 95.4, 99.7, 99.99]
 
+    print("====================================")
+    print("Coverage Stats After Calibration")
+    print("====================================")
     # Compute coverage
     coverage_stats, within_stds = evaluate_uncertainty_coverage_with_covariance(
         pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices

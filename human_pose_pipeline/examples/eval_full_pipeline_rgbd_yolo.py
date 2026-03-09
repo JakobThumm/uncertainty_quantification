@@ -54,7 +54,7 @@ from human_pose_pipeline.pose_estimation.h36m_settings import (
     YOLO_CONFIDENCE_THRESHOLD,
     OOD_THRESHOLD as POSE_OOD_THRESHOLD,
 )
-from human_pose_pipeline.motion_prediction.h36m_settings import (
+from human_pose_pipeline.motion_prediction.rgbd_yolo_settings import (
     INPUT_HORIZON_LENGTH,
     PREDICTION_HORIZON_LENGTH,
     N_JOINTS,
@@ -62,10 +62,7 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
     N_CORRECT_POSES_REQUIRED,
     COV_CALIBRATION_CT,
     COV_CALIBRATION_IT,
-    COV_CALIBRATION_HF,
-    COV_CALIBRATION_FF,
-    COV_CALIBRATION_HI,
-    COV_CALIBRATION_FI,
+    COV_CALIBRATION_FACTORS,
     SET_LIKELIHOOD
 )
 
@@ -94,7 +91,7 @@ def main():
     parser.add_argument('--enable_tracking', action='store_true', help='Enable YOLO tracking')
     parser.add_argument('--depth_uncertainty', type=float, default=0.002,
                         help='Assumed depth std-dev in metres for uncertainty propagation')
-    parser.add_argument('--output_dir', type=str, default='results/pose_3d', help='Output directory for results')
+    parser.add_argument('--output_dir', type=str, default='results/full_pipeline_rgbd_yolo', help='Output directory for results')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use (cuda or cpu)')
 
     args = parser.parse_args()
@@ -184,6 +181,7 @@ def main():
     motions_is_ood = []
     motions_is_valid = []
     motions_frame_ids = []
+    motions_cov_predicted_uncalibrated = []
     pose_buffers_good = []
 
     points_3d_buffer = jnp.zeros([INPUT_HORIZON_LENGTH, N_JOINTS, 3])
@@ -288,14 +286,12 @@ def main():
                 motion_ood_score = 0.0
             motion_predicted = motion_predicted.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)[0]
             motion_cov_predicted = motion_cov_predicted[0]
+            motions_cov_predicted_uncalibrated.append(motion_cov_predicted)
             motion_cov_predicted = calibrate_covariance_matrices(
                 covariance_matrices=motion_cov_predicted,
                 constant_time_factor=COV_CALIBRATION_CT,
                 increase_time_factor=COV_CALIBRATION_IT,
-                hand_factor=COV_CALIBRATION_HF,
-                feet_factor=COV_CALIBRATION_FF,
-                hand_indices=COV_CALIBRATION_HI,
-                feet_indices=COV_CALIBRATION_FI
+                joint_calibration_factors=COV_CALIBRATION_FACTORS
             )
             if isinstance(motion_cov_predicted, np.ndarray):
                 motion_cov_predicted = jnp.array(motion_cov_predicted)
@@ -375,6 +371,22 @@ def main():
     motions_is_ood = np.array(motions_is_ood)
     motions_is_valid = np.array(motions_is_valid)
     pose_buffers_good = np.array(pose_buffers_good)
+    motions_cov_predicted_uncalibrated_np = np.array(motions_cov_predicted_uncalibrated)
+
+    # Save motion prediction results for covariance tuning (same format as motion_prediction.py)
+    os.makedirs(args.output_dir, exist_ok=True)
+    results_cloudpickle_file = os.path.join(args.output_dir, "motion_prediction_results.cloudpickle")
+    motion_prediction_results = {
+        'predictions': motions_predicted_np,
+        'targets': motions_gt_np,
+        'covariance_matrices': motions_cov_predicted_uncalibrated_np,
+        'ood_scores': motions_ood_scores,
+        'is_oods': motions_is_ood,
+        'last_input_poses': last_poses_np
+    }
+    with open(results_cloudpickle_file, 'wb') as f:
+        cloudpickle.dump(motion_prediction_results, f)
+    print(f"Saved motion prediction results to {results_cloudpickle_file}")
 
     # Evaluate 3D pose estimation MPJPE and coverage
     # print("================================")

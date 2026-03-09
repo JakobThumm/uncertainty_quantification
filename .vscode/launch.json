@@ -475,33 +475,14 @@
       ]
     },
     {
-      "name": "Tune Motion Prediction Covariance Offset",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "human_pose_pipeline/motion_prediction/tune_covariance_offset.py",
-      "console": "integratedTerminal",
-      "args": [
-          "--results_file", "results/motion_prediction/motion_prediction_results_train.cloudpickle",
-      ]
-    },
-    {
       "name": "Evaluate Motion Prediction Covariance RGB-D YOLO",
       "type": "debugpy",
       "request": "launch",
       "program": "human_pose_pipeline/motion_prediction/evaluate_covariance.py",
       "console": "integratedTerminal",
       "args": [
-          "--results_file", "results/motion_prediction/motion_prediction_results_validation.cloudpickle",
-      ]
-    },
-    {
-      "name": "Tune Motion Prediction Covariance Offset RGB-D YOLO",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "human_pose_pipeline/motion_prediction/tune_covariance_offset.py",
-      "console": "integratedTerminal",
-      "args": [
-          "--results_file", "results/motion_prediction/motion_prediction_results_train.cloudpickle",
+          "--results_file", "results/full_pipeline_rgbd_yolo/motion_prediction_results.cloudpickle",
+          "--config", "rgbd_yolo"
       ]
     },
     {
