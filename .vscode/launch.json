@@ -1,0 +1,890 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Score LeNet MNIST",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "score_model.py",
+      "console": "integratedTerminal",
+      "args": [
+                "--ID_dataset", "FMNIST",
+                "--OOD_dataset", "MNIST", "FMNIST-R",
+                "--model", "LeNet",
+                "--run_name", "started_2025-07-31-15-24-17",
+                "--score", "local_ensemble",
+                "--lanczos_hm_iter", "3",
+                "--lanczos_lm_iter", "0",
+                "--lanczos_seed", "0",
+                "--subsample_trainset", "60000",
+                "--test_batch_size", "128",
+            ]
+    },
+    {
+      "name": "Score LeNet MNIST Low Memory",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "score_model.py",
+      "console": "integratedTerminal",
+      "args": [
+                "--ID_dataset", "FMNIST",
+                "--OOD_dataset", "MNIST", "FMNIST-R",
+                "--model", "LeNet",
+                "--run_name", "started_2025-07-31-15-24-17",
+                "--subsample_trainset", "10000",
+                "--subsample_testset", "640",
+                "--lanczos_hm_iter", "0",
+                "--lanczos_lm_iter", "81",
+                "--test_batch_size", "64",
+                "--train_batch_size", "64",
+                "--serialize_ggn_on_batches",
+                "--sketch", "srft",
+                "--sketch_size", "1000",
+                "--cache_dir", "cache/"
+            ]
+    },
+    {
+      "name": "Plot Data LeNet MNIST",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "plot_data.py",
+      "console": "integratedTerminal",
+      "args": [
+                "--scores_file_path", "../models/FMNIST/LeNet/seed_2/good_scores_subsample60000_lanczos_seed1_size_HM0of0_LM118of132_sketch_srft_seed1_size1000.cloudpickle",
+                "--ID_dataset", "FMNIST",
+                "--OOD_dataset", "MNIST", "FMNIST-R",
+                "--test_batch_size", "128",
+                "--model_seed", "1"
+            ]
+    },
+    {
+      "name": "Plot Fixed Memory Budget LeNet MNIST",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "plot_fixed_memory_budget.py",
+      "console": "integratedTerminal",
+      "args": [
+                "--dataset", "FMNIST",
+                "--budget", "3"
+            ]
+    },
+    {
+      "name": "Pose Estimation 2D",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_2D.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Pose Estimation 2D YOLO",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_2D_yolo.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Debug Single Pose Estimation 2D",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/debug_pose_visualization.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Debug Single Pose Estimation 2D YOLO",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/debug_pose_visualization_yolo.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Debug Pose Estimation 2D RGB-D YOLO",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/debug_rgbd_2d_visualization_yolo.py",
+      "console": "integratedTerminal",
+      "args": [
+        // "--all"
+        "--frame_idx", "1739"
+      ]
+    },
+    {
+      "name": "Debug Single Pose Estimation 3D RGB-D",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/debug_rgbd_3d_visualization.py",
+      "console": "integratedTerminal",
+      "args": [
+        // "--all"
+        "--frame_idx", "1739"
+      ]
+    },
+    {
+      "name": "Debug Single Pose Estimation 2D from Preprocessed",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/debug_preprocessed_pose.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--preprocessed_dir", "datasets/H36M/pre_processed",
+        "--checkpoint", "human_pose_pipeline/models/pose_estimation/H36M/RegressFlowFull/seed_420",
+        "--split", "train",
+        "--sample_idx", "0",
+        "--save_path", "results/debug_pose.png"
+      ]
+    },
+    {
+      "name": "Pose Estimation 3D",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_3D.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--split", "train"
+      ]
+    },
+    {
+      "name": "Pose Estimation 3D Full Eval",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_3D_full_eval.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--max_sequences", "1",
+          "--split", "validation"
+      ]
+    },
+    {
+      "name": "Pose Estimation 3D Full Eval RGBD",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_3D_full_eval_rgbd.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--split", "validation",
+          "--max_sequences", "1",
+          "--batch_size", "32",
+          "--camera_ids", "60457274"
+      ]
+    },
+    {
+      "name": "Pose Estimation 3D Full Eval RGB-D trick",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_3D_full_eval_stereo_const_depth.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--split", "validation",
+          "--max_sequences", "1",
+          "--batch_size", "32",
+          "--camera_ids", "55011271", "60457274",
+          "--sigma_depth", "15.0"
+      ]
+    },
+    {
+      "name": "Pose Estimation 3D Full Eval YOLO",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_3D_full_eval_yolo.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--max_sequences", "1",
+          "--split", "validation",
+          "--batch_size", "32",
+          //"--enable_tracking"
+      ]
+    },
+    {
+      "name": "Pose Estimation 3D Full Eval RGBD YOLO",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_3D_full_eval_rgbd_yolo.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--split", "validation",
+          "--max_sequences", "1",
+          "--batch_size", "32"
+      ]
+    },
+    {
+      "name": "Debug Single Pose Estimation 3D",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/debug_3d_pose_visualization.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Pose Estimation ID vs. OOD",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/id_vs_ood_pose_prediction.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Evaluate Preprocessed H36M",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/evaluate_preprocessed_h36m.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--preprocessed_dir", "datasets/H36M/pre_processed",
+        "--checkpoint", "human_pose_pipeline/models/pose_estimation/H36M/RegressFlowFull/seed_420",
+        "--split", "validation",
+        "--num_samples", "100",
+        "--visualize",
+        "--save_dir", "results/preprocessed_eval_vis"
+      ]
+    },
+    {
+      "name": "Preprocess H36M (single)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/pose_estimation/preprocess_h36m_bbox.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--input_dir", "datasets/H36M/extracted",
+        "--output_dir", "datasets/H36M/pre_processed",
+        "--splits", "train",
+        "--num_frames", "1"
+      ]
+    },
+    {
+      "name": "Preprocess H36M (GPU)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/pose_estimation/preprocess_h36m_bbox_gpu.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--dataset_dir", "datasets/H36M/extracted",
+        "--output_dir", "datasets/H36M/pre_processed",
+        "--batch_size", "128",
+        "--device", "cuda"
+      ]
+    },
+    {
+      "name": "Score RegressFlow H36M",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "score_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--ID_dataset", "H36M",
+          "--OOD_dataset", "tiger-pose",
+          "--data_path", "datasets/",
+          "--model_save_path", "human_pose_pipeline/models/pose_estimation",
+          "--model", "RegressFlow",
+          "--run_name", "finetuned_h36m_regressflow_pred",
+          "--subsample_trainset", "10000",
+          "--subsample_testset", "640",
+          "--lanczos_hm_iter", "0",
+          "--lanczos_lm_iter", "81",
+          "--test_batch_size", "64",
+          "--train_batch_size", "64",
+          "--serialize_ggn_on_batches",
+          "--sketch", "srft",
+          "--sketch_size", "100000",
+          "--cache_dir", "cache/",
+          "--load_score_functions"
+      ]
+    },
+    {
+      "name": "Score RegressFlow H36M small",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "score_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--ID_dataset", "H36M",
+          "--OOD_dataset", "tiger-pose",
+          "--data_path", "datasets/",
+          "--model_save_path", "human_pose_pipeline/models/pose_estimation",
+          "--model", "RegressFlowResNet18_3Joints",
+          "--run_name", "jax_resnet18_regressflow_3joints",
+          "--output_dim", "6",
+          "--subsample_trainset", "10000",
+          "--subsample_testset", "640",
+          "--lanczos_hm_iter", "0",
+          "--lanczos_lm_iter", "81",
+          "--test_batch_size", "64",
+          "--train_batch_size", "64",
+          "--serialize_ggn_on_batches",
+          "--sketch", "srft",
+          "--sketch_size", "100000",
+          "--cache_dir", "cache/",
+          "--load_ggn",
+          "--load_sketch",
+          "--load_eigenpairs",
+          "--load_score_functions"
+      ]
+    },
+    {
+      "name": "Score RegressFlow H36M small less layers",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "score_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--ID_dataset", "H36M",
+          "--OOD_dataset", "tiger-pose",
+          "--data_path", "datasets/",
+          "--model_save_path", "human_pose_pipeline/models/pose_estimation",
+          "--model", "RegressFlow",
+          "--run_name", "finetuned_h36m_regressflow_pred_3joints",
+          "--output_dim", "6",
+          "--subsample_trainset", "10000",
+          "--subsample_testset", "640",
+          "--lanczos_hm_iter", "0",
+          "--lanczos_lm_iter", "81",
+          "--test_batch_size", "64",
+          "--train_batch_size", "64",
+          "--serialize_ggn_on_batches",
+          "--sketch", "srft",
+          "--sketch_size", "100000",
+          "--target_layers", "LinearNorm_0", "ResNet50Backbone_0/BottleneckStage_3",
+          "--cache_dir", "cache/",
+          "--load_ggn",
+          "--load_sketch",
+          "--load_eigenpairs",
+          "--load_score_functions"
+      ]
+    },
+    {
+      "name": "Plot OOD Scores H36M vs Tiger",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/plot_ood_scores.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--scores_file", "human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/jax_resnet18_regressflow_3joints_scores_subsample10000_lanczos_seed0_size_HM0of0_LM72of81_sketch_srft_seed0_size100000.cloudpickle",
+          "--save_path", "results/ood_scores_h36m_tiger.png",
+          "--plot_type", "comprehensive"
+      ]
+    },
+    {
+      "name": "Pose Estimation 2D with OOD Detection",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_2d_with_ood.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--cache_dir", "cache/",
+          "--base_key", "H36M_RegressFlowResNet18_3Joints_n9000_4998731f",
+          "--data_path", "datasets/",
+          "--model_save_path", "human_pose_pipeline/models/pose_estimation",
+          "--run_name", "jax_resnet50_regressflow",
+          "--max_samples", "10000",
+          "--output_dir", "results/pose_ood_evaluation",
+          "--ood_threshold", "0.05"
+      ]
+    },
+    {
+      "name": "Pose Estimation 3D with OOD Detection",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_3D.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--cache_dir", "cache/",
+          "--base_key", "H36M_RegressFlowResNet18_3Joints_n9000_4998731f",
+          "--data_path", "datasets/",
+          "--model_save_path", "human_pose_pipeline/models/pose_estimation",
+          "--run_name", "jax_resnet50_regressflow",
+          "--ood_threshold", "0.05",
+          "--subject", "S1",
+          "--action", "WalkingDog",
+          "--max_frames", "100",
+          "--enable_ood",
+          "--output_dir", "results/pose_3d_ood"
+      ]
+    },
+        {
+      "name": "Preprocess Uncertainty Input Dataset",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/preprocess_uncertainty_input_dataset.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--data_path", "datasets/",
+          "--output_dir", "datasets/H36M/pre_processed_motion",
+          //"--split", "all",
+          "--split", "validation",
+          "--action", "Directions",
+          "--batch_size", "32",
+          "--device", "cuda",
+          "--camera_ids", "55011271", "60457274",
+          "--run_name", "jax_resnet50_regressflow",
+      ]
+    },
+    {
+      "name": "Motion Prediction Evaluation",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/motion_prediction.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--data_path", "datasets/",
+          "--dataset_name", "Human36mMotionDataset3DWithInputUncertainty",
+          "--split", "validation",
+          "--model_save_path", "human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle",
+          // "--enable_ood",
+          "--motion_score_fn_path", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle"
+      ]
+    },
+        {
+      "name": "Eval Full Pipeline",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/eval_full_pipeline.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--pose_model_save_path", "human_pose_pipeline/models/pose_estimation",
+        "--pose_run_name", "jax_resnet50_regressflow",  // "jax_resnet50_regressflow", finetuned_h36m_regressflow_with_unc
+        "--pose_base_key", "H36M_RegressFlowResNet18_3Joints_n9000_4998731f",
+        "--motion_model_save_path", "human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle",
+        "--motion_score_fn_path", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle",
+        "--split", "validation",
+        "--action", "Directions",
+        "--max_sequences", "1",
+        //"--enable_ood"
+      ]
+    },
+    {
+      "name": "Eval Full Pipeline RGB-D YOLO",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/eval_full_pipeline_rgbd_yolo.py",
+      "console": "integratedTerminal",
+      "args": [
+        // "--enable_ood",
+        "--enable_tracking",
+        "--depth_uncertainty", "0.05",
+        "--start_at", "1656",
+        "--max_frames", "2000"
+      ]
+    },
+    {
+      "name": "Evaluate Motion Prediction Covariance",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/evaluate_covariance.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--results_file", "results/motion_prediction/motion_prediction_results_validation.cloudpickle",
+      ]
+    },
+    {
+      "name": "Tune Motion Prediction Covariance Offset",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/tune_covariance_offset.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--results_file", "results/motion_prediction/motion_prediction_results_train.cloudpickle",
+      ]
+    },
+    {
+      "name": "Evaluate Motion Prediction Covariance RGB-D YOLO",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/evaluate_covariance.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--results_file", "results/motion_prediction/motion_prediction_results_validation.cloudpickle",
+      ]
+    },
+    {
+      "name": "Tune Motion Prediction Covariance Offset RGB-D YOLO",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/tune_covariance_offset.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--results_file", "results/motion_prediction/motion_prediction_results_train.cloudpickle",
+      ]
+    },
+    {
+      "name": "Score DCTPoseTransformer H36M Reduced Output OOD",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "score_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--ID_dataset", "Human36mMotionReducedOutputDataset3D",
+          "--OOD_dataset", "Human36mMotionReducedOutputOODDataset3D",
+          "--data_path", "datasets/",
+          "--model_save_path", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/",
+          "--model", "DCTPoseTransformerReducedOutput",
+          "--run_name", "dct_pose_transformer",
+          "--output_dim", "9",
+          "--subsample_trainset", "10000",
+          "--subsample_testset", "640",
+          "--lanczos_hm_iter", "0",
+          "--lanczos_lm_iter", "800",
+          "--test_batch_size", "128",
+          "--train_batch_size", "128",
+          "--serialize_ggn_on_batches",
+          "--sketch", "srft",
+          "--sketch_size", "10000",
+          //"--use_eigenvals",
+          //"--prior_std", "0.00000000001",
+          "--cache_dir", "cache/",
+          // "--load_ggn",
+          // "--load_sketch",
+          // "--load_eigenpairs",
+          // "--load_score_functions"
+      ]
+    },
+    {
+      "name": "Motion Prediction ID vs. OOD",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/id_vs_ood_motion_prediction.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--score_fn", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle",
+        "--max_samples", "4000",
+        "--results_dir", "results/motion_prediction_ood"
+      ]
+    },
+    {
+      "name": "Plot Motion OOD Scores (Histogram)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/plot_ood_scores_motion_prediction.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--scores_file", "results/motion_prediction_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000_ood_scores.cloudpickle",
+        "--plot_type", "histogram",
+        "--bins", "50",
+        "--save_path", "results/motion_ood_histogram.png"
+      ]
+    },
+    {
+      "name": "Plot Motion OOD Scores (Comprehensive)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/plot_ood_scores_motion_prediction.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--scores_file", "results/motion_prediction_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000_ood_scores.cloudpickle",
+        "--plot_type", "comprehensive",
+        "--save_path", "results/motion_ood_comprehensive.png"
+      ]
+    },
+    {
+      "name": "Transfer Pose Estimation Model Weights",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/pose_estimation/transfer_weights.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--architecture", "resnet18"
+      ]
+    },
+    {
+      "name": "Reduce Pose Estimation Model Weights",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/pose_estimation/reduce_regressflow_model.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Transfer Motion Model Weights",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/transfer_weights.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Motion Prediction Debug",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/motion_prediction_debug.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--data_path", "datasets/",
+          "--model_save_path", "human_pose_pipeline/models/motion_prediction/dct_pose_transformer.pickle"
+      ]
+    },
+    {
+      "name": "Train Motion Prediction Model (Stage 1)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/train_motion_prediction_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--stage", "1",
+          "--data_path", "datasets/",
+          "--batch_size", "256",
+          "--d_model", "128",
+          "--nhead", "4",
+          "--num_layers", "2",
+          "--stage1_epochs", "50",
+          "--stage2_epochs", "15",
+          "--stage3_epochs", "15",
+          "--stage4_epochs", "15",
+          "--learning_rate", "0.001",
+          "--seed", "0",
+          "--use_lr_schedule",
+          "--lr_schedule_type", "cosine",
+          "--lr_warmup_epochs", "3",
+          "--lr_min_factor", "0.1",
+          "--weight_decay", "0.000001",
+          "--max_grad_norm", "0.6796845430167515",
+          "--wandb_project", "motion-prediction",
+          "--use_wandb"
+      ]
+    },
+    {
+      "name": "Train Motion Prediction Model RLE (Stage 1)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/train_motion_prediction_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--stage", "1",
+          "--data_path", "datasets/",
+          "--batch_size", "256",
+          "--d_model", "128",
+          "--nhead", "4",
+          "--num_layers", "2",
+          "--stage1_epochs", "10",
+          "--stage2_epochs", "15",
+          "--stage3_epochs", "15",
+          "--learning_rate", "0.001",
+          "--seed", "0",
+          "--use_lr_schedule",
+          "--lr_schedule_type", "cosine",
+          "--lr_warmup_epochs", "3",
+          "--lr_min_factor", "0.1",
+          "--weight_decay", "0.000001",
+          "--max_grad_norm", "0.6796845430167515",
+          "--wandb_project", "motion-prediction",
+          "--use_wandb",
+          "--use_rle_model",
+          "--flow_hidden_dim", "64",
+          "--flow_n_layers", "6",
+          "--sigma_init_mm", "20.0"
+      ]
+    },
+    {
+      "name": "Train Motion Prediction Model from Transferred Weights (Augment)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/train_motion_prediction_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--stage", "1",
+          "--data_path", "datasets/",
+          "--batch_size", "256",
+          "--d_model", "128",
+          "--nhead", "4",
+          "--num_layers", "2",
+          "--init_weights_path", "human_pose_pipeline/models/motion_prediction/dct_pose_transformer_transferred.pickle",
+          "--stage1_epochs", "15",
+          "--stage2_epochs", "10",
+          "--stage3_epochs", "10",
+          "--stage4_epochs", "40",
+          "--learning_rate", "0.0001",
+          "--use_lr_schedule",
+          "--lr_schedule_type", "cosine",
+          "--lr_warmup_epochs", "3",
+          "--lr_min_factor", "0.1",
+          "--weight_decay", "0.000001",
+          "--max_grad_norm", "0.6796845430167515",
+          "--wandb_project", "motion-prediction",
+          "--use_wandb",
+          "--augment"
+      ]
+    },
+    {
+      "name": "Train Motion Prediction Model RLE from Transferred Weights",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/train_motion_prediction_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--stage", "1",
+          "--data_path", "datasets/",
+          "--batch_size", "256",
+          "--d_model", "128",
+          "--nhead", "4",
+          "--num_layers", "2",
+          "--init_weights_path", "human_pose_pipeline/models/motion_prediction/dct_pose_transformer_transferred.pickle",
+          "--stage1_epochs", "10",
+          "--stage2_epochs", "15",
+          "--stage3_epochs", "15",
+          "--learning_rate", "0.0001",
+          "--use_lr_schedule",
+          "--lr_schedule_type", "cosine",
+          "--lr_warmup_epochs", "3",
+          "--lr_min_factor", "0.1",
+          "--weight_decay", "0.000001",
+          "--max_grad_norm", "0.6796845430167515",
+          "--wandb_project", "motion-prediction",
+          "--use_wandb",
+          "--use_rle_model",
+          "--flow_hidden_dim", "64",
+          "--flow_n_layers", "6",
+          "--sigma_init_mm", "20.0"
+      ]
+    },
+    {
+      "name": "Train Motion Prediction Model from Transferred Weights Stage 4",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/train_motion_prediction_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--stage", "4",
+          "--data_path", "datasets/",
+          "--batch_size", "256",
+          "--d_model", "128",
+          "--nhead", "4",
+          "--num_layers", "2",
+          "--init_weights_path", "human_pose_pipeline/models/motion_prediction/dct_pose_transformer_transferred.pickle",
+          "--stage1_epochs", "30",
+          "--stage2_epochs", "15",
+          "--stage3_epochs", "15",
+          "--stage4_epochs", "40",
+          "--learning_rate", "0.0001",
+          "--use_lr_schedule",
+          "--lr_schedule_type", "cosine",
+          "--lr_warmup_epochs", "5",
+          "--lr_min_factor", "0.1",
+          "--weight_decay", "0.000001",
+          "--max_grad_norm", "0.6796845430167515",
+          "--wandb_project", "motion-prediction",
+          "--use_wandb",
+          "--run_id", "0coa23la"
+      ]
+    },
+    {
+      "name": "Debug Preprocess Uncertainty Input Dataset",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/debug_preprocessed_motion_data.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--split", "all"
+      ]
+    },
+    {
+      "name": "Train Motion Prediction with Optuna (Stage 1)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/train_motion_prediction_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--use_optuna",
+          "--optuna_n_trials", "30",
+          "--optuna_study_name", "motion_prediction_stage1_optimization",
+          "--optuna_storage", "sqlite:///optuna_motion_stage1.db",
+          "--optuna_pruner_warmup", "10",
+          "--optuna_pruner_interval", "10",
+          "--data_path", "datasets/",
+          "--batch_size", "256",
+          "--d_model", "128",
+          "--nhead", "4",
+          "--num_layers", "2",
+          "--stage1_epochs", "50",
+          "--stage2_epochs", "30",
+          "--stage3_epochs", "30",
+          "--seed", "420",
+          "--wandb_project", "motion-prediction-optuna",
+          "--use_wandb"
+      ]
+    },
+    {
+      "name": "Train Motion Prediction with Optuna (All Stages)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/train_motion_prediction_model.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--use_optuna",
+          "--optuna_n_trials", "30",
+          "--optuna_study_name", "motion_prediction_full_optimization",
+          "--optuna_storage", "sqlite:///optuna_motion_full.db",
+          "--optuna_optimize_all_stages",
+          "--optuna_pruner_warmup", "10",
+          "--optuna_pruner_interval", "10",
+          "--data_path", "datasets/",
+          "--batch_size", "256",
+          "--d_model", "128",
+          "--nhead", "4",
+          "--num_layers", "2",
+          "--stage1_epochs", "50",
+          "--stage2_epochs", "30",
+          "--stage3_epochs", "30",
+          "--seed", "420",
+          "--wandb_project", "motion-prediction-optuna",
+          "--use_wandb"
+      ]
+    },
+    {
+      "name": "Marian Experiment2 2D Pose Estimation",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "marian_code/Experiment2/",
+      "program": "2D_Pose_Estimation.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Marian Experiment2 3D Pose Estimation",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "marian_code/Experiment2/3D_Pose_Estimation.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Pose Estimation 3D Test",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/pose_estimation_3D.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--split", "validation",
+          "--max_files", "10",
+          "--max_frames", "1000"
+      ]
+    },
+    {
+      "name": "Marian Experiment1 Train 3D Motion Prediction",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "marian_code/Experiment1/13_Joints/trainer_with_uncertainty.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Marian Experiment1 Eval 3D Motion Prediction",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "marian_code/Experiment1/13_Joints/validate_model.py",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Compare Pytorch vs Jax Motion Prediction Model",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/motion_prediction/compare_jax_pytorch_evaluation.py",
+      "console": "integratedTerminal",
+      "args": [
+          "--data_path", "datasets/",
+          "--jax_model_path", "human_pose_pipeline/models/motion_prediction/17bg6nyk/checkpoints/stage_4/dct_pose_transformer.pickle",
+          "--pytorch_model_path", "marian_code/Experiment4/model_checkpoint_prediction_transformer_weights_from_end_to_end.pth",
+          "--batch_size", "64",
+          "--test_uncertain_input"
+      ]
+    },
+    {
+      "name": "Marian Experiment4 Evaluate End to End",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "marian_code/Experiment4/evaluate_h36m_end_to_end.py",
+      "console": "integratedTerminal"
+    },
+  ]
+}

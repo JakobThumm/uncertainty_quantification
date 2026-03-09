@@ -1,4 +1,3 @@
-.vscode
 /virtualenv
 /unc
 /logs
@@ -28,7 +27,6 @@ unc/
 results/
 figures/
 visualizations/
-.vscode/
 /*.png
 
 models_tianle/
