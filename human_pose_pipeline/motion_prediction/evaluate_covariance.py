@@ -36,6 +36,12 @@ def main():
         choices=["h36m", "rgbd_yolo"],
         help="Settings config to use: 'h36m' for Human3.6M, 'rgbd_yolo' for RGB-D YOLO pipeline"
     )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=25.0,
+        help="The FPS of the camera"
+    )
 
     args = parser.parse_args()
 
@@ -45,7 +51,8 @@ def main():
             PREDICTION_HORIZON_LENGTH,
             COV_CALIBRATION_CT,
             COV_CALIBRATION_IT,
-            SET_LIKELIHOOD
+            SET_LIKELIHOOD,
+            SARA_MEASUREMENT_UNCERTAINTY
         )
     else:
         from human_pose_pipeline.motion_prediction.h36m_settings import (
@@ -53,7 +60,8 @@ def main():
             PREDICTION_HORIZON_LENGTH,
             COV_CALIBRATION_CT,
             COV_CALIBRATION_IT,
-            SET_LIKELIHOOD
+            SET_LIKELIHOOD,
+            SARA_MEASUREMENT_UNCERTAINTY
         )
 
     output_dir = os.path.join(root_dir, args.output_dir)
@@ -136,14 +144,19 @@ def main():
     print(f"Predicted spherical reachable set coverage stats for {SET_LIKELIHOOD} likelihood:")
     print_simple_coverage_stats_sara(coverage_stats_predictions)
 
-    dt = 1.0 / 25.0
+    print("====================================")
+    print("SARA Coverage Stats")
+    print("====================================")
+
+    dt = 1.0 / args.fps
     prediction_horizon_times = [(t + 1) * dt for t in range(PREDICTION_HORIZON_LENGTH)]
 
     # Evaluate SARA-style
     sara_predictions, sara_radius = compute_sara_predictions(
         last_input_poses=last_input_poses,
         prediction_horizon_times=prediction_horizon_times,
-        v_human=1.6
+        v_human=1.6,
+        measurement_uncertainty=SARA_MEASUREMENT_UNCERTAINTY
     )
     coverage_stats_sara, _ = simple_coverage_stats_sara(
         predictions=sara_predictions,

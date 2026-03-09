@@ -371,19 +371,23 @@ def save_coverage_stats(
 def compute_sara_predictions(
     last_input_poses: np.ndarray,
     prediction_horizon_times: list[float],
-    v_human: float = 1.6
+    v_human: float = 1.6,
+    measurement_uncertainty: float = 0.0
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Compute the reachable set with the constant velocity model of SARA.
+
+    radius = measurement_uncertainty + time * v_human
 
     Args:
         last_input_poses: pose to start at. Shape: [N, J, 3]
         prediction_horizon_times: time horizons for the predictions. Shape: [T]
         v_human: Maximal velocity of the human in m/s.
+        measurement_uncertainty: Uncertainty in the human pose estimate in m.
     Returns:
         - Prediction: last_input_poses repeated for all T. Shape: [N, T, J, 3]
-        - Radius: Radius of reachable set spheres with shape: [N, T, J]
+        - Radius: Radius of reachable set spheres in mm with shape: [N, T, J]
     """
-    radius = np.array([time * (v_human * 1000) for time in prediction_horizon_times])
+    radius = np.array([measurement_uncertainty * 1000 + time * (v_human * 1000) for time in prediction_horizon_times])
     radius = np.repeat(radius[np.newaxis, ...], last_input_poses.shape[0], axis=0)
     radius = np.repeat(radius[:, :, np.newaxis], last_input_poses.shape[1], axis=2)
     predictions = np.repeat(last_input_poses[:, np.newaxis, ...], len(prediction_horizon_times), axis=1)

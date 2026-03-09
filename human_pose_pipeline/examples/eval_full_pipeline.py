@@ -59,6 +59,7 @@ from human_pose_pipeline.motion_prediction.h36m_settings import (
     COV_CALIBRATION_CT,
     COV_CALIBRATION_IT,
     COV_CALIBRATION_FACTORS,
+    SARA_MEASUREMENT_UNCERTAINTY,
     SET_LIKELIHOOD
 )
 
@@ -429,7 +430,8 @@ def main():
     sara_predictions, sara_radius = compute_sara_predictions(
         last_input_poses=poses_3d_estimated_np[INPUT_HORIZON_LENGTH - 1:, 0, ...],
         prediction_horizon_times=prediction_horizon_times,
-        v_human=1.6
+        v_human=1.6,
+        measurement_uncertainty=SARA_MEASUREMENT_UNCERTAINTY
     )
     coverage_stats_sara, _ = simple_coverage_stats_sara(
         predictions=sara_predictions,

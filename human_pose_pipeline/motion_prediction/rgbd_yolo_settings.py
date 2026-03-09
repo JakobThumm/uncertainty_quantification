@@ -12,7 +12,7 @@ N_CORRECT_POSES_REQUIRED = 3
 
 # Covariance calibration for motion prediction
 COV_CALIBRATION_CT = 4.0
-COV_CALIBRATION_IT = 0.3
+COV_CALIBRATION_IT = 0.5
 # JOINT_NAMES_13 = [
 #     'Nose', 'LShoulder', 'RShoulder', 'LElbow', 'RElbow',
 #     'LWrist', 'RWrist', 'LHip', 'RHip', 'LKnee',
@@ -23,3 +23,5 @@ COV_CALIBRATION_FACTORS = [1.3, 1.2, 1.2, 1.4, 1.4,
                            1.0, 1.1, 1.1]
 # Likelihood boundary for the predicted set
 SET_LIKELIHOOD = 0.99
+
+SARA_MEASUREMENT_UNCERTAINTY = 0.20

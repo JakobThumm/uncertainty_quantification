@@ -18,3 +18,5 @@ COV_CALIBRATION_FACTORS = [1.0, 1.0, 1.0, 1.0, 1.0,
                            1.0, 1.5, 1.5]
 # Likelihood boundary for the predicted set
 SET_LIKELIHOOD = 0.99
+
+SARA_MEASUREMENT_UNCERTAINTY = 0.005
