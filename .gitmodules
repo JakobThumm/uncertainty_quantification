@@ -1,0 +1,3 @@
+[submodule "ros2_packages/realsense_rgbd_streamer"]
+	path = ros2_packages/realsense_rgbd_streamer
+	url = git@github.com:JakobThumm/realsense_rgbd_streamer.git
