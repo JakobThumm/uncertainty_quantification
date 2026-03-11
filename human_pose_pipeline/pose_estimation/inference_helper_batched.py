@@ -1676,3 +1676,55 @@ def process_frame_3d_from_rgbd_yolo(
         C_3d_all = R_exp @ C_3d_all @ R_exp.transpose(-1, -2)
 
     return points_3d, C_3d_all, ood_score, is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_2d
+
+
+def process_pose_output(
+    points_3d: torch.Tensor,
+    C_3d_all: torch.Tensor,
+    pose_is_ood,
+    human_detected,
+    points_3d_buffer: jnp.ndarray,
+    covariance_buffer: jnp.ndarray,
+    pose_valid_buffer: jnp.ndarray,
+    motion_prediction_buffer: jnp.ndarray,
+    motion_uncertainty_buffer: jnp.ndarray,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, torch.Tensor, torch.Tensor, bool, bool]:
+    """Process batched pose estimation output: unbatch, determine validity, update pose buffers.
+
+    Args:
+        points_3d: Batched 3D joint positions [B, J, 3]
+        C_3d_all: Batched 3D covariance matrices [B, J, 3, 3]
+        pose_is_ood: Whether the pose is OOD (bool-like)
+        human_detected: Whether a human was detected (bool-like)
+        points_3d_buffer: Rolling buffer of 3D points [T, J, 3]
+        covariance_buffer: Rolling buffer of covariance matrices [T, J, 3, 3]
+        pose_valid_buffer: Rolling buffer of validity flags [T]
+        motion_prediction_buffer: Current motion prediction buffer [P, J, 3]
+        motion_uncertainty_buffer: Current motion uncertainty buffer [P, J, 3, 3]
+
+    Returns:
+        - Updated points_3d_buffer [T, J, 3]
+        - Updated covariance_buffer [T, J, 3, 3]
+        - Updated pose_valid_buffer [T]
+        - points_3d unbatched [J, 3] (torch.Tensor)
+        - C_3d_all unbatched [J, 3, 3] (torch.Tensor)
+        - is_valid: bool
+        - pose_buffer_good: bool
+    """
+    points_3d = points_3d[0]
+    C_3d_all = C_3d_all[0]
+    pose_is_ood = bool(pose_is_ood)
+    human_detected = bool(human_detected)
+    is_valid = (not pose_is_ood) and human_detected
+
+    points_3d_buffer, covariance_buffer, pose_valid_buffer, pose_buffer_good = fill_pose_buffer(
+        points_3d_buffer=points_3d_buffer,
+        covariance_buffer=covariance_buffer,
+        pose_valid_buffer=pose_valid_buffer,
+        points_3d=jnp.array(points_3d.detach().cpu().numpy()),
+        covariance=jnp.array(C_3d_all.detach().cpu().numpy()),
+        is_valid=is_valid,
+        motion_prediction_buffer=motion_prediction_buffer,
+        motion_uncertainty_buffer=motion_uncertainty_buffer,
+    )
+    return points_3d_buffer, covariance_buffer, pose_valid_buffer, points_3d, C_3d_all, is_valid, pose_buffer_good

@@ -1,5 +1,5 @@
 """Helper functions for motion prediction inference."""
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence, Tuple, Union
 from sympy import ShapeError
 from tqdm import tqdm
 from time import time
@@ -121,6 +121,124 @@ def compute_covariance_matrices(log_var, raw_cov):
     # Compute full covariance matrix from Cholesky factors
     cov_matrix = jnp.matmul(L, jnp.matrix_transpose(L))
     return cov_matrix
+
+
+def run_motion_prediction(
+    points_3d_buffer: jnp.ndarray,
+    covariance_buffer: jnp.ndarray,
+    pose_valid_buffer: jnp.ndarray,
+    motion_prediction_buffer: jnp.ndarray,
+    motion_uncertainty_buffer: jnp.ndarray,
+    motion_prediction_jit_fn,
+    motion_prediction_params,
+    motion_prediction_batch_stats,
+    motion_ood_score_fn,
+    n_joints: int,
+    input_horizon_length: int,
+    prediction_horizon_length: int,
+    ood_threshold: float,
+    calibration_ct: float,
+    calibration_it: float,
+    calibration_factors: Optional[Sequence[float]],
+    n_correct_poses_required: int,
+    set_likelihood: float,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, float, bool, bool, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Run one step of motion prediction: inference, OOD scoring, calibration, buffer update.
+
+    Args:
+        points_3d_buffer: Rolling pose buffer [T, J, 3]
+        covariance_buffer: Rolling covariance buffer [T, J, 3, 3]
+        pose_valid_buffer: Rolling validity buffer [T]
+        motion_prediction_buffer: Current motion prediction buffer [P, J, 3]
+        motion_uncertainty_buffer: Current motion uncertainty buffer [P, J, 3, 3]
+        motion_prediction_jit_fn: JIT-compiled JAX motion prediction function
+        motion_prediction_params: Model parameters
+        motion_prediction_batch_stats: Batch statistics (or None)
+        motion_ood_score_fn: OOD scoring function (or None)
+        n_joints: Number of skeleton joints
+        input_horizon_length: Length of the input pose buffer T
+        prediction_horizon_length: Length of the prediction horizon P
+        ood_threshold: Threshold for classifying motion as OOD
+        calibration_ct: Constant time calibration factor for covariance
+        calibration_it: Increasing time calibration factor for covariance
+        calibration_factors: Per-joint calibration factors (or None)
+        n_correct_poses_required: Consecutive valid poses needed before using predicted motion
+        set_likelihood: Likelihood level for converting covariance to set radius
+
+    Returns:
+        - Updated motion_prediction_buffer [P, J, 3]
+        - Updated motion_uncertainty_buffer [P, J, 3, 3]
+        - motion_set_radius [P, J]
+        - motion_ood_score: float
+        - motion_is_ood: bool
+        - valid_motion: bool
+        - motion_predicted [P, J, 3]: Raw model position prediction (before buffer update)
+        - motion_cov_calibrated [P, J, 3, 3]: Calibrated covariance (before buffer update)
+        - motion_cov_uncalibrated [P, J, 3, 3]: Raw model covariance before calibration
+    """
+    from human_pose_pipeline.pose_estimation.inference_helper_batched import update_motion_prediction_buffer
+    from human_pose_pipeline.utils.eval_utils import convert_covariance_matrices_to_set
+
+    pose_input = points_3d_buffer.reshape([1, input_horizon_length, n_joints * 3])
+    motion_prediction_input = jnp.concatenate([
+        pose_input,
+        covariance_buffer.reshape([1, input_horizon_length, n_joints * 3 * 3])
+    ], axis=-1)
+
+    # Model inference
+    if motion_prediction_batch_stats is not None:
+        motion_predicted, (motion_cov_predicted, _) = motion_prediction_jit_fn(
+            motion_prediction_params, motion_prediction_batch_stats, motion_prediction_input
+        )
+    else:
+        motion_predicted, (motion_cov_predicted, _) = motion_prediction_jit_fn(
+            motion_prediction_params, motion_prediction_input
+        )
+
+    # OOD score
+    motion_ood_score = motion_ood_score_fn(pose_input) if motion_ood_score_fn is not None else 0.0
+
+    motion_predicted = motion_predicted.reshape(-1, prediction_horizon_length, n_joints, 3)[0]
+    motion_cov_predicted = motion_cov_predicted[0]
+    motion_cov_uncalibrated = motion_cov_predicted
+
+    # Calibrate covariance
+    motion_cov_predicted = calibrate_covariance_matrices(
+        covariance_matrices=motion_cov_predicted,
+        constant_time_factor=calibration_ct,
+        increase_time_factor=calibration_it,
+        joint_calibration_factors=calibration_factors,
+    )
+    if isinstance(motion_cov_predicted, np.ndarray):
+        motion_cov_predicted = jnp.array(motion_cov_predicted)
+
+    motion_is_ood = bool(motion_ood_score > ood_threshold)
+
+    motion_prediction_buffer, motion_uncertainty_buffer, valid_motion = update_motion_prediction_buffer(
+        motion_prediction_buffer=motion_prediction_buffer,
+        motion_uncertainty_buffer=motion_uncertainty_buffer,
+        predicted_motion=motion_predicted,
+        predicted_motion_uncertainty=motion_cov_predicted,
+        is_ood=motion_is_ood,
+        pose_valid_buffer=pose_valid_buffer,
+        n_correct_poses_required=n_correct_poses_required,
+    )
+
+    motion_set_radius = convert_covariance_matrices_to_set(
+        motion_uncertainty_buffer, likelihood=set_likelihood
+    )
+
+    return (
+        motion_prediction_buffer,
+        motion_uncertainty_buffer,
+        motion_set_radius,
+        motion_ood_score,
+        motion_is_ood,
+        valid_motion,
+        motion_predicted,
+        motion_cov_predicted,
+        motion_cov_uncalibrated,
+    )
 
 
 def calibrate_covariance_matrices(

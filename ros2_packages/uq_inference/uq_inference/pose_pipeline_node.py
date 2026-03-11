@@ -28,14 +28,12 @@ from human_pose_pipeline.pose_estimation.inference_helper import (
 )
 from human_pose_pipeline.pose_estimation.inference_helper_batched import (
     process_frame_3d_from_rgbd_yolo,
-    fill_pose_buffer,
-    update_motion_prediction_buffer
+    process_pose_output,
 )
 from human_pose_pipeline.pose_estimation.triangulation_helper import (
     load_camera_parameters
 )
-from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
-from human_pose_pipeline.utils.eval_utils import convert_covariance_matrices_to_set
+from human_pose_pipeline.motion_prediction.inference_helper import run_motion_prediction
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     MIRROR_13_JOINT_MODEL_MAP,
     YOLO_CONFIDENCE_THRESHOLD,
@@ -407,31 +405,25 @@ class PosePipelineNode(Node):
             covariance_xy: 2D covariance (batched)
             header: ROS message header for timestamp
         """
-        # Remove batch dimension
-        points_3d = points_3d[0]
-        C_3d_all = C_3d_all[0]
-        keypoints_2d = keypoints_2d[0]
-        uncertainties_2d = uncertainties_2d[0]
-        covariance_xy = covariance_xy[0]
+        # Unbatch, compute validity, update pose buffers
+        self.points_3d_buffer, self.covariance_buffer, self.pose_valid_buffer, \
+            points_3d, C_3d_all, is_valid, pose_buffer_good = process_pose_output(
+                points_3d=points_3d,
+                C_3d_all=C_3d_all,
+                pose_is_ood=pose_is_ood,
+                human_detected=human_detected,
+                points_3d_buffer=self.points_3d_buffer,
+                covariance_buffer=self.covariance_buffer,
+                pose_valid_buffer=self.pose_valid_buffer,
+                motion_prediction_buffer=self.motion_prediction_buffer,
+                motion_uncertainty_buffer=self.motion_uncertainty_buffer,
+            )
+        pose_is_ood = bool(pose_is_ood)
+        human_detected = bool(human_detected)
 
-        # Publish 2D and 3D poses
-        self._publish_pose_2d(keypoints_2d, uncertainties_2d, covariance_xy, pose_ood_score, pose_is_ood, human_detected, header)
+        # Publish 2D and 3D poses (using unbatched keypoints)
+        self._publish_pose_2d(keypoints_2d[0], uncertainties_2d[0], covariance_xy[0], pose_ood_score, pose_is_ood, human_detected, header)
         self._publish_pose(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header)
-
-        # Valid prediction if not OOD and human detected
-        is_valid = (not pose_is_ood) and human_detected
-
-        # Update pose buffer
-        self.points_3d_buffer, self.covariance_buffer, self.pose_valid_buffer, pose_buffer_good = fill_pose_buffer(
-            points_3d_buffer=self.points_3d_buffer,
-            covariance_buffer=self.covariance_buffer,
-            pose_valid_buffer=self.pose_valid_buffer,
-            points_3d=jnp.array(points_3d.cpu().numpy()),
-            covariance=jnp.array(C_3d_all.cpu().numpy()),
-            is_valid=is_valid,
-            motion_prediction_buffer=self.motion_prediction_buffer,
-            motion_uncertainty_buffer=self.motion_uncertainty_buffer,
-        )
 
         # Predict and publish motion if enough poses are in buffer
         self._predict_and_publish_motion(pose_buffer_good, header)
@@ -448,60 +440,27 @@ class PosePipelineNode(Node):
             header: ROS message header for timestamp
         """
         if self.frame_counter >= INPUT_HORIZON_LENGTH - 1 and pose_buffer_good:
-            pose_input = self.points_3d_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
-            motion_prediction_input = jnp.concatenate([
-                pose_input,
-                self.covariance_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3 * 3])
-            ], axis=-1)
-
-            # Model inference
-            if self.motion_prediction_batch_stats is not None:
-                motion_predicted, (motion_cov_predicted, L) = self.motion_prediction_jit_fn(
-                    self.motion_prediction_params,
-                    self.motion_prediction_batch_stats,
-                    motion_prediction_input
+            self.motion_prediction_buffer, self.motion_uncertainty_buffer, motion_set_radius, \
+                motion_ood_score, motion_is_ood, valid_motion, _, _, _ = run_motion_prediction(
+                    points_3d_buffer=self.points_3d_buffer,
+                    covariance_buffer=self.covariance_buffer,
+                    pose_valid_buffer=self.pose_valid_buffer,
+                    motion_prediction_buffer=self.motion_prediction_buffer,
+                    motion_uncertainty_buffer=self.motion_uncertainty_buffer,
+                    motion_prediction_jit_fn=self.motion_prediction_jit_fn,
+                    motion_prediction_params=self.motion_prediction_params,
+                    motion_prediction_batch_stats=self.motion_prediction_batch_stats,
+                    motion_ood_score_fn=self.motion_ood_score_fn,
+                    n_joints=N_JOINTS,
+                    input_horizon_length=INPUT_HORIZON_LENGTH,
+                    prediction_horizon_length=PREDICTION_HORIZON_LENGTH,
+                    ood_threshold=MOTION_OOD_THRESHOLD,
+                    calibration_ct=COV_CALIBRATION_CT,
+                    calibration_it=COV_CALIBRATION_IT,
+                    calibration_factors=COV_CALIBRATION_FACTORS,
+                    n_correct_poses_required=N_CORRECT_POSES_REQUIRED,
+                    set_likelihood=SET_LIKELIHOOD,
                 )
-            else:
-                motion_predicted, (motion_cov_predicted, L) = self.motion_prediction_jit_fn(
-                    self.motion_prediction_params,
-                    motion_prediction_input
-                )
-
-            # Compute OOD score for motion
-            if self.motion_ood_score_fn is not None:
-                motion_ood_score = self.motion_ood_score_fn(pose_input)
-            else:
-                motion_ood_score = 0.0
-
-            motion_predicted = motion_predicted.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)[0]
-            motion_cov_predicted = motion_cov_predicted[0]
-
-            # Calibrate covariance
-            motion_cov_predicted = calibrate_covariance_matrices(
-                covariance_matrices=motion_cov_predicted,
-                constant_time_factor=COV_CALIBRATION_CT,
-                increase_time_factor=COV_CALIBRATION_IT,
-                joint_calibration_factors=COV_CALIBRATION_FACTORS
-            )
-
-            motion_is_ood = bool(motion_ood_score > MOTION_OOD_THRESHOLD)
-
-            # Update motion prediction buffer
-            self.motion_prediction_buffer, self.motion_uncertainty_buffer, valid_motion = update_motion_prediction_buffer(
-                motion_prediction_buffer=self.motion_prediction_buffer,
-                motion_uncertainty_buffer=self.motion_uncertainty_buffer,
-                predicted_motion=motion_predicted,
-                predicted_motion_uncertainty=motion_cov_predicted,
-                is_ood=motion_is_ood,
-                pose_valid_buffer=self.pose_valid_buffer,
-                n_correct_poses_required=N_CORRECT_POSES_REQUIRED
-            )
-
-            # Convert covariance to set radius
-            motion_set_radius = convert_covariance_matrices_to_set(
-                self.motion_uncertainty_buffer,
-                likelihood=SET_LIKELIHOOD
-            )
 
             # Publish motion prediction
             self._publish_motion(
