@@ -16,7 +16,7 @@ def generate_launch_description():
     # Declare launch arguments
     mode_arg = DeclareLaunchArgument(
         'mode',
-        default_value='stereo',
+        default_value='rgbd',
         description='Mode: stereo or rgbd'
     )
 
@@ -24,6 +24,12 @@ def generate_launch_description():
         'enable_ood',
         default_value='true',
         description='Enable OOD detection'
+    )
+
+    enable_tracking_arg = DeclareLaunchArgument(
+        'enable_tracking',
+        default_value='false',
+        description='Enable YOLO multi-object tracking'
     )
 
     device_arg = DeclareLaunchArgument(
@@ -41,28 +47,19 @@ def generate_launch_description():
         parameters=[{
             'mode': LaunchConfiguration('mode'),
             'enable_ood': LaunchConfiguration('enable_ood'),
+            'enable_tracking': LaunchConfiguration('enable_tracking'),
             'device': LaunchConfiguration('device'),
             # Model paths (relative to workspace root)
-            'pose_model_path': 'human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/jax_resnet50_regressflow',
+            'yolo_model': 'yolo26n-pose.pt',
             'motion_model_path': 'human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle',
-            'camera_params_path': 'human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/camera-parameters.json',
             'motion_score_fn_path': 'human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle',
-            'cache_dir': 'cache/',
-            'pose_base_key': '',  # Set this if you have pose OOD detection
-            # Stereo camera topics
-            'camera_1_color_topic': '/realsense/camera_1/color/image_raw',
-            'camera_2_color_topic': '/realsense/camera_2/color/image_raw',
-            'camera_1_info_topic': '/realsense/camera_1/color/camera_info',
-            'camera_2_info_topic': '/realsense/camera_2/color/camera_info',
+            'depth_uncertainty': 0.002,
             # RGB-D camera topics
             'rgbd_color_topic': '/realsense/camera_1/color/image_raw',
             'rgbd_depth_topic': '/realsense/camera_1/aligned_depth_to_color/image_raw',
             'rgbd_info_topic': '/realsense/camera_1/color/camera_info',
-            # Camera IDs for calibration
-            'camera_1_id': '55011271',
-            'camera_2_id': '60457274',
-            'subject': 'S1',
             # Output topics
+            'pose_2d_output_topic': '/uq/pose_2d',
             'pose_output_topic': '/uq/pose_3d',
             'motion_output_topic': '/uq/motion_prediction',
         }]
@@ -71,6 +68,7 @@ def generate_launch_description():
     return LaunchDescription([
         mode_arg,
         enable_ood_arg,
+        enable_tracking_arg,
         device_arg,
         pose_pipeline_node
     ])

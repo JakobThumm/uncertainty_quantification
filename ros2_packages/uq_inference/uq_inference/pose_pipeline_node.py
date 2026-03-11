@@ -21,14 +21,13 @@ import torch
 import jax.numpy as jnp
 import cloudpickle
 from message_filters import Subscriber, ApproximateTimeSynchronizer
+from ultralytics import YOLO
 
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
-    initialize_human_detector,
 )
 from human_pose_pipeline.pose_estimation.inference_helper_batched import (
-    process_frame_3d,
-    process_frame_3d_from_rgbd,
+    process_frame_3d_from_rgbd_yolo,
     fill_pose_buffer,
     update_motion_prediction_buffer
 )
@@ -37,12 +36,9 @@ from human_pose_pipeline.pose_estimation.triangulation_helper import (
 )
 from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
 from human_pose_pipeline.utils.eval_utils import convert_covariance_matrices_to_set
-from src.ood_scores.lm_lanczos import load_score_functions
-
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     MIRROR_13_JOINT_MODEL_MAP,
     YOLO_CONFIDENCE_THRESHOLD,
-    OOD_THRESHOLD as POSE_OOD_THRESHOLD,
 )
 from human_pose_pipeline.motion_prediction.rgbd_yolo_settings import (
     INPUT_HORIZON_LENGTH,
@@ -85,13 +81,13 @@ class PosePipelineNode(Node):
 
         # Declare parameters
         self.declare_parameter('mode', 'rgbd')  # 'stereo' or 'rgbd'
-        self.declare_parameter('pose_model_path', 'human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/jax_resnet50_regressflow')
+        self.declare_parameter('yolo_model', 'yolo26n-pose.pt')
         self.declare_parameter('motion_model_path', 'human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle')
         self.declare_parameter('camera_params_path', 'human_pose_pipeline/models/pose_estimation/H36M/RegressFlow/seed_420/camera-parameters.json')
         self.declare_parameter('enable_ood', True)
-        self.declare_parameter('pose_base_key', '')
+        self.declare_parameter('enable_tracking', False)
+        self.declare_parameter('depth_uncertainty', 0.002)
         self.declare_parameter('motion_score_fn_path', 'human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle')
-        self.declare_parameter('cache_dir', 'cache/')
         self.declare_parameter('device', 'cuda')
 
         # Camera topics (stereo mode)
@@ -118,15 +114,15 @@ class PosePipelineNode(Node):
         # Get parameters
         self.mode = self.get_parameter('mode').value
         self.enable_ood = self.get_parameter('enable_ood').value
+        self.enable_tracking = self.get_parameter('enable_tracking').value
+        self.depth_uncertainty = self.get_parameter('depth_uncertainty').value
         self.device = self.get_parameter('device').value
 
         # Resolve paths relative to workspace root
-        self.pose_model_path = os.path.join(workspace_root, self.get_parameter('pose_model_path').value)
+        self.yolo_model_name = self.get_parameter('yolo_model').value
         self.motion_model_path = os.path.join(workspace_root, self.get_parameter('motion_model_path').value)
         self.camera_params_path = os.path.join(workspace_root, self.get_parameter('camera_params_path').value)
         self.motion_score_fn_path = os.path.join(workspace_root, self.get_parameter('motion_score_fn_path').value)
-        self.cache_dir = os.path.join(workspace_root, self.get_parameter('cache_dir').value)
-        self.pose_base_key = self.get_parameter('pose_base_key').value
 
         # Initialize CV Bridge
         self.bridge = CvBridge()
@@ -174,32 +170,25 @@ class PosePipelineNode(Node):
         self.get_logger().info(f'Pose pipeline node initialized in {self.mode} mode')
 
     def _initialize_models(self):
-        """Initialize JAX models and human detector."""
-        # Initialize pose estimation model
-        self.get_logger().info(f'Loading pose model from: {self.pose_model_path}')
-        self.pose_estimation_jit_fn, self.pose_estimation_params, self.pose_estimation_batch_stats = \
-            initialize_jax_models(self.pose_model_path)
+        """Initialize YOLO pose model and JAX motion prediction model."""
+        # Initialize YOLO pose estimation model
+        self.get_logger().info(f'Loading YOLO pose model: {self.yolo_model_name}')
+        self.yolo_model = YOLO(self.yolo_model_name)
+        if self.device == 'cuda':
+            self.yolo_model.to('cuda')
+            self.get_logger().info(f'YOLO model loaded on CUDA (GPU: {torch.cuda.get_device_name(0)})')
+        else:
+            self.get_logger().info('YOLO model loaded on CPU')
 
         # Initialize motion prediction model
         self.get_logger().info(f'Loading motion model from: {self.motion_model_path}')
         self.motion_prediction_jit_fn, self.motion_prediction_params, self.motion_prediction_batch_stats = \
             initialize_jax_models(self.motion_model_path)
 
-        # Initialize YOLO human detector
-        self.get_logger().info('Loading YOLO human detector...')
-        self.human_detector, self.device_torch = initialize_human_detector('cuda' if self.device == 'cuda' else 'cpu')
-
         # Load OOD score functions
-        self.pose_ood_score_fn = None
         self.motion_ood_score_fn = None
 
         if self.enable_ood:
-            if self.pose_base_key:
-                self.get_logger().info(f'Loading pose OOD score functions with key: {self.pose_base_key}')
-                self.pose_ood_score_fn, _, _, _ = load_score_functions(self.cache_dir, self.pose_base_key)
-            else:
-                self.get_logger().warn('OOD enabled but no pose_base_key provided. Skipping pose OOD detection.')
-
             if os.path.exists(self.motion_score_fn_path):
                 self.get_logger().info(f'Loading motion OOD score function from: {self.motion_score_fn_path}')
                 with open(self.motion_score_fn_path, 'rb') as f:
@@ -351,8 +340,8 @@ class PosePipelineNode(Node):
             return
 
         try:
-            # Convert ROS messages to OpenCV images
-            color_img = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+            # Convert ROS messages to images (RGB for YOLO, passthrough for depth)
+            color_img = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='rgb8')
             # Depth is typically uint16 in millimeters
             depth_img = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
 
@@ -375,64 +364,33 @@ class PosePipelineNode(Node):
             depth_frames: List of depth images [depth1] for RGB-D mode
             header: ROS message header for timestamp
         """
-        # Process only every other frame to match motion prediction frequency
-        if self.frame_counter % 2 != 0:
-            self.frame_counter += 1
-            return
-
-        # Perform 2D pose estimation and 3D depth lifting
-        points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy = process_frame_3d_from_rgbd(
-            rgb_frames=rgb_frames,
-            depth_frames=depth_frames,
-            camera_intrinsics=self.camera_intrinsics,
-            pose_estimation_jit_fn=self.pose_estimation_jit_fn,
-            params=self.pose_estimation_params,
-            batch_stats=self.pose_estimation_batch_stats,
-            human_detector=self.human_detector,
-            device_torch=self.device_torch,
-            mirror_map=MIRROR_13_JOINT_MODEL_MAP,
-            score_fn=self.pose_ood_score_fn,
-            human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
-            ood_threshold=POSE_OOD_THRESHOLD,
-            verbose=False,
-            device=self.device
-        )
+        # Perform YOLO pose estimation and 3D depth lifting
+        points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy = \
+            process_frame_3d_from_rgbd_yolo(
+                rgb_frames=rgb_frames,
+                depth_frames=depth_frames,
+                camera_intrinsics=self.camera_intrinsics,
+                yolo_pose_model=self.yolo_model,
+                mirror_map=MIRROR_13_JOINT_MODEL_MAP,
+                enable_tracking=self.enable_tracking,
+                confidence_threshold=YOLO_CONFIDENCE_THRESHOLD,
+                verbose=False,
+                device=self.device,
+                depth_uncertainty=self.depth_uncertainty,
+            )
 
         # Process the results through common pipeline
         self._process_pose_results(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy, header)
 
     def _process_frames(self, frames, header):
         """
-        Process frames through the full pipeline.
+        Process stereo frames through the full pipeline.
 
         Args:
             frames: List of images [img1, img2] for stereo mode
             header: ROS message header for timestamp
         """
-        # Process only every other frame to match motion prediction frequency
-        if self.frame_counter % 2 != 0:
-            self.frame_counter += 1
-            return
-
-        # Perform 2D pose estimation and 3D triangulation
-        points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy = process_frame_3d(
-            frames=frames,
-            projection_matrices=self.projection_matrices,
-            pose_estimation_jit_fn=self.pose_estimation_jit_fn,
-            params=self.pose_estimation_params,
-            batch_stats=self.pose_estimation_batch_stats,
-            human_detector=self.human_detector,
-            device_torch=self.device_torch,
-            mirror_map=MIRROR_13_JOINT_MODEL_MAP,
-            score_fn=self.pose_ood_score_fn,
-            human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD,
-            ood_threshold=POSE_OOD_THRESHOLD,
-            verbose=False,
-            device=self.device
-        )
-
-        # Process the results through common pipeline
-        self._process_pose_results(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy, header)
+        raise NotImplementedError('Stereo mode is not supported with the YOLO pipeline. Use rgbd mode.')
 
     def _process_pose_results(self, points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy, header):
         """
