@@ -117,12 +117,14 @@ class PosePipelineNode(Node):
         self.enable_tracking = self.get_parameter('enable_tracking').value
         self.depth_uncertainty = self.get_parameter('depth_uncertainty').value
         self.device = self.get_parameter('device').value
+        self.get_logger().info(f"Launching with Options: mode = {self.mode}, enable_odd = {self.enable_ood}, enable_tracking (YOLO only) = {self.enable_tracking}, depth_uncertainty (RGB-D only) = {self.depth_uncertainty}, device = {self.device}.")
 
         # Resolve paths relative to workspace root
         self.yolo_model_name = self.get_parameter('yolo_model').value
         self.motion_model_path = os.path.join(workspace_root, self.get_parameter('motion_model_path').value)
         self.camera_params_path = os.path.join(workspace_root, self.get_parameter('camera_params_path').value)
         self.motion_score_fn_path = os.path.join(workspace_root, self.get_parameter('motion_score_fn_path').value)
+        self.get_logger().info(f"Using models: Yolo = {self.yolo_model_name}, Motion Model = {self.motion_model_path}, Motion Score Fn = {self.motion_score_fn_path}.")
 
         # Initialize CV Bridge
         self.bridge = CvBridge()
@@ -260,8 +262,8 @@ class PosePipelineNode(Node):
         )
 
         # Create synchronized subscribers for compressed color and depth
-        self.color_sub = Subscriber(self, CompressedImage, color_topic, qos_profile=self.sensor_qos)
-        self.depth_sub = Subscriber(self, CompressedImage, depth_topic, qos_profile=self.sensor_qos)
+        self.color_sub = Subscriber(self, CompressedImage, color_topic, 10)  # , qos_profile=self.sensor_qos)
+        self.depth_sub = Subscriber(self, CompressedImage, depth_topic, 10)  # , qos_profile=self.sensor_qos)
 
         # Synchronize messages
         self.sync = ApproximateTimeSynchronizer(
@@ -290,9 +292,9 @@ class PosePipelineNode(Node):
         # )
 
         if Pose2D is not None and Pose3D is not None and MotionPrediction is not None:
-            self.pose_2d_publisher = self.create_publisher(Pose2D, pose_2d_topic, self.sensor_qos)
-            self.pose_publisher = self.create_publisher(Pose3D, pose_topic, self.sensor_qos)
-            self.motion_publisher = self.create_publisher(MotionPrediction, motion_topic, self.sensor_qos)
+            self.pose_2d_publisher = self.create_publisher(Pose2D, pose_2d_topic, 10)  # , self.sensor_qos)
+            self.pose_publisher = self.create_publisher(Pose3D, pose_topic, 10)  # , self.sensor_qos)
+            self.motion_publisher = self.create_publisher(MotionPrediction, motion_topic, 10)  # , self.sensor_qos)
         else:
             self.get_logger().error('Custom messages not available. Cannot create publishers.')
 

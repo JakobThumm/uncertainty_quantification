@@ -22,13 +22,13 @@ def generate_launch_description():
 
     enable_ood_arg = DeclareLaunchArgument(
         'enable_ood',
-        default_value='true',
+        default_value='false',
         description='Enable OOD detection'
     )
 
     enable_tracking_arg = DeclareLaunchArgument(
         'enable_tracking',
-        default_value='false',
+        default_value='true',
         description='Enable YOLO multi-object tracking'
     )
 
