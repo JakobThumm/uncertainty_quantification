@@ -14,12 +14,14 @@ import sys
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from cv_bridge import CvBridge
+import cv2
 import numpy as np
 import torch
 import jax.numpy as jnp
 import cloudpickle
+import zstandard
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 from ultralytics import YOLO
 
@@ -95,9 +97,9 @@ class PosePipelineNode(Node):
         self.declare_parameter('camera_2_info_topic', '/realsense/camera_2/color/camera_info')
 
         # Camera topics (RGB-D mode)
-        self.declare_parameter('rgbd_color_topic', '/realsense/camera_1/color/image_raw')
-        self.declare_parameter('rgbd_depth_topic', '/realsense/camera_1/aligned_depth_to_color/image_raw')
-        self.declare_parameter('rgbd_info_topic', '/realsense/camera_1/color/camera_info')
+        self.declare_parameter('rgbd_color_topic', 'rgbd_stream/rgb/compressed')
+        self.declare_parameter('rgbd_depth_topic', 'rgbd_stream/depth/compressed')
+        self.declare_parameter('rgbd_info_topic', '/camera/camera/color/camera_info')
 
         # Camera IDs for loading calibration
         self.declare_parameter('camera_1_id', '55011271')
@@ -239,14 +241,14 @@ class PosePipelineNode(Node):
         self.sync.registerCallback(self.stereo_callback)
 
     def _setup_rgbd_subscribers(self):
-        """Setup subscribers for RGB-D camera mode."""
+        """Setup subscribers for RGB-D camera mode (compressed topics)."""
         color_topic = self.get_parameter('rgbd_color_topic').value
         depth_topic = self.get_parameter('rgbd_depth_topic').value
         info_topic = self.get_parameter('rgbd_info_topic').value
 
         self.get_logger().info('Setting up RGB-D subscribers:')
-        self.get_logger().info(f'  Color: {color_topic}')
-        self.get_logger().info(f'  Depth: {depth_topic}')
+        self.get_logger().info(f'  Color (compressed): {color_topic}')
+        self.get_logger().info(f'  Depth (compressed): {depth_topic}')
         self.get_logger().info(f'  Camera Info: {info_topic}')
 
         # Subscribe to camera info to get intrinsics
@@ -257,9 +259,9 @@ class PosePipelineNode(Node):
             qos_profile=self.sensor_qos
         )
 
-        # Create synchronized subscribers for color and depth
-        self.color_sub = Subscriber(self, Image, color_topic, qos_profile=self.sensor_qos)
-        self.depth_sub = Subscriber(self, Image, depth_topic, qos_profile=self.sensor_qos)
+        # Create synchronized subscribers for compressed color and depth
+        self.color_sub = Subscriber(self, CompressedImage, color_topic, qos_profile=self.sensor_qos)
+        self.depth_sub = Subscriber(self, CompressedImage, depth_topic, qos_profile=self.sensor_qos)
 
         # Synchronize messages
         self.sync = ApproximateTimeSynchronizer(
@@ -328,7 +330,7 @@ class PosePipelineNode(Node):
             )
 
     def rgbd_callback(self, color_msg, depth_msg):
-        """Process synchronized RGB-D camera images."""
+        """Process synchronized compressed RGB-D images."""
         # Check if we have intrinsics
         if not self.intrinsics_received:
             self.get_logger().warn(
@@ -338,15 +340,29 @@ class PosePipelineNode(Node):
             return
 
         try:
-            # Convert ROS messages to images (RGB for YOLO, passthrough for depth)
-            color_img = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='rgb8')
-            # Depth is typically uint16 in millimeters
-            depth_img = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
+            # Decompress RGB: JPEG → BGR → RGB
+            np_arr = np.frombuffer(color_msg.data, np.uint8)
+            bgr_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if bgr_img is None:
+                self.get_logger().error('Failed to decode compressed RGB image', throttle_duration_sec=1.0)
+                return
+            color_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
 
-            # Process frames through RGB-D pipeline
-            frames = [color_img]
-            depth_frames = [depth_img]
-            self._process_frames_rgbd(frames, depth_frames, color_msg.header)
+            # Decompress depth: zstd uint16 or PNG fallback
+            if depth_msg.format.startswith('zstd_16UC1:'):
+                dims = depth_msg.format.split(':')[1]
+                h, w = map(int, dims.split('x'))
+                raw = zstandard.ZstdDecompressor().decompress(bytes(depth_msg.data))
+                depth_img = np.frombuffer(raw, dtype=np.uint16).reshape(h, w)
+            else:
+                np_arr = np.frombuffer(depth_msg.data, np.uint8)
+                depth_img = cv2.imdecode(np_arr, cv2.IMREAD_ANYDEPTH)
+
+            if depth_img is None:
+                self.get_logger().error('Failed to decode compressed depth image', throttle_duration_sec=1.0)
+                return
+
+            self._process_frames_rgbd([color_img], [depth_img], color_msg.header)
 
         except Exception as e:
             self.get_logger().error(f'Error in RGB-D callback: {e}', throttle_duration_sec=1.0)

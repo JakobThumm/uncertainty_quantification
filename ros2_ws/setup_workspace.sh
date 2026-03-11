@@ -9,6 +9,12 @@ echo "Setting up ROS2 workspace..."
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 ROS2_WS="${SCRIPT_DIR}"
 
+# Install ultralytics
+cd "${ROS2_WS}/../ultralytics"
+python -m pip install -e .
+cd "${ROS2_WS}/.."
+python -m pip install -e .
+
 echo "ROS2 workspace: ${ROS2_WS}"
 
 # Create src directory if it doesn't exist
@@ -33,7 +39,7 @@ fi
 # Build the workspace
 echo "Building workspace..."
 cd "${ROS2_WS}"
-colcon build
+colcon build --symlink-install
 
 echo ""
 echo "Workspace setup complete!"

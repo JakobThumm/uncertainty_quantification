@@ -54,10 +54,10 @@ def generate_launch_description():
             'motion_model_path': 'human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle',
             'motion_score_fn_path': 'human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle',
             'depth_uncertainty': 0.002,
-            # RGB-D camera topics
-            'rgbd_color_topic': '/realsense/camera_1/color/image_raw',
-            'rgbd_depth_topic': '/realsense/camera_1/aligned_depth_to_color/image_raw',
-            'rgbd_info_topic': '/realsense/camera_1/color/camera_info',
+            # RGB-D camera topics (compressed stream from realsense_rgbd_streamer)
+            'rgbd_color_topic': 'rgbd_stream/rgb/compressed',
+            'rgbd_depth_topic': 'rgbd_stream/depth/compressed',
+            'rgbd_info_topic': '/camera/camera/color/camera_info',
             # Output topics
             'pose_2d_output_topic': '/uq/pose_2d',
             'pose_output_topic': '/uq/pose_3d',

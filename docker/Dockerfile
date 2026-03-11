@@ -72,7 +72,7 @@ COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Copy CycloneDDS configuration
-COPY docker/cyclonedds.xml /tmp/cyclonedds.xml
+# COPY docker/cyclonedds.xml /tmp/cyclonedds.xml
 
 # Install additional Python dependencies that might be needed for JAX GPU support
 RUN apt-get update && apt-get install -y \
