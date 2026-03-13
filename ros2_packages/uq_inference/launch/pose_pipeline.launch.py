@@ -58,6 +58,9 @@ def generate_launch_description():
             'rgbd_color_topic': 'rgbd_stream/rgb/compressed',
             'rgbd_depth_topic': 'rgbd_stream/depth/compressed',
             'rgbd_info_topic': '/camera/camera/color/camera_info',
+            # TF frames for camera-to-world transform
+            'world_frame': 'world',
+            'camera_optical_frame': 'camera_depth_optical_frame',
             # Output topics
             'pose_2d_output_topic': '/uq/pose_2d',
             'pose_output_topic': '/uq/pose_3d',

@@ -13,6 +13,7 @@ import os
 import sys
 import rclpy
 from rclpy.node import Node
+import rclpy.duration
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from cv_bridge import CvBridge
@@ -22,6 +23,8 @@ import torch
 import jax.numpy as jnp
 import cloudpickle
 import zstandard
+import tf2_ros
+from scipy.spatial.transform import Rotation
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 from ultralytics import YOLO
 
@@ -101,6 +104,10 @@ class PosePipelineNode(Node):
         self.declare_parameter('rgbd_depth_topic', 'rgbd_stream/depth/compressed')
         self.declare_parameter('rgbd_info_topic', '/camera/camera/color/camera_info')
 
+        # TF frames for camera-to-world transform (RGB-D mode)
+        self.declare_parameter('world_frame', 'world')
+        self.declare_parameter('camera_optical_frame', 'camera_depth_optical_frame')
+
         # Camera IDs for loading calibration
         self.declare_parameter('camera_1_id', '55011271')
         self.declare_parameter('camera_2_id', '60457274')
@@ -125,6 +132,16 @@ class PosePipelineNode(Node):
         self.camera_params_path = os.path.join(workspace_root, self.get_parameter('camera_params_path').value)
         self.motion_score_fn_path = os.path.join(workspace_root, self.get_parameter('motion_score_fn_path').value)
         self.get_logger().info(f"Using models: Yolo = {self.yolo_model_name}, Motion Model = {self.motion_model_path}, Motion Score Fn = {self.motion_score_fn_path}.")
+
+        self.world_frame = self.get_parameter('world_frame').value
+        self.camera_optical_frame = self.get_parameter('camera_optical_frame').value
+
+        # TF2 buffer and listener for camera-to-world transform
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self.R_rect_to_world = None
+        self.t_rect_to_world = None
+        self.tf_transform_received = False
 
         # Initialize CV Bridge
         self.bridge = CvBridge()
@@ -331,6 +348,34 @@ class PosePipelineNode(Node):
                 f'cy={self.camera_intrinsics["cy"]:.2f}'
             )
 
+    def _lookup_camera_transform(self):
+        """Look up the stationary camera-to-world transform from TF2 (cached after first success)."""
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                self.world_frame,
+                self.camera_optical_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.1),
+            )
+            q = tf.transform.rotation
+            t = tf.transform.translation
+            self.R_rect_to_world = Rotation.from_quat(
+                [q.x, q.y, q.z, q.w]
+            ).as_matrix().astype(np.float32)
+            self.t_rect_to_world = np.array(
+                [t.x, t.y, t.z], dtype=np.float32
+            )
+            self.tf_transform_received = True
+            self.get_logger().info(
+                f'Camera transform {self.camera_optical_frame} → {self.world_frame}: '
+                f't=[{t.x:.3f}, {t.y:.3f}, {t.z:.3f}] m'
+            )
+        except tf2_ros.TransformException as e:
+            self.get_logger().warn(
+                f'TF lookup {self.camera_optical_frame} → {self.world_frame} failed: {e}',
+                throttle_duration_sec=2.0,
+            )
+
     def rgbd_callback(self, color_msg, depth_msg):
         """Process synchronized compressed RGB-D images."""
         # Check if we have intrinsics
@@ -340,6 +385,16 @@ class PosePipelineNode(Node):
                 throttle_duration_sec=2.0
             )
             return
+
+        # Lazily look up the stationary camera transform (cached after first success)
+        if not self.tf_transform_received:
+            self._lookup_camera_transform()
+            if not self.tf_transform_received:
+                self.get_logger().warn(
+                    'Waiting for camera TF transform...',
+                    throttle_duration_sec=2.0,
+                )
+                return
 
         try:
             # Decompress RGB: JPEG → BGR → RGB
@@ -393,6 +448,8 @@ class PosePipelineNode(Node):
                 verbose=False,
                 device=self.device,
                 depth_uncertainty=self.depth_uncertainty,
+                R_rect_to_world=self.R_rect_to_world,
+                t_rect_to_world=self.t_rect_to_world,
             )
 
         # Process the results through common pipeline
