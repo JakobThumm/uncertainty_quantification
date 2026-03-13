@@ -11,6 +11,7 @@ This node:
 
 import os
 import sys
+import time
 import rclpy
 from rclpy.node import Node
 import rclpy.duration
@@ -397,6 +398,8 @@ class PosePipelineNode(Node):
                 return
 
         try:
+            t_received = int(time.perf_counter() * 1000)
+
             # Decompress RGB: JPEG → BGR → RGB
             np_arr = np.frombuffer(color_msg.data, np.uint8)
             bgr_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -419,14 +422,14 @@ class PosePipelineNode(Node):
                 self.get_logger().error('Failed to decode compressed depth image', throttle_duration_sec=1.0)
                 return
 
-            self._process_frames_rgbd([color_img], [depth_img], color_msg.header)
+            self._process_frames_rgbd([color_img], [depth_img], color_msg.header, t_received)
 
         except Exception as e:
             self.get_logger().error(f'Error in RGB-D callback: {e}', throttle_duration_sec=1.0)
             import traceback
             self.get_logger().error(traceback.format_exc())
 
-    def _process_frames_rgbd(self, rgb_frames, depth_frames, header):
+    def _process_frames_rgbd(self, rgb_frames, depth_frames, header, t_received):
         """
         Process RGB-D frames through the full pipeline.
 
@@ -434,8 +437,10 @@ class PosePipelineNode(Node):
             rgb_frames: List of RGB images [img1] for RGB-D mode
             depth_frames: List of depth images [depth1] for RGB-D mode
             header: ROS message header for timestamp
+            t_received: Timestamp (ms) when the message was received
         """
         # Perform YOLO pose estimation and 3D depth lifting
+        t_pose_start = int(time.perf_counter() * 1000)
         points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy = \
             process_frame_3d_from_rgbd_yolo(
                 rgb_frames=rgb_frames,
@@ -451,9 +456,10 @@ class PosePipelineNode(Node):
                 R_rect_to_world=self.R_rect_to_world,
                 t_rect_to_world=self.t_rect_to_world,
             )
+        t_pose_done = int(time.perf_counter() * 1000)
 
         # Process the results through common pipeline
-        self._process_pose_results(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy, header)
+        self._process_pose_results(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy, header, t_received, t_pose_start, t_pose_done)
 
     def _process_frames(self, frames, header):
         """
@@ -465,7 +471,7 @@ class PosePipelineNode(Node):
         """
         raise NotImplementedError('Stereo mode is not supported with the YOLO pipeline. Use rgbd mode.')
 
-    def _process_pose_results(self, points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy, header):
+    def _process_pose_results(self, points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, keypoints_2d, uncertainties_2d, covariance_xy, header, t_received, t_pose_start, t_pose_done):
         """
         Common pipeline for processing pose estimation results.
 
@@ -479,6 +485,9 @@ class PosePipelineNode(Node):
             uncertainties_2d: 2D uncertainties (batched)
             covariance_xy: 2D covariance (batched)
             header: ROS message header for timestamp
+            t_received: Timestamp (ms) when the message was received
+            t_pose_start: Timestamp (ms) when 3D pose estimation started
+            t_pose_done: Timestamp (ms) when 3D pose estimation finished
         """
         # Unbatch, compute validity, update pose buffers
         self.points_3d_buffer, self.covariance_buffer, self.pose_valid_buffer, \
@@ -496,25 +505,34 @@ class PosePipelineNode(Node):
         pose_is_ood = bool(pose_is_ood)
         human_detected = bool(human_detected)
 
+        # Predict and publish motion first so its timing can be included in the pose message
+        t_motion_start, t_motion_done = self._predict_and_publish_motion(
+            pose_buffer_good, header, t_received, t_pose_start, t_pose_done
+        )
+
         # Publish 2D and 3D poses (using unbatched keypoints)
         self._publish_pose_2d(keypoints_2d[0], uncertainties_2d[0], covariance_xy[0], pose_ood_score, pose_is_ood, human_detected, header)
-        self._publish_pose(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header)
-
-        # Predict and publish motion if enough poses are in buffer
-        self._predict_and_publish_motion(pose_buffer_good, header)
+        self._publish_pose(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header, t_received, t_pose_start, t_pose_done, t_motion_start, t_motion_done)
 
         self.frame_counter += 1
         self.frames_processed += 1
 
-    def _predict_and_publish_motion(self, pose_buffer_good, header):
+    def _predict_and_publish_motion(self, pose_buffer_good, header, t_received, t_pose_start, t_pose_done):
         """
         Predict motion and publish results if buffer has enough poses.
 
         Args:
             pose_buffer_good: Boolean indicating if pose buffer is ready
             header: ROS message header for timestamp
+            t_received: Timestamp (ms) when the message was received
+            t_pose_start: Timestamp (ms) when 3D pose estimation started
+            t_pose_done: Timestamp (ms) when 3D pose estimation finished
+
+        Returns:
+            (t_motion_start, t_motion_done): motion timing in ms, both 0 if not run
         """
         if self.frame_counter >= INPUT_HORIZON_LENGTH - 1 and pose_buffer_good:
+            t_motion_start = int(time.perf_counter() * 1000)
             self.motion_prediction_buffer, self.motion_uncertainty_buffer, motion_set_radius, \
                 motion_ood_score, motion_is_ood, valid_motion, _, _, _ = run_motion_prediction(
                     points_3d_buffer=self.points_3d_buffer,
@@ -536,6 +554,7 @@ class PosePipelineNode(Node):
                     n_correct_poses_required=N_CORRECT_POSES_REQUIRED,
                     set_likelihood=SET_LIKELIHOOD,
                 )
+            t_motion_done = int(time.perf_counter() * 1000)
 
             # Publish motion prediction
             self._publish_motion(
@@ -545,8 +564,16 @@ class PosePipelineNode(Node):
                 motion_ood_score,
                 motion_is_ood,
                 valid_motion,
-                header
+                header,
+                t_received,
+                t_pose_start,
+                t_pose_done,
+                t_motion_start,
+                t_motion_done,
             )
+            return t_motion_start, t_motion_done
+
+        return 0, 0
 
     def _publish_pose_2d(self, keypoints_2d, uncertainties_2d, covariance_xy, ood_score, is_ood, human_detected, header):
         """Publish 2D pose with uncertainty."""
@@ -584,7 +611,7 @@ class PosePipelineNode(Node):
         if len(self.latencies) > 1000:
             self.latencies.pop(0)
 
-    def _publish_pose(self, points_3d, covariance_3d, ood_score, is_ood, human_detected, header):
+    def _publish_pose(self, points_3d, covariance_3d, ood_score, is_ood, human_detected, header, t_received, t_pose_start, t_pose_done, t_motion_start, t_motion_done):
         """Publish 3D pose with uncertainty."""
         if Pose3D is None:
             return
@@ -604,16 +631,22 @@ class PosePipelineNode(Node):
         msg.ood_score = float(ood_score)
         msg.human_detected = human_detected
 
+        msg.t_received_ms = t_received
+        msg.t_pose_start_ms = t_pose_start
+        msg.t_pose_done_ms = t_pose_done
+        msg.t_motion_start_ms = t_motion_start
+        msg.t_motion_done_ms = t_motion_done
+        msg.t_sent_ms = int(time.perf_counter() * 1000)
+
         self.pose_publisher.publish(msg)
 
-    def _publish_motion(self, motion_buffer, uncertainty_buffer, set_radius, ood_score, is_ood, is_valid, header):
+    def _publish_motion(self, motion_buffer, uncertainty_buffer, set_radius, ood_score, is_ood, is_valid, header, t_received, t_pose_start, t_pose_done, t_motion_start, t_motion_done):
         """Publish motion prediction with uncertainty."""
         if MotionPrediction is None:
             return
 
         msg = MotionPrediction()
         msg.header = header
-        msg.header.frame_id = 'world'
 
         # Convert to numpy and flatten
         motion_np = np.array(motion_buffer).flatten().tolist()
@@ -628,6 +661,14 @@ class PosePipelineNode(Node):
         msg.is_ood = is_ood
         msg.ood_score = float(ood_score) if isinstance(ood_score, (int, float)) else float(ood_score[0])
         msg.is_valid = is_valid
+        msg.header.frame_id = 'world'
+
+        msg.t_received_ms = t_received
+        msg.t_pose_start_ms = t_pose_start
+        msg.t_pose_done_ms = t_pose_done
+        msg.t_motion_start_ms = t_motion_start
+        msg.t_motion_done_ms = t_motion_done
+        msg.t_sent_ms = int(time.perf_counter() * 1000)
 
         self.motion_publisher.publish(msg)
 
