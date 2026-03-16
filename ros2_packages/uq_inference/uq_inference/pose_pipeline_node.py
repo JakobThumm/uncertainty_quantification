@@ -147,12 +147,24 @@ class PosePipelineNode(Node):
         # Initialize CV Bridge
         self.bridge = CvBridge()
 
-        # Create SensorDataQoS profile with depth 1
+        # QoS profiles
         self.sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
-            durability=DurabilityPolicy.VOLATILE
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.reliable_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=25,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.best_effort_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=25,
+            durability=DurabilityPolicy.VOLATILE,
         )
 
         # Initialize models
@@ -280,8 +292,8 @@ class PosePipelineNode(Node):
         )
 
         # Create synchronized subscribers for compressed color and depth
-        self.color_sub = Subscriber(self, CompressedImage, color_topic, 10)  # , qos_profile=self.sensor_qos)
-        self.depth_sub = Subscriber(self, CompressedImage, depth_topic, 10)  # , qos_profile=self.sensor_qos)
+        self.color_sub = Subscriber(self, CompressedImage, color_topic, qos_profile=self.reliable_qos)
+        self.depth_sub = Subscriber(self, CompressedImage, depth_topic, qos_profile=self.reliable_qos)
 
         # Synchronize messages
         self.sync = ApproximateTimeSynchronizer(
@@ -302,17 +314,10 @@ class PosePipelineNode(Node):
         self.get_logger().info(f'  Pose 3D: {pose_topic}')
         self.get_logger().info(f'  Motion: {motion_topic}')
 
-        # Reliable QoS for output topics
-        # reliable_qos = QoSProfile(
-        #     reliability=ReliabilityPolicy.RELIABLE,
-        #     history=HistoryPolicy.KEEP_LAST,
-        #     depth=10
-        # )
-
         if Pose2D is not None and Pose3D is not None and MotionPrediction is not None:
-            self.pose_2d_publisher = self.create_publisher(Pose2D, pose_2d_topic, 10)  # , self.sensor_qos)
-            self.pose_publisher = self.create_publisher(Pose3D, pose_topic, 10)  # , self.sensor_qos)
-            self.motion_publisher = self.create_publisher(MotionPrediction, motion_topic, 10)  # , self.sensor_qos)
+            self.pose_2d_publisher = self.create_publisher(Pose2D, pose_2d_topic, self.best_effort_qos)
+            self.pose_publisher = self.create_publisher(Pose3D, pose_topic, self.best_effort_qos)
+            self.motion_publisher = self.create_publisher(MotionPrediction, motion_topic, self.best_effort_qos)
         else:
             self.get_logger().error('Custom messages not available. Cannot create publishers.')
 

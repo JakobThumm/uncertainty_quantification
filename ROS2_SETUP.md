@@ -54,6 +54,7 @@ Inside the container:
 ```bash
 cd /workspace/ros2_ws
 bash setup_workspace.sh
+source /workspace/ros2_ws/install/setup.bash
 ```
 
 The workspace will be automatically sourced in new shells.
