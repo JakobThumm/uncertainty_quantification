@@ -38,6 +38,12 @@ def generate_launch_description():
         description='Device: cuda or cpu'
     )
 
+    stream_reliable_arg = DeclareLaunchArgument(
+        'stream_reliable',
+        default_value='true',
+        description='QoS reliability for /rgbd_stream subscriptions: true=Reliable, false=Best Effort'
+    )
+
     # Create the node
     pose_pipeline_node = Node(
         package='uq_inference',
@@ -54,6 +60,7 @@ def generate_launch_description():
             'motion_model_path': 'human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle',
             'motion_score_fn_path': 'human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle',
             'depth_uncertainty': 0.002,
+            'stream_reliable': LaunchConfiguration('stream_reliable'),
             # RGB-D camera topics (compressed stream from realsense_rgbd_streamer)
             'rgbd_color_topic': 'rgbd_stream/rgb/compressed',
             'rgbd_depth_topic': 'rgbd_stream/depth/compressed',
@@ -73,5 +80,6 @@ def generate_launch_description():
         enable_ood_arg,
         enable_tracking_arg,
         device_arg,
+        stream_reliable_arg,
         pose_pipeline_node
     ])

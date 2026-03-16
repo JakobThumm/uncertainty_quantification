@@ -93,6 +93,7 @@ class PosePipelineNode(Node):
         self.declare_parameter('depth_uncertainty', 0.002)
         self.declare_parameter('motion_score_fn_path', 'human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle')
         self.declare_parameter('device', 'cuda')
+        self.declare_parameter('stream_reliable', True)  # QoS for /rgbd_stream subscriptions
 
         # Camera topics (stereo mode)
         self.declare_parameter('camera_1_color_topic', '/realsense/camera_1/color/image_raw')
@@ -165,6 +166,11 @@ class PosePipelineNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=25,
             durability=DurabilityPolicy.VOLATILE,
+        )
+        stream_reliable = self.get_parameter('stream_reliable').value
+        self.stream_qos = self.reliable_qos if stream_reliable else self.best_effort_qos
+        self.get_logger().info(
+            f'Stream QoS: {"Reliable" if stream_reliable else "Best Effort"} (keep_last=25)'
         )
 
         # Initialize models
@@ -292,8 +298,8 @@ class PosePipelineNode(Node):
         )
 
         # Create synchronized subscribers for compressed color and depth
-        self.color_sub = Subscriber(self, CompressedImage, color_topic, qos_profile=self.reliable_qos)
-        self.depth_sub = Subscriber(self, CompressedImage, depth_topic, qos_profile=self.reliable_qos)
+        self.color_sub = Subscriber(self, CompressedImage, color_topic, qos_profile=self.stream_qos)
+        self.depth_sub = Subscriber(self, CompressedImage, depth_topic, qos_profile=self.stream_qos)
 
         # Synchronize messages
         self.sync = ApproximateTimeSynchronizer(
