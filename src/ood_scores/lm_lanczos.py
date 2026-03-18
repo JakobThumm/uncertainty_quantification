@@ -331,7 +331,7 @@ def _get_or_compute_eigenpairs(ggn_vector_product, sketch_op, args_dict, n_param
     # Orthogonalize and select the first (good) 'n_eigenvec' vectors
     start = time.time()
     print("Doing PCA...")
-    U, S, _ = np.linalg.svd(eigenvec @ jnp.diag(eigenval), full_matrices=False)
+    U, S, _ = jnp.linalg.svd(eigenvec @ jnp.diag(eigenval), full_matrices=False)
     if args_dict['n_eigenvec_lm'] < len(S):
         threshold = sorted(S, reverse=True)[args_dict['n_eigenvec_lm']]
         eigenvec = U[:, S > threshold]

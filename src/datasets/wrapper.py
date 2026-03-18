@@ -223,6 +223,15 @@ def dataloader_from_string(
             seed=seed,
             n_samples=n_samples,
         )
+    elif dataset_name == "Human36mMotionReducedOutputDataset3DAugmented":
+        train_loader, valid_loader, test_loader = get_h36m_motion_reduced_output_dataset(
+            base_directory=os.path.join(data_path, "H36M", "extracted"),
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            n_samples=n_samples,
+            augment=True,
+        )
     elif dataset_name == "Human36mMotionOODDataset3D":
         train_loader, valid_loader, test_loader = get_h36m_motion_ood_dataset(
             base_directory=os.path.join(data_path, "H36M", "extracted"),

@@ -40,6 +40,7 @@ parser.add_argument(
         "H36M",
         "Human36mMotionDataset3D",
         "Human36mMotionReducedOutputDataset3D",
+        "Human36mMotionReducedOutputDataset3DAugmented",
         "UCI",
         "MNIST",
         "FMNIST",

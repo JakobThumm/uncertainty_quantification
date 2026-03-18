@@ -2130,3 +2130,166 @@ Per-Joint Volume [m^3]:
     Joint 11: 0.5025
     Joint 12: 0.5025
 ```
+
+### With OOD Detection Enabled
+OOD Threshold = 600.000
+
+```
+  Overall coverage within 2 std:
+    Frame 0: 98.88%
+    Frame 1: 98.40%
+    Frame 2: 98.09%
+    Frame 3: 97.96%
+    Frame 4: 97.96%
+    Frame 5: 98.03%
+    Frame 6: 98.16%
+    Frame 7: 98.25%
+    Frame 8: 98.40%
+    Frame 9: 98.56%
+
+  Overall coverage within 3 std:
+    Frame 0: 99.45%
+    Frame 1: 99.22%
+    Frame 2: 99.12%
+    Frame 3: 99.09%
+    Frame 4: 99.17%
+    Frame 5: 99.24%
+    Frame 6: 99.35%
+    Frame 7: 99.42%
+    Frame 8: 99.53%
+    Frame 9: 99.61%
+
+  Overall coverage within 4 std:
+    Frame 0: 99.66%
+    Frame 1: 99.56%
+    Frame 2: 99.51%
+    Frame 3: 99.53%
+    Frame 4: 99.61%
+    Frame 5: 99.67%
+    Frame 6: 99.72%
+    Frame 7: 99.78%
+    Frame 8: 99.81%
+    Frame 9: 99.84%
+
+Per-Joint Coverage Stats:
+
+  Overall coverage within 1 std:
+    Joint 0: 95.06%
+    Joint 1: 93.74%
+    Joint 2: 96.30%
+    Joint 3: 92.86%
+    Joint 4: 94.79%
+    Joint 5: 91.25%
+    Joint 6: 94.72%
+    Joint 7: 95.85%
+    Joint 8: 95.52%
+    Joint 9: 93.29%
+    Joint 10: 93.93%
+    Joint 11: 92.16%
+    Joint 12: 94.49%
+
+  Overall coverage within 2 std:
+    Joint 0: 98.25%
+    Joint 1: 98.03%
+    Joint 2: 98.75%
+    Joint 3: 97.92%
+    Joint 4: 98.33%
+    Joint 5: 96.73%
+    Joint 6: 98.30%
+    Joint 7: 98.76%
+    Joint 8: 98.89%
+    Joint 9: 98.59%
+    Joint 10: 98.86%
+    Joint 11: 97.67%
+    Joint 12: 98.42%
+
+  Overall coverage within 3 std:
+    Joint 0: 99.17%
+    Joint 1: 99.18%
+    Joint 2: 99.47%
+    Joint 3: 99.19%
+    Joint 4: 99.24%
+    Joint 5: 98.50%
+    Joint 6: 99.15%
+    Joint 7: 99.50%
+    Joint 8: 99.64%
+    Joint 9: 99.69%
+    Joint 10: 99.76%
+    Joint 11: 99.20%
+    Joint 12: 99.45%
+
+  Overall coverage within 4 std:
+    Joint 0: 99.56%
+    Joint 1: 99.53%
+    Joint 2: 99.75%
+    Joint 3: 99.60%
+    Joint 4: 99.57%
+    Joint 5: 99.24%
+    Joint 6: 99.53%
+    Joint 7: 99.82%
+    Joint 8: 99.82%
+    Joint 9: 99.93%
+    Joint 10: 99.95%
+    Joint 11: 99.66%
+    Joint 12: 99.73%
+Saved overall coverage results to results/motion_prediction/coverage_results_test.csv
+Saved per-time coverage results to results/motion_prediction/per_time_coverage_results_test.csv
+Saved per-joint coverage results to results/motion_prediction/per_joint_coverage_results_test.csv
+Predicted spherical reachable set coverage stats for 0.99 likelihood:
+Overall coverage within set: 86.33%
+Mean volume = 0.1182 m^3
+
+Per-Time Coverage Stats:
+    Frame 0: 92.18%
+    Frame 1: 91.31%
+    Frame 2: 90.50%
+    Frame 3: 89.62%
+    Frame 4: 88.63%
+    Frame 5: 87.50%
+    Frame 6: 85.93%
+    Frame 7: 83.72%
+    Frame 8: 80.60%
+    Frame 9: 73.27%
+
+Per-Time Volume [m^3]:
+    Frame 0: 0.0468
+    Frame 1: 0.0574
+    Frame 2: 0.0719
+    Frame 3: 0.0908
+    Frame 4: 0.1134
+    Frame 5: 0.1401
+    Frame 6: 0.1674
+    Frame 7: 0.1921
+    Frame 8: 0.2096
+    Frame 9: 0.1869
+
+Per-Joint Coverage Stats:
+    Joint 0: 86.27%
+    Joint 1: 86.34%
+    Joint 2: 86.48%
+    Joint 3: 86.21%
+    Joint 4: 86.41%
+    Joint 5: 85.63%
+    Joint 6: 86.27%
+    Joint 7: 86.49%
+    Joint 8: 86.60%
+    Joint 9: 86.54%
+    Joint 10: 86.67%
+    Joint 11: 86.03%
+    Joint 12: 86.34%
+
+Per-Joint Volume [m^3]:
+    Joint 0: 0.0729
+    Joint 1: 0.0706
+    Joint 2: 0.0704
+    Joint 3: 0.1815
+    Joint 4: 0.1716
+    Joint 5: 0.5892
+    Joint 6: 0.5555
+    Joint 7: 0.0570
+    Joint 8: 0.0543
+    Joint 9: 0.0543
+    Joint 10: 0.0475
+    Joint 11: 0.0825
+    Joint 12: 0.0713
+```

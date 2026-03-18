@@ -18,6 +18,7 @@ import cloudpickle
 import jax.numpy as jnp
 
 from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
+from human_pose_pipeline.utils.visualization import plot_ood_score_histogram
 from human_pose_pipeline.utils.eval_utils import (
     compute_sara_predictions,
     convert_covariance_matrices_to_set,
@@ -86,7 +87,7 @@ def main():
     parser.add_argument('--camera_ids', type=str, nargs=2, default=['55011271', '60457274'], help='Camera IDs')
     parser.add_argument('--max_sequences', type=int, default=10000000000, help='Maximum number of sequences to process')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection')
-    parser.add_argument('--output_dir', type=str, default='results/pose_3d', help='Output directory for results')
+    parser.add_argument('--output_dir', type=str, default='results/eval_full_pipeline', help='Output directory for results')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use (cuda or cpu)')
 
     args = parser.parse_args()
@@ -368,6 +369,29 @@ def main():
     motions_is_valid = np.array(motions_is_valid)
     pose_buffers_good = np.array(pose_buffers_good)
 
+    # Save raw results to pickle for further analysis
+    os.makedirs(args.output_dir, exist_ok=True)
+    results_pickle_file = os.path.join(args.output_dir, "full_pipeline_results.cloudpickle")
+    full_pipeline_results = {
+        'poses_3d_estimated': poses_3d_estimated_np,
+        'poses_3d_cov_estimated': poses_3d_cov_estimated_np,
+        'poses_3d_gt': poses_3d_gt_np,
+        'poses_3d_ood_scores': poses_3d_ood_scores_np,
+        'poses_3d_is_ood': poses_3d_is_ood,
+        'poses_3d_human_detected': poses_3d_human_detected,
+        'motions_predicted': motions_predicted_np,
+        'motions_set_radius': motions_set_radius_np,
+        'motions_cov_predicted': motions_cov_predicted_np,
+        'motions_gt': motions_gt_np,
+        'motions_ood_scores': motions_ood_scores,
+        'motions_is_ood': motions_is_ood,
+        'motions_is_valid': motions_is_valid,
+        'pose_buffers_good': pose_buffers_good,
+    }
+    with open(results_pickle_file, 'wb') as f:
+        cloudpickle.dump(full_pipeline_results, f)
+    print(f"Saved full pipeline results to {results_pickle_file}")
+
     # Evaluate 3D pose estimation MPJPE and coverage
     print("================================")
     print("Evaluating 3D pose estimation.")
@@ -441,8 +465,23 @@ def main():
     print("SARA simple velocity model coverage stats:")
     print_simple_coverage_stats_sara(coverage_stats_sara)
 
-    # Print OOD statistics if enabled
-    # TODO
+    # Save OOD score histograms
+    if args.enable_ood:
+        os.makedirs(args.output_dir, exist_ok=True)
+        plot_ood_score_histogram(
+            scores=poses_3d_ood_scores_np,
+            threshold=POSE_OOD_THRESHOLD,
+            title='2D Pose Prediction OOD Score Distribution',
+            xlabel='OOD Score',
+            save_path=os.path.join(args.output_dir, 'ood_histogram_pose_prediction.png'),
+        )
+        plot_ood_score_histogram(
+            scores=motions_ood_scores,
+            threshold=MOTION_OOD_THRESHOLD,
+            title='Motion Prediction OOD Score Distribution',
+            xlabel='OOD Score',
+            save_path=os.path.join(args.output_dir, 'ood_histogram_motion_prediction.png'),
+        )
 
 
 if __name__ == "__main__":

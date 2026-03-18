@@ -486,7 +486,9 @@ def get_h36m_motion_reduced_output_dataset(
     shuffle=False,
     seed=0,
     split_train_val_ratio=0.9,
-    n_samples=None
+    n_samples=None,
+    augment=False,
+    scale_range=(0.8, 1.2),
 ):
     """
     Get data loaders for preprocessed H36M dataset
@@ -499,6 +501,8 @@ def get_h36m_motion_reduced_output_dataset(
         split_train_val_ratio: Ratio for splitting train set into train/val
         return_metadata: Whether to return metadata with samples
         n_samples: Number of samples to use from dataset (None = use all)
+        augment: Whether to apply Z-rotation and scale augmentation to the train split
+        scale_range: (min, max) scale factor range for augmentation
 
     Returns:
         tuple: (train_loader, valid_loader, test_loader)
@@ -509,7 +513,9 @@ def get_h36m_motion_reduced_output_dataset(
         shuffle=shuffle,
         seed=seed,
         n_samples=n_samples,
-        reduce_size=True
+        reduce_size=True,
+        augment=augment,
+        scale_range=scale_range,
     )
 
 
@@ -522,7 +528,7 @@ def get_h36m_motion_ood_dataset(
     n_samples=None
 ):
     """Get data loaders for the H36M motion prediction OOD dataset.
-    
+
     This dataset shuffles the input sequences to create out-of-distribution samples.
 
     Args:
@@ -557,7 +563,7 @@ def get_h36m_motion_ood_dataset_with_uncertainty(
     n_samples=None
 ):
     """Get data loaders for the H36M motion prediction OOD dataset.
-    
+
     This dataset shuffles the input sequences to create out-of-distribution samples.
 
     Args:

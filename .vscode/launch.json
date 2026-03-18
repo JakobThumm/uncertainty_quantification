@@ -443,11 +443,11 @@
         "--pose_run_name", "jax_resnet50_regressflow",  // "jax_resnet50_regressflow", finetuned_h36m_regressflow_with_unc
         "--pose_base_key", "H36M_RegressFlowResNet18_3Joints_n9000_4998731f",
         "--motion_model_save_path", "human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle",
-        "--motion_score_fn_path", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle",
+        "--motion_score_fn_path", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM720of800_sketch_srft_seed0_size10000.cloudpickle",
         "--split", "validation",
         "--action", "Directions",
         "--max_sequences", "1",
-        //"--enable_ood"
+        "--enable_ood"
       ]
     },
     {
@@ -457,11 +457,37 @@
       "program": "human_pose_pipeline/examples/eval_full_pipeline_rgbd_yolo.py",
       "console": "integratedTerminal",
       "args": [
-        // "--enable_ood",
+        "--motion_model_save_path", "human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle",
+        "--enable_ood",
+        "--motion_score_fn_path", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM720of800_sketch_srft_seed0_size10000.cloudpickle",
         "--enable_tracking",
         "--depth_uncertainty", "0.05",
         "--start_at", "1656",
-        // "--max_frames", "2000"
+        "--max_frames", "2000"
+      ]
+    },
+        {
+      "name": "Debug Visualize Motion Prediction (Full Pipeline)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/debug_visualize_motion_prediction.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--pickle_file", "results/eval_full_pipeline/full_pipeline_results.cloudpickle",
+        "--idx", "300",
+        "--output_path", "results/eval_full_pipeline/debug_viz/motion_viz_300.mp4"
+      ]
+    },
+    {
+      "name": "Debug Visualize Motion Prediction (RGB-D YOLO)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "human_pose_pipeline/examples/debug_visualize_motion_prediction.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--pickle_file", "results/eval_full_pipeline_rgbd_yolo/full_pipeline_results.cloudpickle",
+        "--idx", "35",
+        "--output_path", "results/eval_full_pipeline_rgbd_yolo/debug_viz/motion_viz_35.mp4"
       ]
     },
     {
@@ -493,7 +519,7 @@
       "program": "score_model.py",
       "console": "integratedTerminal",
       "args": [
-          "--ID_dataset", "Human36mMotionReducedOutputDataset3D",
+          "--ID_dataset", "Human36mMotionReducedOutputDataset3DAugmented",
           "--OOD_dataset", "Human36mMotionReducedOutputOODDataset3D",
           "--data_path", "datasets/",
           "--model_save_path", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/",
@@ -525,7 +551,7 @@
       "program": "human_pose_pipeline/examples/id_vs_ood_motion_prediction.py",
       "console": "integratedTerminal",
       "args": [
-        "--score_fn", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle",
+        "--score_fn", "human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM720of800_sketch_srft_seed0_size10000.cloudpickle",
         "--max_samples", "4000",
         "--results_dir", "results/motion_prediction_ood"
       ]
@@ -537,7 +563,7 @@
       "program": "human_pose_pipeline/examples/plot_ood_scores_motion_prediction.py",
       "console": "integratedTerminal",
       "args": [
-        "--scores_file", "results/motion_prediction_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000_ood_scores.cloudpickle",
+        "--scores_file", "results/motion_prediction_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM720of800_sketch_srft_seed0_size10000.cloudpickle",
         "--plot_type", "histogram",
         "--bins", "50",
         "--save_path", "results/motion_ood_histogram.png"
@@ -550,7 +576,7 @@
       "program": "human_pose_pipeline/examples/plot_ood_scores_motion_prediction.py",
       "console": "integratedTerminal",
       "args": [
-        "--scores_file", "results/motion_prediction_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000_ood_scores.cloudpickle",
+        "--scores_file", "results/motion_prediction_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM720of800_sketch_srft_seed0_size10000.cloudpickle",
         "--plot_type", "comprehensive",
         "--save_path", "results/motion_ood_comprehensive.png"
       ]

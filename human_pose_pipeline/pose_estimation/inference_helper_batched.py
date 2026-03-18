@@ -35,6 +35,7 @@ from human_pose_pipeline.pose_estimation.triangulation_helper import (
 
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     JOINT_IDX_13_MODEL,
+    CONNECTIONS_13,
     YOLO_IMAGE_SIZE,
     YOLO_CONFIDENCE_THRESHOLD,
     OOD_THRESHOLD,
@@ -601,7 +602,7 @@ def set_depth_uncertainty_to_constant(
 
 def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device='cpu',
                              depth_outlier_threshold=0.8, search_radius=10,
-                             border_clip=30):
+                             border_clip=30, imputed_valid_depth=False):
     """
     Lift 2D keypoints to 3D using depth information (fully vectorized).
 
@@ -618,6 +619,9 @@ def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device=
         depth_outlier_threshold: Max deviation from per-frame median depth (meters)
         search_radius: Pixel radius to search around each joint for valid depth
         border_clip: Pixel to remove from the border due to missing depth data at the edge.
+        imputed_valid_depth: If the depth of a joint differs from the median depth of the skeleton by more 
+          than depth_outlier_threshold, it is imputed, i.e., replaced by the mean of its neighbors in the skeleton.
+          imputed_valid_depth defines if imputed joints are counted as valid depth or not.
 
     Returns:
         points_3d: 3D joint positions [B, N_joints, 3] in meters
@@ -667,29 +671,11 @@ def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device=
     # Gather depth at all patch positions [B, N_joints, P]
     B_exp = torch.arange(B, device=device).view(B, 1, 1).expand(B, N_joints, P)
     depth_patch = depth_map[B_exp, v_patch, u_patch].float()
-
-    # Step 1: Find the pixel with the minimum valid depth → update (u, v) only when
-    # the original position has zero depth (edge of object).
-    batch_indices = torch.arange(B, device=device).unsqueeze(1).expand(B, N_joints)
-    Z_orig = depth_map[batch_indices, v_clamped, u_clamped].float()
-
-    # Cross-joint outlier rejection: discard joints whose depth deviates too much
-    # from the per-frame median across all joints.
-    Z_for_global = Z_orig.masked_fill(Z_orig <= 0, float('nan'))
-    Z_global_median = torch.nanmedian(Z_for_global, dim=1).values  # [B]
-    median_diff = torch.abs(Z_orig - Z_global_median.unsqueeze(1))       # [B, N_joints]
-    needs_snap = (Z_orig <= 0) | (median_diff > depth_outlier_threshold)
-
-    depth_for_argmin = depth_patch.masked_fill(depth_patch <= 0, float('inf'))
-    min_idx = depth_for_argmin.argmin(dim=-1)  # [B, N_joints]
-
-    u_snapped = torch.gather(u_patch, dim=-1, index=min_idx.unsqueeze(-1)).squeeze(-1)
-    v_snapped = torch.gather(v_patch, dim=-1, index=min_idx.unsqueeze(-1)).squeeze(-1)
-
-    u_final = torch.where(needs_snap, u_snapped, u_clamped)
-    v_final = torch.where(needs_snap, v_snapped, v_clamped)
-
-    Z = depth_map[batch_indices, v_final, u_final].float()
+    depth_patch_clean = depth_patch.masked_fill(depth_patch <= 0, float('nan'))
+    Z_median = torch.nanmedian(depth_patch_clean, dim=-1).values
+    Z = Z_median
+    u_final = u_clamped
+    v_final = v_clamped
 
     # Cross-joint outlier rejection: discard joints whose depth deviates too much
     # from the per-frame median across all joints.
@@ -697,6 +683,31 @@ def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device=
     Z_global_median = torch.nanmedian(Z_for_global, dim=1).values  # [B]
     median_diff = torch.abs(Z - Z_global_median.unsqueeze(1))       # [B, N_joints]
     valid_depth_values = (Z > 0) & (median_diff <= depth_outlier_threshold)
+
+    # Neighbor imputation: replace invalid Z with the mean depth of valid neighboring joints.
+    adj = torch.zeros(N_joints, N_joints, dtype=torch.bool, device=device)
+    for (a, b) in CONNECTIONS_13:
+        if a < N_joints and b < N_joints:
+            adj[a, b] = True
+            adj[b, a] = True
+    # [B, N_joints, N_joints]: Z values broadcast over neighbor dimension
+    Z_exp = Z.unsqueeze(1).expand(B, N_joints, N_joints)
+    valid_exp = valid_depth_values.unsqueeze(1).expand(B, N_joints, N_joints)
+    adj_exp = adj.unsqueeze(0).expand(B, N_joints, N_joints)
+    neighbor_valid = adj_exp & valid_exp                          # [B, N_joints, N_joints]
+    n_valid_neighbors = neighbor_valid.float().sum(dim=-1)       # [B, N_joints]
+    Z_neighbor_sum = (Z_exp * neighbor_valid.float()).sum(dim=-1)  # [B, N_joints]
+    Z_neighbor_mean = torch.where(
+        n_valid_neighbors > 0,
+        Z_neighbor_sum / n_valid_neighbors.clamp(min=1),
+        Z
+    )
+    imputed = (~valid_depth_values) & (n_valid_neighbors > 0)
+    Z = torch.where(imputed, Z_neighbor_mean, Z)
+
+    # Allow imputed values to be valid depth values.
+    if imputed_valid_depth:
+        valid_depth_values = valid_depth_values | imputed
 
     # Back-projection: use updated (u_final, v_final) for X/Y, median depth for Z
     X = (u_final - cx) * Z / fx
@@ -707,9 +718,6 @@ def lift_2d_to_3d_with_depth(keypoints_2d, depth_map, camera_intrinsics, device=
 
     # Combine validity checks [B, N_joints]
     valid_depth = valid_bounds & valid_depth_values
-
-    # Zero out invalid points
-    points_3d = points_3d * valid_depth.unsqueeze(-1).float()
 
     return points_3d, valid_depth
 
@@ -1642,9 +1650,6 @@ def process_frame_3d_from_rgbd_yolo(
     human_detected_expanded = human_detected.unsqueeze(1)
     combined_valid = valid_depth & human_detected_expanded
 
-    points_3d = points_3d * combined_valid.unsqueeze(-1).float()
-    C_3d_all = C_3d_all * combined_valid.unsqueeze(-1).unsqueeze(-1).float()
-
     # Prepare outputs
     ood_score = torch.zeros(keypoints_2d.shape[0], device=device)
     is_ood = torch.zeros(keypoints_2d.shape[0], dtype=torch.bool, device=device)
@@ -1681,14 +1686,13 @@ def process_frame_3d_from_rgbd_yolo(
 def process_pose_output(
     points_3d: torch.Tensor,
     C_3d_all: torch.Tensor,
-    pose_is_ood,
-    human_detected,
+    is_valid: bool,
     points_3d_buffer: jnp.ndarray,
     covariance_buffer: jnp.ndarray,
     pose_valid_buffer: jnp.ndarray,
     motion_prediction_buffer: jnp.ndarray,
     motion_uncertainty_buffer: jnp.ndarray,
-) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, torch.Tensor, torch.Tensor, bool, bool]:
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, bool]:
     """Process batched pose estimation output: unbatch, determine validity, update pose buffers.
 
     Args:
@@ -1706,16 +1710,10 @@ def process_pose_output(
         - Updated points_3d_buffer [T, J, 3]
         - Updated covariance_buffer [T, J, 3, 3]
         - Updated pose_valid_buffer [T]
-        - points_3d unbatched [J, 3] (torch.Tensor)
-        - C_3d_all unbatched [J, 3, 3] (torch.Tensor)
-        - is_valid: bool
         - pose_buffer_good: bool
     """
     points_3d = points_3d[0]
     C_3d_all = C_3d_all[0]
-    pose_is_ood = bool(pose_is_ood)
-    human_detected = bool(human_detected)
-    is_valid = (not pose_is_ood) and human_detected
 
     points_3d_buffer, covariance_buffer, pose_valid_buffer, pose_buffer_good = fill_pose_buffer(
         points_3d_buffer=points_3d_buffer,
@@ -1727,4 +1725,4 @@ def process_pose_output(
         motion_prediction_buffer=motion_prediction_buffer,
         motion_uncertainty_buffer=motion_uncertainty_buffer,
     )
-    return points_3d_buffer, covariance_buffer, pose_valid_buffer, points_3d, C_3d_all, is_valid, pose_buffer_good
+    return points_3d_buffer, covariance_buffer, pose_valid_buffer, pose_buffer_good

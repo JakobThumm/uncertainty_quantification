@@ -131,6 +131,15 @@ def predict_and_score_motion(motion_prediction_jit_fn, params, batch_stats, scor
     }
 
 
+def filter_outliers_iqr(scores, iqr_factor=3.0):
+    """Filter outliers using IQR method. Returns a boolean mask of non-outliers."""
+    q1, q3 = np.percentile(scores, [25, 75])
+    iqr = q3 - q1
+    lower = q1 - iqr_factor * iqr
+    upper = q3 + iqr_factor * iqr
+    return (scores >= lower) & (scores <= upper)
+
+
 def create_comparison_visualization(id_results, ood_results, save_path="id_vs_ood_motion_comparison.png"):
     """
     Create visualization comparing ID vs OOD performance.
@@ -142,11 +151,28 @@ def create_comparison_visualization(id_results, ood_results, save_path="id_vs_oo
     """
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
+    # Filter outliers from OOD scores using a threshold derived from combined distribution
+    all_ood_scores = np.concatenate([id_results['ood_scores'], ood_results['ood_scores']])
+    combined_mask = filter_outliers_iqr(all_ood_scores)
+    n_id = len(id_results['ood_scores'])
+    id_score_mask = combined_mask[:n_id]
+    ood_score_mask = combined_mask[n_id:]
+
+    id_scores_filtered = id_results['ood_scores'][id_score_mask]
+    ood_scores_filtered = ood_results['ood_scores'][ood_score_mask]
+    id_mpjpe_filtered = id_results['mpjpe_per_sample'][id_score_mask]
+    ood_mpjpe_filtered = ood_results['mpjpe_per_sample'][ood_score_mask]
+
+    n_id_removed = (~id_score_mask).sum()
+    n_ood_removed = (~ood_score_mask).sum()
+    if n_id_removed > 0 or n_ood_removed > 0:
+        print(f"\nOutlier filtering: removed {n_id_removed} ID and {n_ood_removed} OOD samples from visualization")
+
     datasets = ['ID (Normal)', 'OOD (Shuffled)']
     mpjpe_scores = [id_results['mpjpe_overall'], ood_results['mpjpe_overall']]
     mpjpe_stds = [id_results['mpjpe_std'], ood_results['mpjpe_std']]
-    ood_mean_scores = [np.mean(id_results['ood_scores']), np.mean(ood_results['ood_scores'])]
-    ood_std_scores = [np.std(id_results['ood_scores']), np.std(ood_results['ood_scores'])]
+    ood_mean_scores = [np.mean(id_scores_filtered), np.mean(ood_scores_filtered)]
+    ood_std_scores = [np.std(id_scores_filtered), np.std(ood_scores_filtered)]
 
     # MPJPE comparison with error bars
     axes[0, 0].bar(datasets, mpjpe_scores, yerr=mpjpe_stds, color=['blue', 'red'],
@@ -162,10 +188,10 @@ def create_comparison_visualization(id_results, ood_results, save_path="id_vs_oo
     axes[0, 1].set_ylabel('OOD Score', fontsize=12)
     axes[0, 1].grid(axis='y', alpha=0.3)
 
-    # Error vs OOD score scatter plots combined
-    axes[0, 2].scatter(id_results['ood_scores'], id_results['mpjpe_per_sample'],
+    # Error vs OOD score scatter plots combined (outlier-filtered)
+    axes[0, 2].scatter(id_scores_filtered, id_mpjpe_filtered,
                        alpha=0.5, s=10, color='blue', label='ID')
-    axes[0, 2].scatter(ood_results['ood_scores'], ood_results['mpjpe_per_sample'],
+    axes[0, 2].scatter(ood_scores_filtered, ood_mpjpe_filtered,
                        alpha=0.5, s=10, color='red', label='OOD')
     axes[0, 2].set_title('Prediction Error vs OOD Score', fontsize=14, fontweight='bold')
     axes[0, 2].set_xlabel('OOD Score', fontsize=12)
@@ -188,10 +214,10 @@ def create_comparison_visualization(id_results, ood_results, save_path="id_vs_oo
     axes[1, 1].set_ylabel('Density', fontsize=12)
     axes[1, 1].grid(axis='y', alpha=0.3)
 
-    # Combined OOD score distribution
-    axes[1, 2].hist(id_results['ood_scores'], bins=50, alpha=0.7, color='blue',
+    # Combined OOD score distribution (outlier-filtered)
+    axes[1, 2].hist(id_scores_filtered, bins=50, alpha=0.7, color='blue',
                     label='ID', density=True)
-    axes[1, 2].hist(ood_results['ood_scores'], bins=50, alpha=0.7, color='red',
+    axes[1, 2].hist(ood_scores_filtered, bins=50, alpha=0.7, color='red',
                     label='OOD', density=True)
     axes[1, 2].set_title('OOD Score Distribution', fontsize=14, fontweight='bold')
     axes[1, 2].set_xlabel('OOD Score', fontsize=12)
@@ -240,7 +266,7 @@ def compute_ood_detection_metrics(id_scores, ood_scores):
 
 
 def visualize_sample_predictions(id_results, ood_results,
-                                 output_dir="results/motion_prediction"):
+                                 output_dir="results/motion_prediction/ID_vs_OOD/sample_predictions"):
     """
     Visualize sample predictions for ID and OOD datasets.
 
@@ -310,8 +336,8 @@ def main():
                         help='Path to the score function pickle file')
     parser.add_argument('--max_samples', type=int, default=640,
                         help='Maximum number of samples to evaluate (default: 640)')
-    parser.add_argument('--results_dir', type=str, default='results/motion_prediction_grid_search',
-                        help='Directory to save results (default: results/motion_prediction_grid_search)')
+    parser.add_argument('--results_dir', type=str, default='results/motion_prediction/ID_vs_OOD',
+                        help='Directory to save results (default: results/motion_prediction/ID_vs_OOD)')
     args = parser.parse_args()
 
     print("=" * 80)
@@ -476,10 +502,16 @@ def main():
         print("\n" + "=" * 80)
         print("CREATING VISUALIZATIONS")
         print("=" * 80)
-        create_comparison_visualization(id_results, ood_results)
+        create_comparison_visualization(
+            id_results, ood_results,
+            save_path=os.path.join(args.results_dir, "id_vs_ood_motion_comparison.png")
+        )
 
         # Visualize sample predictions
-        visualize_sample_predictions(id_results, ood_results)
+        visualize_sample_predictions(
+            id_results, ood_results,
+            output_dir=os.path.join(args.results_dir, "sample_predictions")
+        )
 
         # Summary
         print("\n" + "=" * 80)
