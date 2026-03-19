@@ -2293,3 +2293,295 @@ Per-Joint Volume [m^3]:
     Joint 11: 0.0825
     Joint 12: 0.0713
 ```
+
+### With OOD Detection Enabled and Reworked 2D to 3D function
+Run with:
+```
+python human_pose_pipeline/examples/eval_full_pipeline_rgbd_yolo.py --motion_model_save_path human_pose_pipeline/models/motion_prediction/final_model/dct_pose_transformer.pickle --enable_ood --motion_score_fn_path human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM720of800_sketch_srft_seed0_size10000.cloudpickle --enable_tracking --depth_uncertainty 0.05 --start_at 1656
+```
+Results:
+```
+Loading RGB-D dataset...
+Loaded 12404 paired RGBD samples from datasets/rgbd_test/
+Dataset loaded with 12404 frames, from which we are using 10748 frames             with 1 subsampling.
+Evaluating sequence:: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████| 10748/10748 [09:05<00:00, 19.69it/s]
+Full pipeline completed!
+Saved motion prediction results to results/eval_full_pipeline_rgbd_yolo/motion_prediction_results.cloudpickle
+Saved full pipeline results to results/eval_full_pipeline_rgbd_yolo/full_pipeline_results.cloudpickle
+================================
+Evaluating motion prediction.
+================================
+================================
+Evaluating motion uncertainty prediction.
+================================
+
+Overall MPJPE: 75.15 mm
+
+Per-Time Errors:
+  Time point 1 error =   38.04 mm
+  Time point 2 error =   44.77 mm
+  Time point 3 error =   53.43 mm
+  Time point 4 error =   62.51 mm
+  Time point 5 error =   71.06 mm
+  Time point 6 error =   79.97 mm
+  Time point 7 error =   88.06 mm
+  Time point 8 error =   96.72 mm
+  Time point 9 error =  104.93 mm
+  Time point 10 error =  113.12 mm
+
+Per-Joint Errors:
+  Joint 1 error =   61.17 mm
+  Joint 2 error =   63.93 mm
+  Joint 3 error =   53.12 mm
+  Joint 4 error =   91.69 mm
+  Joint 5 error =   82.85 mm
+  Joint 6 error =  140.06 mm
+  Joint 7 error =  127.14 mm
+  Joint 8 error =   53.80 mm
+  Joint 9 error =   54.64 mm
+  Joint 10 error =   62.51 mm
+  Joint 11 error =   59.71 mm
+  Joint 12 error =   66.56 mm
+  Joint 13 error =   59.70 mm
+Saved overall MPJPE results to results/motion_prediction/mpjpe_results_test.csv
+Saved per-time MPJPE results to results/motion_prediction/per_time_mpjpe_results_test.csv
+Saved per-joint MPJPE results to results/motion_prediction/per_joint_mpjpe_results_test.csv
+
+Uncertainty Coverage Stats:
+  Overall coverage within 1 std: 94.96%
+  Overall coverage within 2 std: 98.53%
+  Overall coverage within 3 std: 99.42%
+  Overall coverage within 4 std: 99.71%
+
+Per-Time Coverage Stats:
+
+  Overall coverage within 1 std:
+    Frame 0: 96.97%
+    Frame 1: 95.98%
+    Frame 2: 95.21%
+    Frame 3: 94.71%
+    Frame 4: 94.46%
+    Frame 5: 94.26%
+    Frame 6: 94.29%
+    Frame 7: 94.38%
+    Frame 8: 94.56%
+    Frame 9: 94.76%
+
+  Overall coverage within 2 std:
+    Frame 0: 99.04%
+    Frame 1: 98.63%
+    Frame 2: 98.32%
+    Frame 3: 98.26%
+    Frame 4: 98.24%
+    Frame 5: 98.25%
+    Frame 6: 98.42%
+    Frame 7: 98.55%
+    Frame 8: 98.74%
+    Frame 9: 98.85%
+
+  Overall coverage within 3 std:
+    Frame 0: 99.51%
+    Frame 1: 99.33%
+    Frame 2: 99.20%
+    Frame 3: 99.21%
+    Frame 4: 99.27%
+    Frame 5: 99.37%
+    Frame 6: 99.45%
+    Frame 7: 99.52%
+    Frame 8: 99.62%
+    Frame 9: 99.69%
+
+  Overall coverage within 4 std:
+    Frame 0: 99.69%
+    Frame 1: 99.60%
+    Frame 2: 99.57%
+    Frame 3: 99.59%
+    Frame 4: 99.65%
+    Frame 5: 99.71%
+    Frame 6: 99.76%
+    Frame 7: 99.81%
+    Frame 8: 99.86%
+    Frame 9: 99.89%
+
+Per-Joint Coverage Stats:
+
+  Overall coverage within 1 std:
+    Joint 0: 95.86%
+    Joint 1: 94.72%
+    Joint 2: 97.08%
+    Joint 3: 94.16%
+    Joint 4: 95.62%
+    Joint 5: 93.26%
+    Joint 6: 95.38%
+    Joint 7: 96.65%
+    Joint 8: 96.25%
+    Joint 9: 94.07%
+    Joint 10: 94.31%
+    Joint 11: 92.39%
+    Joint 12: 94.74%
+
+  Overall coverage within 2 std:
+    Joint 0: 98.85%
+    Joint 1: 98.23%
+    Joint 2: 99.02%
+    Joint 3: 98.27%
+    Joint 4: 98.69%
+    Joint 5: 97.57%
+    Joint 6: 98.32%
+    Joint 7: 98.99%
+    Joint 8: 99.16%
+    Joint 9: 98.82%
+    Joint 10: 98.76%
+    Joint 11: 97.81%
+    Joint 12: 98.41%
+
+  Overall coverage within 3 std:
+    Joint 0: 99.57%
+    Joint 1: 99.20%
+    Joint 2: 99.59%
+    Joint 3: 99.28%
+    Joint 4: 99.46%
+    Joint 5: 98.87%
+    Joint 6: 99.16%
+    Joint 7: 99.64%
+    Joint 8: 99.66%
+    Joint 9: 99.73%
+    Joint 10: 99.69%
+    Joint 11: 99.29%
+    Joint 12: 99.30%
+
+  Overall coverage within 4 std:
+    Joint 0: 99.77%
+    Joint 1: 99.54%
+    Joint 2: 99.82%
+    Joint 3: 99.64%
+    Joint 4: 99.71%
+    Joint 5: 99.43%
+    Joint 6: 99.54%
+    Joint 7: 99.87%
+    Joint 8: 99.81%
+    Joint 9: 99.92%
+    Joint 10: 99.89%
+    Joint 11: 99.68%
+    Joint 12: 99.62%
+Saved overall coverage results to results/motion_prediction/coverage_results_test.csv
+Saved per-time coverage results to results/motion_prediction/per_time_coverage_results_test.csv
+Saved per-joint coverage results to results/motion_prediction/per_joint_coverage_results_test.csv
+Predicted spherical reachable set coverage stats for 0.99 likelihood:
+Overall coverage within set: 99.25%
+Mean volume = 0.1651 m^3
+
+Per-Time Coverage Stats:
+    Frame 0: 99.43%
+    Frame 1: 99.20%
+    Frame 2: 99.02%
+    Frame 3: 99.01%
+    Frame 4: 99.08%
+    Frame 5: 99.13%
+    Frame 6: 99.27%
+    Frame 7: 99.35%
+    Frame 8: 99.45%
+    Frame 9: 99.54%
+
+Per-Time Volume [m^3]:
+    Frame 0: 0.0330
+    Frame 1: 0.0466
+    Frame 2: 0.0660
+    Frame 3: 0.0940
+    Frame 4: 0.1317
+    Frame 5: 0.1818
+    Frame 6: 0.2456
+    Frame 7: 0.3251
+    Frame 8: 0.4226
+    Frame 9: 0.5405
+
+Per-Joint Coverage Stats:
+    Joint 0: 99.53%
+    Joint 1: 99.00%
+    Joint 2: 99.49%
+    Joint 3: 99.06%
+    Joint 4: 99.35%
+    Joint 5: 98.57%
+    Joint 6: 98.99%
+    Joint 7: 99.48%
+    Joint 8: 99.58%
+    Joint 9: 99.53%
+    Joint 10: 99.53%
+    Joint 11: 99.03%
+    Joint 12: 99.10%
+
+Per-Joint Volume [m^3]:
+    Joint 0: 0.0994
+    Joint 1: 0.0970
+    Joint 2: 0.0967
+    Joint 3: 0.2536
+    Joint 4: 0.2407
+    Joint 5: 0.8245
+    Joint 6: 0.7821
+    Joint 7: 0.0790
+    Joint 8: 0.0751
+    Joint 9: 0.0764
+    Joint 10: 0.0669
+    Joint 11: 0.1171
+    Joint 12: 0.1010
+================================
+Evaluating motion SARA uncertainty.
+================================
+SARA simple velocity model coverage stats:
+Overall coverage within set: 99.39%
+Mean volume = 0.5008 m^3
+
+Per-Time Coverage Stats:
+    Frame 0: 99.39%
+    Frame 1: 99.35%
+    Frame 2: 99.33%
+    Frame 3: 99.33%
+    Frame 4: 99.32%
+    Frame 5: 99.34%
+    Frame 6: 99.40%
+    Frame 7: 99.43%
+    Frame 8: 99.49%
+    Frame 9: 99.51%
+
+Per-Time Volume [m^3]:
+    Frame 0: 0.0681
+    Frame 1: 0.1208
+    Frame 2: 0.1954
+    Frame 3: 0.2958
+    Frame 4: 0.4257
+    Frame 5: 0.5890
+    Frame 6: 0.7894
+    Frame 7: 1.0309
+    Frame 8: 1.3171
+    Frame 9: 1.6519
+
+Per-Joint Coverage Stats:
+    Joint 0: 99.85%
+    Joint 1: 99.63%
+    Joint 2: 99.81%
+    Joint 3: 99.35%
+    Joint 4: 99.44%
+    Joint 5: 96.98%
+    Joint 6: 98.21%
+    Joint 7: 99.89%
+    Joint 8: 99.86%
+    Joint 9: 99.87%
+    Joint 10: 99.86%
+    Joint 11: 99.66%
+    Joint 12: 99.63%
+
+Per-Joint Volume [m^3]:
+    Joint 0: 0.5008
+    Joint 1: 0.5008
+    Joint 2: 0.5008
+    Joint 3: 0.5008
+    Joint 4: 0.5008
+    Joint 5: 0.5008
+    Joint 6: 0.5008
+    Joint 7: 0.5008
+    Joint 8: 0.5008
+    Joint 9: 0.5008
+    Joint 10: 0.5008
+    Joint 11: 0.5008
+    Joint 12: 0.5008
+```

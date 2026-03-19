@@ -11,8 +11,10 @@ OOD_THRESHOLD = 6e5
 N_CORRECT_POSES_REQUIRED = 3
 
 # Covariance calibration for motion prediction
-COV_CALIBRATION_CT = 4.0
-COV_CALIBRATION_IT = 0.5
+# Constant time factor
+COV_CALIBRATION_CT = 3.5
+# Increase time factor
+COV_CALIBRATION_IT = 0.7
 # JOINT_NAMES_13 = [
 #     'Nose', 'LShoulder', 'RShoulder', 'LElbow', 'RElbow',
 #     'LWrist', 'RWrist', 'LHip', 'RHip', 'LKnee',

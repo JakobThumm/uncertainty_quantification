@@ -6,6 +6,9 @@ from time import time
 import jax.numpy as jnp
 import numpy as np
 
+from human_pose_pipeline.pose_estimation.inference_helper_batched import update_motion_prediction_buffer
+from human_pose_pipeline.utils.eval_utils import convert_covariance_matrices_to_set
+
 
 def predict_poses(
     motion_prediction_jit_fn,
@@ -176,9 +179,6 @@ def run_motion_prediction(
         - motion_cov_calibrated [P, J, 3, 3]: Calibrated covariance (before buffer update)
         - motion_cov_uncalibrated [P, J, 3, 3]: Raw model covariance before calibration
     """
-    from human_pose_pipeline.pose_estimation.inference_helper_batched import update_motion_prediction_buffer
-    from human_pose_pipeline.utils.eval_utils import convert_covariance_matrices_to_set
-
     pose_input = points_3d_buffer.reshape([1, input_horizon_length, n_joints * 3])
     motion_prediction_input = jnp.concatenate([
         pose_input,
@@ -225,7 +225,7 @@ def run_motion_prediction(
     )
 
     motion_set_radius = convert_covariance_matrices_to_set(
-        motion_uncertainty_buffer, likelihood=set_likelihood
+        motion_cov_predicted, likelihood=set_likelihood
     )
 
     return (
