@@ -539,20 +539,24 @@ class PosePipelineNode(Node):
             t_pose_done: Timestamp (ms) when 3D pose estimation finished
         """
         # Unbatch, compute validity, update pose buffers
+        pose_is_ood = bool(pose_is_ood)
+        human_detected = bool(human_detected)
+        is_valid = (not pose_is_ood) and human_detected
+
         self.points_3d_buffer, self.covariance_buffer, self.pose_valid_buffer, \
-            points_3d, C_3d_all, is_valid, pose_buffer_good = process_pose_output(
+            pose_buffer_good = process_pose_output(
                 points_3d=points_3d,
                 C_3d_all=C_3d_all,
-                pose_is_ood=pose_is_ood,
-                human_detected=human_detected,
+                is_valid=is_valid,
                 points_3d_buffer=self.points_3d_buffer,
                 covariance_buffer=self.covariance_buffer,
                 pose_valid_buffer=self.pose_valid_buffer,
                 motion_prediction_buffer=self.motion_prediction_buffer,
                 motion_uncertainty_buffer=self.motion_uncertainty_buffer,
             )
-        pose_is_ood = bool(pose_is_ood)
-        human_detected = bool(human_detected)
+        # Unbatch for publishing
+        points_3d = points_3d[0]
+        C_3d_all = C_3d_all[0]
 
         # Predict and publish motion first so its timing can be included in the pose message
         t_motion_start, t_motion_done = self._predict_and_publish_motion(
@@ -560,8 +564,9 @@ class PosePipelineNode(Node):
         )
 
         # Publish 2D and 3D poses (using unbatched keypoints)
-        self._publish_pose_2d(keypoints_2d[0], uncertainties_2d[0], covariance_xy[0], pose_ood_score, pose_is_ood, human_detected, header)
-        self._publish_pose(points_3d, C_3d_all, pose_ood_score, pose_is_ood, human_detected, header, t_received, t_pose_start, t_pose_done, t_motion_start, t_motion_done)
+        pose_ood_score_scalar = float(pose_ood_score[0])
+        self._publish_pose_2d(keypoints_2d[0], uncertainties_2d[0], covariance_xy[0], pose_ood_score_scalar, pose_is_ood, human_detected, header)
+        self._publish_pose(points_3d, C_3d_all, pose_ood_score_scalar, pose_is_ood, human_detected, header, t_received, t_pose_start, t_pose_done, t_motion_start, t_motion_done)
 
         self.frame_counter += 1
         self.frames_processed += 1
