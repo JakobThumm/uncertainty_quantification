@@ -176,6 +176,7 @@ class PosePipelineNode(Node):
         # Initialize models
         self.get_logger().info('Initializing models...')
         self._initialize_models()
+        self._warm_start_models()
 
         # Initialize pose and motion buffers
         self.points_3d_buffer = jnp.zeros([INPUT_HORIZON_LENGTH, N_JOINTS, 3])
@@ -257,6 +258,43 @@ class PosePipelineNode(Node):
 
         self.get_logger().info('All models initialized successfully!')
 
+    def _warm_start_models(self):
+        """Run one dummy inference through every model to trigger JIT compilation.
+
+        JAX JIT-compiles on the first call for each unique input shape, and YOLO
+        has a slow first-pass initialisation.  Doing this before subscribers are
+        created ensures the pipeline is at full speed when real frames arrive.
+        """
+        self.get_logger().info('Warm-starting models (triggering JIT compilation)...')
+        t0 = time.perf_counter()
+
+        # YOLO: one forward pass on a blank image
+        dummy_rgb = np.zeros((480, 640, 3), dtype=np.uint8)
+        self.yolo_model.predict(dummy_rgb, verbose=False)
+        self.get_logger().info(
+            f'  YOLO warm-start done ({(time.perf_counter() - t0) * 1e3:.0f} ms)'
+        )
+
+        # JAX motion model: compile for B=1 (this node always processes one frame at a time)
+        motion_input_dim = N_JOINTS * 3 + N_JOINTS * 3 * 3
+        dummy_motion_input = jnp.zeros(
+            [1, INPUT_HORIZON_LENGTH, motion_input_dim], dtype=jnp.float32
+        )
+        if self.motion_prediction_batch_stats is not None:
+            _ = self.motion_prediction_jit_fn(
+                self.motion_prediction_params,
+                self.motion_prediction_batch_stats,
+                dummy_motion_input,
+            )
+        else:
+            _ = self.motion_prediction_jit_fn(
+                self.motion_prediction_params,
+                dummy_motion_input,
+            )
+
+        elapsed_ms = (time.perf_counter() - t0) * 1e3
+        self.get_logger().info(f'Warm-start complete in {elapsed_ms:.0f} ms.')
+
     def _setup_stereo_subscribers(self):
         """Setup subscribers for stereo camera mode."""
         camera_1_topic = self.get_parameter('camera_1_color_topic').value
@@ -274,7 +312,7 @@ class PosePipelineNode(Node):
         self.sync = ApproximateTimeSynchronizer(
             [self.camera_1_sub, self.camera_2_sub],
             queue_size=1,
-            slop=0.05  # 50ms tolerance
+            slop=0.025
         )
         self.sync.registerCallback(self.stereo_callback)
 
@@ -305,7 +343,7 @@ class PosePipelineNode(Node):
         self.sync = ApproximateTimeSynchronizer(
             [self.color_sub, self.depth_sub],
             queue_size=1,
-            slop=0.05
+            slop=0.025
         )
         self.sync.registerCallback(self.rgbd_callback)
 

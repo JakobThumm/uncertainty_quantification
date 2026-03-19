@@ -60,7 +60,13 @@ source /workspace/ros2_ws/install/setup.bash
 The workspace will be automatically sourced in new shells.
 
 ### 3. Run the Pose Pipeline Node
-Run:
+For the sequential pipeline (one image processed once it arrives), run:
 ```bash
 ros2 launch uq_inference pose_pipeline.launch.py
+```
+
+The sequential pipeline is not fast enough with OOD detection to run at 25fps. 
+For the batched pipeline (run the pipeline all the time and gather image batches while the pipeline executes), run:
+```bash
+ros2 launch uq_inference pose_pipeline_with_queue.launch.py
 ```

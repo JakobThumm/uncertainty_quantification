@@ -8,6 +8,7 @@ import numpy as np
 
 from human_pose_pipeline.pose_estimation.inference_helper_batched import update_motion_prediction_buffer
 from human_pose_pipeline.utils.eval_utils import convert_covariance_matrices_to_set
+from typing import List
 
 
 def predict_poses(
@@ -238,6 +239,144 @@ def run_motion_prediction(
         motion_predicted,
         motion_cov_predicted,
         motion_cov_uncalibrated,
+    )
+
+
+def run_motion_prediction_batched(
+    points_3d_buffers: jnp.ndarray,
+    covariance_buffers: jnp.ndarray,
+    pose_valid_buffers: jnp.ndarray,
+    motion_prediction_buffer: jnp.ndarray,
+    motion_uncertainty_buffer: jnp.ndarray,
+    motion_prediction_jit_fn,
+    motion_prediction_params,
+    motion_prediction_batch_stats,
+    motion_ood_score_fn,
+    n_joints: int,
+    input_horizon_length: int,
+    prediction_horizon_length: int,
+    ood_threshold: float,
+    calibration_ct: float,
+    calibration_it: float,
+    calibration_factors: Optional[Sequence[float]],
+    n_correct_poses_required: int,
+    set_likelihood: float,
+    pose_buffer_good_batch: jnp.ndarray,
+    frame_counter: int,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, List[bool], jnp.ndarray, jnp.ndarray]:
+    """Run motion prediction for a batch of B intermediate pose-buffer states in one model call.
+
+    The motion model is called once with a batched input [B, T, J*3 + J*9].
+    The motion prediction buffer is then updated sequentially (one call to
+    update_motion_prediction_buffer per frame), matching the causal structure of
+    the pipeline.  convert_covariance_matrices_to_set is called once on the full
+    batch.
+
+    Args:
+        points_3d_buffers: B intermediate pose buffers [B, T, J, 3]
+        covariance_buffers: B intermediate covariance buffers [B, T, J, 3, 3]
+        pose_valid_buffers: B intermediate validity buffers [B, T]
+        motion_prediction_buffer: Current motion prediction buffer [P, J, 3]
+        motion_uncertainty_buffer: Current motion uncertainty buffer [P, J, 3, 3]
+        motion_prediction_jit_fn: JIT-compiled motion prediction function
+        motion_prediction_params: Model parameters
+        motion_prediction_batch_stats: Batch statistics (or None)
+        motion_ood_score_fn: OOD scoring function (or None)
+        n_joints: Number of skeleton joints
+        input_horizon_length: Length of the pose buffer T
+        prediction_horizon_length: Length of the prediction horizon P
+        ood_threshold: Threshold for OOD classification
+        calibration_ct: Constant-time covariance calibration factor
+        calibration_it: Increasing-time covariance calibration factor
+        calibration_factors: Per-joint calibration factors (or None)
+        n_correct_poses_required: Consecutive valid poses needed before using predicted motion
+        set_likelihood: Likelihood level for set-radius conversion
+        pose_buffer_good_batch: Whether each intermediate buffer is ready for prediction [B]
+        frame_counter: Global frame counter before this batch (used to determine readiness)
+
+    Returns:
+        - Updated motion_prediction_buffer [P, J, 3]
+        - Updated motion_uncertainty_buffer [P, J, 3, 3]
+        - motion_set_radii [B, P, J]
+        - motion_ood_scores [B]
+        - motion_is_oods [B]
+        - valid_motions: List[bool] of length B
+        - motion_predicted [B, P, J, 3]
+        - motion_cov_calibrated [B, P, J, 3, 3]
+    """
+    B = points_3d_buffers.shape[0]
+    T = input_horizon_length
+
+    # Build batched model input [B, T, J*3 + J*3*3]
+    pose_input = points_3d_buffers.reshape([B, T, n_joints * 3])
+    motion_prediction_input = jnp.concatenate([
+        pose_input,
+        covariance_buffers.reshape([B, T, n_joints * 3 * 3]),
+    ], axis=-1)
+
+    # Single batched model call
+    if motion_prediction_batch_stats is not None:
+        motion_predicted, (motion_cov_predicted, _) = motion_prediction_jit_fn(
+            motion_prediction_params, motion_prediction_batch_stats, motion_prediction_input
+        )
+    else:
+        motion_predicted, (motion_cov_predicted, _) = motion_prediction_jit_fn(
+            motion_prediction_params, motion_prediction_input
+        )
+
+    # OOD scores [B]
+    motion_ood_scores = (
+        motion_ood_score_fn(pose_input)
+        if motion_ood_score_fn is not None
+        else jnp.zeros(B, dtype=jnp.float32)
+    )
+    motion_is_oods = motion_ood_scores > ood_threshold  # [B]
+
+    # Reshape model outputs to [B, P, J, 3] and [B, P, J, 3, 3]
+    motion_predicted = motion_predicted.reshape(B, prediction_horizon_length, n_joints, 3)
+    # motion_cov_predicted already [B, P, J, 3, 3]
+
+    # Calibrate covariances for entire batch [B, P, J, 3, 3]
+    motion_cov_calibrated = calibrate_covariance_matrices(
+        covariance_matrices=motion_cov_predicted,
+        constant_time_factor=calibration_ct,
+        increase_time_factor=calibration_it,
+        joint_calibration_factors=calibration_factors,
+    )
+    if isinstance(motion_cov_calibrated, np.ndarray):
+        motion_cov_calibrated = jnp.array(motion_cov_calibrated)
+
+    # Sequentially update motion prediction buffer (one call per frame in batch)
+    valid_motions: List[bool] = []
+    for b in range(B):
+        if (frame_counter + b) < input_horizon_length - 1 or not bool(pose_buffer_good_batch[b]):
+            valid_motions.append(False)
+            continue
+        motion_prediction_buffer, motion_uncertainty_buffer, valid_motion = update_motion_prediction_buffer(
+            motion_prediction_buffer=motion_prediction_buffer,
+            motion_uncertainty_buffer=motion_uncertainty_buffer,
+            predicted_motion=motion_predicted[b],
+            predicted_motion_uncertainty=motion_cov_calibrated[b],
+            is_ood=bool(motion_is_oods[b]),
+            pose_valid_buffer=pose_valid_buffers[b],
+            n_correct_poses_required=n_correct_poses_required,
+        )
+        valid_motions.append(valid_motion)
+
+    # Batch-convert covariances to set radii [B, P, J]
+    motion_set_radii = convert_covariance_matrices_to_set(
+        motion_cov_calibrated, likelihood=set_likelihood
+    )
+
+    return (
+        motion_prediction_buffer,
+        motion_uncertainty_buffer,
+        motion_set_radii,
+        motion_ood_scores,
+        motion_is_oods,
+        valid_motions,
+        motion_predicted,
+        motion_cov_calibrated,
     )
 
 

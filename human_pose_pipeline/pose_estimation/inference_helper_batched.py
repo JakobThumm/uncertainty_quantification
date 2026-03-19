@@ -1726,3 +1726,140 @@ def process_pose_output(
         motion_uncertainty_buffer=motion_uncertainty_buffer,
     )
     return points_3d_buffer, covariance_buffer, pose_valid_buffer, pose_buffer_good
+
+
+def fill_pose_buffer_batched(
+    points_3d_buffer: jnp.ndarray,
+    covariance_buffer: jnp.ndarray,
+    pose_valid_buffer: jnp.ndarray,
+    points_3d_batch: jnp.ndarray,
+    covariance_batch: jnp.ndarray,
+    is_valid_batch: jnp.ndarray,
+    motion_prediction_buffer: jnp.ndarray,
+    motion_uncertainty_buffer: jnp.ndarray,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Fill pose buffer with a batch of B frames in a single vectorised operation.
+
+    For each frame b, if is_valid_batch[b] is True the real pose is used; otherwise
+    motion_prediction_buffer[b] is used as the fallback (successive entries for successive
+    invalid frames).  The caller must ensure B <= PREDICTION_HORIZON_LENGTH so that
+    motion_prediction_buffer[:B] is always valid.
+
+    Also returns the B *intermediate* buffer states (state after inserting each frame b)
+    needed by the batched motion predictor.
+
+    Args:
+        points_3d_buffer: Rolling pose buffer [T, J, 3]
+        covariance_buffer: Rolling covariance buffer [T, J, 3, 3]
+        pose_valid_buffer: Rolling validity buffer [T]
+        points_3d_batch: New 3D joint positions [B, J, 3]
+        covariance_batch: New covariance matrices [B, J, 3, 3]
+        is_valid_batch: Validity flags for each frame [B] (bool or float 0/1)
+        motion_prediction_buffer: Last motion prediction buffer [P, J, 3]
+        motion_uncertainty_buffer: Last motion uncertainty buffer [P, J, 3, 3]
+
+    Returns:
+        - final_points_3d_buffer [T, J, 3]
+        - final_covariance_buffer [T, J, 3, 3]
+        - final_pose_valid_buffer [T]
+        - intermediate_points_3d [B, T, J, 3]    – buffer state after inserting frame b
+        - intermediate_covariance [B, T, J, 3, 3]
+        - intermediate_pose_valid [B, T]
+        - pose_buffer_good_batch [B]              – whether prediction is possible at each step
+    """
+    B = points_3d_batch.shape[0]
+    T = points_3d_buffer.shape[0]
+
+    is_valid = jnp.asarray(is_valid_batch, dtype=bool)  # [B]
+
+    # Vectorised fallback: use real pose when valid, motion prediction entry b otherwise
+    fill_points = jnp.where(
+        is_valid[:, None, None],
+        jnp.asarray(points_3d_batch),
+        motion_prediction_buffer[:B],
+    )  # [B, J, 3]
+    fill_cov = jnp.where(
+        is_valid[:, None, None, None],
+        jnp.asarray(covariance_batch),
+        motion_uncertainty_buffer[:B],
+    )  # [B, J, 3, 3]
+    fill_valid = is_valid.astype(jnp.float32)  # [B]
+
+    # Concatenate original buffer with B new entries  [T+B, ...]
+    extended_points = jnp.concatenate([points_3d_buffer, fill_points], axis=0)
+    extended_cov    = jnp.concatenate([covariance_buffer, fill_cov],    axis=0)
+    extended_valid  = jnp.concatenate([pose_valid_buffer, fill_valid],  axis=0)
+
+    # Final buffer state: drop oldest B entries
+    final_points_3d_buffer = extended_points[B:]   # [T, J, 3]
+    final_covariance_buffer = extended_cov[B:]     # [T, J, 3, 3]
+    final_pose_valid_buffer = extended_valid[B:]   # [T]
+
+    # Intermediate states: row_idx[b, t] = b + 1 + t  →  shape [B, T]
+    row_idx = jnp.arange(B)[:, None] + 1 + jnp.arange(T)[None, :]
+    intermediate_points_3d  = extended_points[row_idx]   # [B, T, J, 3]
+    intermediate_covariance = extended_cov[row_idx]      # [B, T, J, 3, 3]
+    intermediate_pose_valid = extended_valid[row_idx]    # [B, T]
+
+    # pose_buffer_good per intermediate state [B]: True iff no time-step is all-zeros
+    all_zeros = jnp.all(intermediate_points_3d == 0.0, axis=[2, 3])  # [B, T]
+    pose_buffer_good_batch = jnp.all(~all_zeros, axis=1)              # [B]
+
+    return (
+        final_points_3d_buffer,
+        final_covariance_buffer,
+        final_pose_valid_buffer,
+        intermediate_points_3d,
+        intermediate_covariance,
+        intermediate_pose_valid,
+        pose_buffer_good_batch,
+    )
+
+
+def process_pose_output_batched(
+    points_3d: torch.Tensor,
+    C_3d_all: torch.Tensor,
+    pose_is_ood: torch.Tensor,
+    human_detected: torch.Tensor,
+    points_3d_buffer: jnp.ndarray,
+    covariance_buffer: jnp.ndarray,
+    pose_valid_buffer: jnp.ndarray,
+    motion_prediction_buffer: jnp.ndarray,
+    motion_uncertainty_buffer: jnp.ndarray,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Process batched pose estimation output for B frames.
+
+    Computes per-frame validity from pose_is_ood and human_detected, then
+    delegates to fill_pose_buffer_batched.
+
+    Args:
+        points_3d: Batched 3D joint positions [B, J, 3] (torch)
+        C_3d_all: Batched 3D covariance matrices [B, J, 3, 3] (torch)
+        pose_is_ood: OOD flags [B] (torch bool)
+        human_detected: Detection flags [B] (torch bool)
+        points_3d_buffer: Rolling pose buffer [T, J, 3]
+        covariance_buffer: Rolling covariance buffer [T, J, 3, 3]
+        pose_valid_buffer: Rolling validity buffer [T]
+        motion_prediction_buffer: Last motion prediction [P, J, 3]
+        motion_uncertainty_buffer: Last motion uncertainty [P, J, 3, 3]
+
+    Returns:
+        Same 7-tuple as fill_pose_buffer_batched.
+    """
+    is_valid_batch = jnp.array(
+        (~pose_is_ood & human_detected).cpu().numpy().astype(bool)
+    )  # [B]
+
+    points_3d_jnp = jnp.array(points_3d.detach().cpu().numpy())  # [B, J, 3]
+    C_3d_jnp      = jnp.array(C_3d_all.detach().cpu().numpy())   # [B, J, 3, 3]
+
+    return fill_pose_buffer_batched(
+        points_3d_buffer=points_3d_buffer,
+        covariance_buffer=covariance_buffer,
+        pose_valid_buffer=pose_valid_buffer,
+        points_3d_batch=points_3d_jnp,
+        covariance_batch=C_3d_jnp,
+        is_valid_batch=is_valid_batch,
+        motion_prediction_buffer=motion_prediction_buffer,
+        motion_uncertainty_buffer=motion_uncertainty_buffer,
+    )

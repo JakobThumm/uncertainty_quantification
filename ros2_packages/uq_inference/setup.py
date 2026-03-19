@@ -25,6 +25,7 @@ setup(
         'console_scripts': [
             'image_processor = uq_inference.image_processor_node:main',
             'pose_pipeline = uq_inference.pose_pipeline_node:main',
+            'pose_pipeline_with_queue = uq_inference.pose_pipeline_with_queue_node:main',
         ],
     },
 )
