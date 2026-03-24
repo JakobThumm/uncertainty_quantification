@@ -622,8 +622,9 @@ class PosePipelineWithQueueNode(Node):
         if Pose2D is None:
             return
         msg = Pose2D()
-        msg.header = header
+        msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "camera_color_optical_frame"
+        msg.t_image = header.stamp
         msg.keypoints_2d = keypoints_2d.cpu().numpy().flatten().tolist()
         msg.uncertainties_2d = uncertainties_2d.cpu().numpy().flatten().tolist()
         msg.covariance_xy = covariance_xy.cpu().numpy().flatten().tolist()
@@ -657,8 +658,9 @@ class PosePipelineWithQueueNode(Node):
         if Pose3D is None:
             return
         msg = Pose3D()
-        msg.header = header
+        msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "world"
+        msg.t_image = header.stamp
         msg.points_3d = points_3d.cpu().numpy().flatten().tolist()
         msg.covariance_3d = covariance_3d.cpu().numpy().flatten().tolist()
         msg.n_joints = N_JOINTS
@@ -691,8 +693,9 @@ class PosePipelineWithQueueNode(Node):
         if MotionPrediction is None:
             return
         msg = MotionPrediction()
-        msg.header = header
+        msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "world"
+        msg.t_image = header.stamp
         msg.motion_predicted = np.array(motion_predicted).flatten().tolist()
         msg.motion_covariance = np.array(motion_cov).flatten().tolist()
         msg.set_radius = np.array(set_radius).flatten().tolist()

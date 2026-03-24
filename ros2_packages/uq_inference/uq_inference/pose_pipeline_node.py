@@ -635,8 +635,9 @@ class PosePipelineNode(Node):
             return
 
         msg = Pose2D()
-        msg.header = header
+        msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'camera_color_optical_frame'  # Image frame
+        msg.t_image = header.stamp
 
         # Convert tensors to numpy and flatten
         keypoints_np = keypoints_2d.cpu().numpy().flatten().tolist()
@@ -671,8 +672,9 @@ class PosePipelineNode(Node):
             return
 
         msg = Pose3D()
-        msg.header = header
+        msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'world'
+        msg.t_image = header.stamp
 
         # Convert tensors to numpy and flatten
         points_np = points_3d.cpu().numpy().flatten().tolist()
@@ -700,7 +702,8 @@ class PosePipelineNode(Node):
             return
 
         msg = MotionPrediction()
-        msg.header = header
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.t_image = header.stamp
 
         # Convert to numpy and flatten
         motion_np = np.array(motion_buffer).flatten().tolist()
