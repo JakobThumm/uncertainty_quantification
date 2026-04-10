@@ -12,7 +12,13 @@ import jax.numpy as jnp
 from tqdm import tqdm
 from human_pose_pipeline.pose_estimation.inference_helper import initialize_jax_models
 from human_pose_pipeline.motion_prediction.inference_helper import predict_poses
-from human_pose_pipeline.utils.eval_utils import evaluate_uncertainty_coverage_with_covariance
+from human_pose_pipeline.utils.eval_utils import (
+    evaluate_uncertainty_coverage_with_covariance,
+    print_coverage_stats,
+    print_mpjpe_results,
+    save_coverage_stats,
+    save_mpjpe_results,
+)
 from src.datasets import dataloader_from_string
 from src.models.dct_pose_transformer import DCTPoseTransformer
 from src.datasets.h36m_motion_prediction import Human36mMotionDataset3D
@@ -140,28 +146,22 @@ def main():
         cloudpickle.dump(motion_prediction_results, f)
         print(f"Saved results to {results_cloudpickle_file}")
 
-    coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
-        pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices
-    )
+    print("================================")
+    print("Evaluating motion prediction.")
+    print("================================")
     mpjpe, std_score, per_time_errors, per_time_stds, per_joint_errors, per_joint_std = evaluate_scores(
         predictions, targets
     )
-
-    print(f"\nOverall MPJPE: {mpjpe:.2f} mm, Std: {std_score:.2f} mm")
-
-    # Per-joint errors
-    print("\nPer-Time Errors:")
-    for i, error in enumerate(per_time_errors):
-        print(f"Time point {i + 1} error = {error:7.2f} mm")
-
-    print("\nPer-Joint Errors:")
-    for i, error in enumerate(per_joint_errors):
-        print(f"Joint {i + 1} error = {error:7.2f} mm")
-
-    print("\nUncertainty Coverage Stats:")
-    for mult in [1, 2, 3, 4]:
-        overall_cov = coverage_stats[f"overall_within_{mult}std"]
-        print(f"  Overall coverage within {mult} std: {overall_cov * 100:.2f}%")
+    print("================================")
+    print("Evaluating motion uncertainty prediction.")
+    print("================================")
+    coverage_stats, _ = evaluate_uncertainty_coverage_with_covariance(
+        pred_poses=predictions, true_poses=targets, cov_matrices=covariance_matrices
+    )
+    print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
+    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=args.split, output_dir=args.output_dir)
+    print_coverage_stats(coverage_stats)
+    save_coverage_stats(coverage_stats, split=args.split, output_dir=args.output_dir)
 
     # Visualize a few samples
     print("\n" + "=" * 60)
