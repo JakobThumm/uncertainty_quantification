@@ -301,7 +301,6 @@ def main():
                     motion_cov_predicted = jnp.array(motion_cov_predicted)
                 motion_is_ood = bool(motion_ood_score > MOTION_OOD_THRESHOLD)
                 # Update motion prediction buffer
-                # TODO: Check if it makes a big difference if the saved uncertainties are the calibrated ones or not.
                 motion_prediction_buffer, motion_uncertainty_buffer, valid_motion = update_motion_prediction_buffer(
                     motion_prediction_buffer=motion_prediction_buffer,
                     motion_uncertainty_buffer=motion_uncertainty_buffer,
@@ -410,10 +409,12 @@ def main():
         true_poses=poses_3d_gt_np,
         cov_matrices=poses_3d_cov_estimated_np
     )
+    pose_output_dir = os.path.join(args.output_dir, 'pose_estimation')
+    os.makedirs(pose_output_dir, exist_ok=True)
     print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
-    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split)
+    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split, output_dir=pose_output_dir)
     print_coverage_stats(coverage_stats)
-    save_coverage_stats(coverage_stats, split=split)
+    save_coverage_stats(coverage_stats, split=split, output_dir=pose_output_dir)
 
     # Evalute motion prediction MPJPE and coverage
     print("================================")
@@ -431,10 +432,12 @@ def main():
         true_poses=motions_gt_np,
         cov_matrices=motions_cov_predicted_np
     )
+    motion_output_dir = os.path.join(args.output_dir, 'motion_prediction')
+    os.makedirs(motion_output_dir, exist_ok=True)
     print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
-    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split)
+    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split, output_dir=motion_output_dir)
     print_coverage_stats(coverage_stats)
-    save_coverage_stats(coverage_stats, split=split)
+    save_coverage_stats(coverage_stats, split=split, output_dir=motion_output_dir)
 
     coverage_stats_predictions, _ = simple_coverage_stats_sara(
         predictions=motions_predicted_np,

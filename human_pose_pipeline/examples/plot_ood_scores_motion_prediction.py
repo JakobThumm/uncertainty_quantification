@@ -12,7 +12,7 @@ Usage:
    python human_pose_pipeline/examples/id_vs_ood_motion_prediction.py \
        --score_fn path/to/score_function.cloudpickle \
        --max_samples 640 \
-       --results_dir results/motion_prediction_ood
+       --output_dir results/motion_prediction_ood
 
    This will create:
    - A JSON file with summary statistics

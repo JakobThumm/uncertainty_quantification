@@ -244,10 +244,11 @@ def main():
         true_poses=all_gt_points,
         cov_matrices=all_3d_covariances
     )
+    os.makedirs(args.output_dir, exist_ok=True)
     print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, print_per_time_errors=False)
-    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split)
+    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, split=split, output_dir=args.output_dir)
     print_coverage_stats(coverage_stats, print_per_time_stats=False)
-    save_coverage_stats(coverage_stats, split=split)
+    save_coverage_stats(coverage_stats, split=split, output_dir=args.output_dir)
 
 
 if __name__ == "__main__":

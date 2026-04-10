@@ -462,7 +462,8 @@ def convert_covariance_matrices_to_set(
     covariance_matrices: Union[np.ndarray, jnp.ndarray],
     likelihood: float
 ) -> np.ndarray:
-    """Convert the covariance matrices to a spherical set covering n_std standard deviations.
+    """Convert the covariance matrices to a spherical conformal prediction set X of likelihood confidence level.
+    P(x \in X) >= likelihood.
 
     Args:
         covariance_matrices: Cov. matrices. Shape: [N, T, J, 3, 3]

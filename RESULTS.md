@@ -2585,3 +2585,158 @@ Per-Joint Volume [m^3]:
     Joint 11: 0.5008
     Joint 12: 0.5008
 ```
+
+## Conformal Prediction Sets
+
+### RGB-D YOLO Results: Direct Sphere Method
+Uses:
+```
+def convert_covariance_matrices_to_set(
+    covariance_matrices: Union[np.ndarray, jnp.ndarray],
+    likelihood: float
+) -> np.ndarray:
+    """Convert the covariance matrices to a spherical conformal prediction set X of likelihood confidence level.
+    P(x \in X) >= likelihood.
+
+    Args:
+        covariance_matrices: Cov. matrices. Shape: [N, T, J, 3, 3]
+        likelihood: Likelihood of points being in the set.
+    Returns:
+        Radius of the spherical reachable sets. Shape: [N, T, J]
+    """
+    from scipy.stats import chi2
+    # largest eigenvalue
+    # chi-square threshold for number of standard deviations in 3D
+    chi_squared_val = chi2.ppf(likelihood, df=3)
+    if isinstance(covariance_matrices, np.ndarray):
+        lambda_max = np.max(np.linalg.eigvalsh(covariance_matrices), axis=-1)
+        # sphere radius
+        radius = np.sqrt(lambda_max * chi_squared_val)
+    else:
+        lambda_max = jnp.max(jnp.linalg.eigvalsh(covariance_matrices), axis=-1)
+        # sphere radius
+        radius = np.sqrt(lambda_max * chi_squared_val)
+
+    return radius
+```
+
+
+Predicted spherical reachable set coverage stats for 0.99 likelihood:
+Overall coverage within set: 99.25%
+Mean volume = 0.1651 m^3
+
+Per-Time Coverage Stats:
+    Frame 0: 99.43%
+    Frame 1: 99.20%
+    Frame 2: 99.02%
+    Frame 3: 99.01%
+    Frame 4: 99.08%
+    Frame 5: 99.13%
+    Frame 6: 99.27%
+    Frame 7: 99.35%
+    Frame 8: 99.45%
+    Frame 9: 99.54%
+
+Per-Time Volume [m^3]:
+    Frame 0: 0.0330
+    Frame 1: 0.0466
+    Frame 2: 0.0660
+    Frame 3: 0.0940
+    Frame 4: 0.1317
+    Frame 5: 0.1818
+    Frame 6: 0.2456
+    Frame 7: 0.3251
+    Frame 8: 0.4226
+    Frame 9: 0.5405
+
+Per-Joint Coverage Stats:
+    Joint 0: 99.53%
+    Joint 1: 99.00%
+    Joint 2: 99.49%
+    Joint 3: 99.06%
+    Joint 4: 99.35%
+    Joint 5: 98.57%
+    Joint 6: 98.99%
+    Joint 7: 99.48%
+    Joint 8: 99.58%
+    Joint 9: 99.53%
+    Joint 10: 99.53%
+    Joint 11: 99.03%
+    Joint 12: 99.10%
+
+Per-Joint Volume [m^3]:
+    Joint 0: 0.0994
+    Joint 1: 0.0970
+    Joint 2: 0.0967
+    Joint 3: 0.2536
+    Joint 4: 0.2407
+    Joint 5: 0.8245
+    Joint 6: 0.7821
+    Joint 7: 0.0790
+    Joint 8: 0.0751
+    Joint 9: 0.0764
+    Joint 10: 0.0669
+    Joint 11: 0.1171
+    Joint 12: 0.1010
+====================================
+SARA Coverage Stats
+====================================
+SARA simple velocity model coverage stats:
+Overall coverage within set: 99.39%
+Mean volume = 0.5008 m^3
+
+Per-Time Coverage Stats:
+    Frame 0: 99.39%
+    Frame 1: 99.35%
+    Frame 2: 99.33%
+    Frame 3: 99.33%
+    Frame 4: 99.32%
+    Frame 5: 99.34%
+    Frame 6: 99.40%
+    Frame 7: 99.43%
+    Frame 8: 99.49%
+    Frame 9: 99.51%
+
+Per-Time Volume [m^3]:
+    Frame 0: 0.0681
+    Frame 1: 0.1208
+    Frame 2: 0.1954
+    Frame 3: 0.2958
+    Frame 4: 0.4257
+    Frame 5: 0.5890
+    Frame 6: 0.7894
+    Frame 7: 1.0309
+    Frame 8: 1.3171
+    Frame 9: 1.6519
+
+Per-Joint Coverage Stats:
+    Joint 0: 99.85%
+    Joint 1: 99.63%
+    Joint 2: 99.81%
+    Joint 3: 99.35%
+    Joint 4: 99.44%
+    Joint 5: 96.98%
+    Joint 6: 98.21%
+    Joint 7: 99.89%
+    Joint 8: 99.86%
+    Joint 9: 99.87%
+    Joint 10: 99.86%
+    Joint 11: 99.66%
+    Joint 12: 99.63%
+
+Per-Joint Volume [m^3]:
+    Joint 0: 0.5008
+    Joint 1: 0.5008
+    Joint 2: 0.5008
+    Joint 3: 0.5008
+    Joint 4: 0.5008
+    Joint 5: 0.5008
+    Joint 6: 0.5008
+    Joint 7: 0.5008
+    Joint 8: 0.5008
+    Joint 9: 0.5008
+    Joint 10: 0.5008
+    Joint 11: 0.5008
+    Joint 12: 0.5008
+
+### RGB-D YOLO Results Ellipsoid to Sphere Approach

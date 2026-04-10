@@ -49,8 +49,6 @@ def main():
     # parser.add_argument('--action', type=str, default='WalkingDog', help='Action to visualize')
     # parser.add_argument('--camera_ids', type=str, nargs=2, default=['55011271', '60457274'], help='Camera IDs')
     # parser.add_argument('--max_frames', type=int, default=100, help='Maximum number of frames to process')
-    parser.add_argument('--results_dir', type=str, default='results/motion_prediction',
-                        help='Directory to save results (default: results/motion_prediction)')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection on left camera')
     parser.add_argument('--motion_score_fn_path', type=str, default='human_pose_pipeline/models/motion_prediction/final_model_for_ood/dct_pose_transformer_scores_subsample10000_lanczos_seed0_size_HM0of0_LM1440of1600_sketch_srft_seed0_size20000.cloudpickle', help="Path to the OOD score function for the motion prediction.")
     parser.add_argument(
@@ -124,8 +122,9 @@ def main():
     targets = targets.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)
 
     # Save all data
+    os.makedirs(args.output_dir, exist_ok=True)
     results_cloudpickle_file = os.path.join(
-        args.results_dir, f"motion_prediction_results_{args.split}.cloudpickle"
+        args.output_dir, f"motion_prediction_results_{args.split}.cloudpickle"
     )
 
     motion_prediction_results = {

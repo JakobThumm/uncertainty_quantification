@@ -336,7 +336,7 @@ def main():
                         help='Path to the score function pickle file')
     parser.add_argument('--max_samples', type=int, default=640,
                         help='Maximum number of samples to evaluate (default: 640)')
-    parser.add_argument('--results_dir', type=str, default='results/motion_prediction/ID_vs_OOD',
+    parser.add_argument('--output_dir', type=str, default='results/motion_prediction/ID_vs_OOD',
                         help='Directory to save results (default: results/motion_prediction/ID_vs_OOD)')
     args = parser.parse_args()
 
@@ -448,11 +448,11 @@ def main():
         print(f"AUPRC: {detection_metrics['auprc']:.4f}")
 
         # Save results to JSON file
-        os.makedirs(args.results_dir, exist_ok=True)
+        os.makedirs(args.output_dir, exist_ok=True)
 
         # Extract score function name from path for filename
         score_fn_name = os.path.basename(score_functions_path).replace('.cloudpickle', '')
-        results_file = os.path.join(args.results_dir, f"{score_fn_name}_results.json")
+        results_file = os.path.join(args.output_dir, f"{score_fn_name}_results.json")
 
         results_to_save = {
             'score_function': score_functions_path,
@@ -477,7 +477,7 @@ def main():
 
         # Save OOD scores in cloudpickle format for plotting
         scores_cloudpickle_file = os.path.join(
-            args.results_dir, f"{score_fn_name}_ood_scores.cloudpickle"
+            args.output_dir, f"{score_fn_name}_ood_scores.cloudpickle"
         )
 
         scores_for_plotting = {
@@ -504,13 +504,13 @@ def main():
         print("=" * 80)
         create_comparison_visualization(
             id_results, ood_results,
-            save_path=os.path.join(args.results_dir, "id_vs_ood_motion_comparison.png")
+            save_path=os.path.join(args.output_dir, "id_vs_ood_motion_comparison.png")
         )
 
         # Visualize sample predictions
         visualize_sample_predictions(
             id_results, ood_results,
-            output_dir=os.path.join(args.results_dir, "sample_predictions")
+            output_dir=os.path.join(args.output_dir, "sample_predictions")
         )
 
         # Summary

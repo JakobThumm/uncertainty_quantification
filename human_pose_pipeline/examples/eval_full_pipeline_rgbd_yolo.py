@@ -420,9 +420,9 @@ def main():
         cov_matrices=motions_cov_predicted_np
     )
     print_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
-    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors)
+    save_mpjpe_results(mpjpe, per_time_errors, per_joint_errors, output_dir=args.output_dir)
     print_coverage_stats(coverage_stats)
-    save_coverage_stats(coverage_stats)
+    save_coverage_stats(coverage_stats, output_dir=args.output_dir)
 
     coverage_stats_predictions, _ = simple_coverage_stats_sara(
         predictions=motions_predicted_np,
