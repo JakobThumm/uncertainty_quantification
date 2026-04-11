@@ -185,7 +185,7 @@ def main():
     print("================================")
     predictions = np.array(predictions)
     targets = np.array(targets)
-    last_input_poses = np.array(last_input_poses)
+    last_input_poses = np.array(last_input_poses)[..., :N_JOINTS * 3].reshape(-1, N_JOINTS, 3)
     # Increase covariance for certain times and joints
     covariance_matrices_calibrated = calibrate_covariance_matrices(
         covariance_matrices=covariance_matrices,
@@ -200,7 +200,7 @@ def main():
     )
     print_coverage_stats(coverage_stats_calibrated)
     radius_conformal_prediction_sets = convert_covariance_matrices_to_set(
-        np.array(covariance_matrices), likelihood=SET_LIKELIHOOD
+        np.array(covariance_matrices_calibrated), likelihood=SET_LIKELIHOOD
     )
     coverage_stats_conformal_prediction_sets, _ = simple_coverage_stats_sara(
         predictions=predictions,
