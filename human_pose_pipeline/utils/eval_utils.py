@@ -429,6 +429,48 @@ def simple_coverage_stats_sara(
     return coverage_stats, within_set
 
 
+def save_coverage_stats_sara(
+    coverage_stats,
+    filename,
+    output_dir="results/motion_prediction"
+):
+    """Save spherical reachable set coverage statistics to CSV files.
+
+    Args:
+        coverage_stats: Dictionary with keys:
+            - 'overall_within_set': scalar coverage
+            - 'per_frame_within_set': per-frame coverage, shape [T]
+            - 'per_joint_within_set': per-joint coverage, shape [J]
+            - 'overall_volume': scalar mean sphere volume in m^3
+            - 'per_frame_volume': per-frame mean volume, shape [T]
+            - 'per_joint_volume': per-joint mean volume, shape [J]
+        filename: Base filename (without extension, e.g. 'sara_coverage_predictions_test')
+        output_dir: Output directory for CSV files
+    """
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    output_file = os.path.join(output_dir, f"{filename}.csv")
+    with open(output_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['metric', 'value'])
+        writer.writerow(['overall_coverage_percent', f'{coverage_stats["overall_within_set"] * 100:.2f}'])
+        writer.writerow(['overall_volume_m3', f'{coverage_stats["overall_volume"]:.6f}'])
+
+        per_frame_within = coverage_stats["per_frame_within_set"]
+        per_frame_volume = coverage_stats["per_frame_volume"]
+        for i in range(len(per_frame_within)):
+            writer.writerow([f'frame_{i + 1}_coverage_percent', f'{per_frame_within[i] * 100:.2f}'])
+            writer.writerow([f'frame_{i + 1}_volume_m3', f'{per_frame_volume[i]:.6f}'])
+
+        per_joint_within = coverage_stats["per_joint_within_set"]
+        per_joint_volume = coverage_stats["per_joint_volume"]
+        for i in range(len(per_joint_within)):
+            writer.writerow([f'joint_{i + 1}_coverage_percent', f'{per_joint_within[i] * 100:.2f}'])
+            writer.writerow([f'joint_{i + 1}_volume_m3', f'{per_joint_volume[i]:.6f}'])
+
+    print(f"Saved SARA coverage results to {output_file}")
+
+
 def print_simple_coverage_stats_sara(
     coverage_stats,
     print_per_time_stats=True,

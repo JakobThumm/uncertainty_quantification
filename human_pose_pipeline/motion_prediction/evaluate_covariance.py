@@ -8,7 +8,7 @@ from scipy.stats import chi2
 from pathlib import Path
 
 from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
-from human_pose_pipeline.utils.eval_utils import compute_sara_predictions, convert_covariance_matrices_to_set, evaluate_uncertainty_coverage_with_covariance, print_coverage_stats, print_simple_coverage_stats_sara, simple_coverage_stats_sara
+from human_pose_pipeline.utils.eval_utils import compute_sara_predictions, convert_covariance_matrices_to_set, evaluate_uncertainty_coverage_with_covariance, print_coverage_stats, print_simple_coverage_stats_sara, save_coverage_stats_sara, simple_coverage_stats_sara
 
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -143,6 +143,7 @@ def main():
     )
     print(f"Predicted spherical reachable set coverage stats for {SET_LIKELIHOOD} likelihood:")
     print_simple_coverage_stats_sara(coverage_stats_predictions)
+    save_coverage_stats_sara(coverage_stats_predictions, filename="sara_coverage_predictions", output_dir=output_dir)
 
     print("====================================")
     print("SARA Coverage Stats")
@@ -165,6 +166,7 @@ def main():
     )
     print("SARA simple velocity model coverage stats:")
     print_simple_coverage_stats_sara(coverage_stats_sara)
+    save_coverage_stats_sara(coverage_stats_sara, filename="sara_coverage_sara", output_dir=output_dir)
 
     # Plot predicted uncertainty increase over frame for each joint
     plt.figure(figsize=(12, 8))

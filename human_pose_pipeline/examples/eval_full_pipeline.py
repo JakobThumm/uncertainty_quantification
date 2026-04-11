@@ -28,6 +28,7 @@ from human_pose_pipeline.utils.eval_utils import (
     print_mpjpe_results,
     print_simple_coverage_stats_sara,
     save_coverage_stats,
+    save_coverage_stats_sara,
     save_mpjpe_results,
     simple_coverage_stats_sara
 )
@@ -446,6 +447,7 @@ def main():
     )
     print(f"Predicted spherical reachable set coverage stats for {SET_LIKELIHOOD} likelihood:")
     print_simple_coverage_stats_sara(coverage_stats_predictions)
+    save_coverage_stats_sara(coverage_stats_predictions, filename=f"sara_coverage_predictions_{split}", output_dir=motion_output_dir)
 
     print("================================")
     print("Evaluating motion SARA uncertainty.")
@@ -467,6 +469,7 @@ def main():
     )
     print("SARA simple velocity model coverage stats:")
     print_simple_coverage_stats_sara(coverage_stats_sara)
+    save_coverage_stats_sara(coverage_stats_sara, filename=f"sara_coverage_sara_{split}", output_dir=motion_output_dir)
 
     # Save OOD score histograms
     if args.enable_ood:
