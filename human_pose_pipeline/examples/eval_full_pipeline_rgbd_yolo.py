@@ -27,10 +27,14 @@ from human_pose_pipeline.utils.eval_utils import (
     evaluate_uncertainty_coverage_with_covariance,
     print_coverage_stats,
     print_mpjpe_results,
+    print_motion_validity_stats,
+    print_ood_score_percentiles,
     print_simple_coverage_stats_sara,
     save_coverage_stats,
     save_coverage_stats_sara,
+    save_motion_validity_stats,
     save_mpjpe_results,
+    save_ood_score_percentiles,
     simple_coverage_stats_sara
 )
 from src.datasets.h36m import SPLIT, Human36mDatasetTwoCameras
@@ -92,6 +96,7 @@ def main():
     parser.add_argument('--depth_uncertainty', type=float, default=0.002,
                         help='Assumed depth std-dev in metres for uncertainty propagation')
     parser.add_argument('--output_dir', type=str, default='results/eval_full_pipeline_rgbd_yolo', help='Output directory for results')
+    parser.add_argument('--n_correct_poses_required', type=int, default=N_CORRECT_POSES_REQUIRED, help='Number of correct poses required in the buffer before predicting motion')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use (cuda or cpu)')
 
     args = parser.parse_args()
@@ -283,7 +288,7 @@ def main():
                     calibration_ct=COV_CALIBRATION_CT,
                     calibration_it=COV_CALIBRATION_IT,
                     calibration_factors=COV_CALIBRATION_FACTORS,
-                    n_correct_poses_required=N_CORRECT_POSES_REQUIRED,
+                    n_correct_poses_required=args.n_correct_poses_required,
                     set_likelihood=SET_LIKELIHOOD,
                 )
             motions_cov_predicted_uncalibrated.append(motion_cov_uncalibrated)
@@ -472,6 +477,16 @@ def main():
         xlabel='OOD Score',
         save_path=os.path.join(args.output_dir, 'ood_histogram_motion_prediction.png'),
     )
+
+    # OOD score percentiles
+    print_ood_score_percentiles(motions_ood_scores, label="motion prediction OOD scores")
+    save_ood_score_percentiles(
+        motions_ood_scores,
+        label="motion_ood_scores",
+        output_dir=args.output_dir,
+    )
+    print_motion_validity_stats(motions_is_valid, motions_is_ood, pose_buffers_good)
+    save_motion_validity_stats(motions_is_valid, motions_is_ood, pose_buffers_good, output_dir=args.output_dir)
 
 
 if __name__ == "__main__":

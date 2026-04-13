@@ -527,3 +527,141 @@ def convert_covariance_matrices_to_set(
         radius = np.sqrt(lambda_max * chi_squared_val)
 
     return radius
+
+
+OOD_SCORE_PERCENTILES = [0.01, 0.1, 0.5, 1, 3, 5, 10, 25, 50, 75, 90, 95, 97, 99, 99.5, 99.9, 99.99]
+
+
+def print_ood_score_percentiles(scores: np.ndarray, label: str = "OOD scores") -> None:
+    """Print percentiles of OOD scores.
+
+    Args:
+        scores: 1-D array of OOD scores.
+        label: Description printed in the header.
+    """
+    scores = np.asarray(scores).ravel()
+    print(f"OOD score percentiles — {label} (n={len(scores)}):")
+    for p in OOD_SCORE_PERCENTILES:
+        print(f"  p{p:6.2f}: {np.percentile(scores, p):.6f}")
+
+
+def save_ood_score_percentiles(
+    scores: np.ndarray,
+    label: str = "ood_scores",
+    output_dir: str = "results",
+) -> None:
+    """Save percentiles of OOD scores to a CSV file.
+
+    Args:
+        scores: 1-D array of OOD scores.
+        label: Used as the filename stem (spaces replaced with underscores).
+        output_dir: Directory in which to write the CSV.
+    """
+    scores = np.asarray(scores).ravel()
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    filename = label.replace(" ", "_") + "_percentiles.csv"
+    filepath = os.path.join(output_dir, filename)
+    with open(filepath, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["percentile", "value"])
+        for p in OOD_SCORE_PERCENTILES:
+            writer.writerow([p, f"{np.percentile(scores, p):.6f}"])
+    print(f"Saved OOD score percentiles to {filepath}")
+
+
+def print_motion_validity_stats(
+    motions_is_valid: np.ndarray,
+    motions_is_ood: np.ndarray,
+    pose_buffers_good: np.ndarray,
+) -> None:
+    """Print motion prediction validity, OOD rate, and pose buffer statistics.
+
+    Args:
+        motions_is_valid: Boolean array, one entry per attempted motion prediction.
+        motions_is_ood: Boolean array, one entry per attempted motion prediction.
+        pose_buffers_good: Boolean array, one entry per processed frame.
+            Frames where pose_buffer_good=False produced no motion output at all.
+    """
+    motions_is_valid = np.asarray(motions_is_valid)
+    motions_is_ood = np.asarray(motions_is_ood)
+    pose_buffers_good = np.asarray(pose_buffers_good)
+
+    n_pose_good = int(np.sum(pose_buffers_good))
+    n_pose_bad = len(pose_buffers_good) - n_pose_good
+    n_invalid = int(np.sum(~motions_is_valid))
+    n_no_output = n_pose_bad + n_invalid
+
+    print(f"Motion validity rate:  {np.mean(motions_is_valid):.4f} "
+          f"({int(np.sum(motions_is_valid))}/{len(motions_is_valid)})")
+    print(f"Motion OOD rate:       {np.mean(motions_is_ood):.4f} "
+          f"({int(np.sum(motions_is_ood))}/{len(motions_is_ood)})")
+    print(f"Pose buffer good/bad:  {n_pose_good}/{n_pose_bad} "
+          f"(ratio good/all = {n_pose_good / len(pose_buffers_good):.4f})")
+    print(f"No motion output:      {n_no_output} "
+          f"(bad pose buffer: {n_pose_bad}, invalid motion: {n_invalid})")
+
+
+def save_motion_validity_stats(
+    motions_is_valid: np.ndarray,
+    motions_is_ood: np.ndarray,
+    pose_buffers_good: np.ndarray,
+    output_dir: str = "results",
+) -> None:
+    """Save motion prediction validity, OOD rate, and pose buffer statistics to CSV.
+
+    Args:
+        motions_is_valid: Boolean array, one entry per attempted motion prediction.
+        motions_is_ood: Boolean array, one entry per attempted motion prediction.
+        pose_buffers_good: Boolean array, one entry per processed frame.
+        output_dir: Directory in which to write the CSV.
+    """
+    motions_is_valid = np.asarray(motions_is_valid)
+    motions_is_ood = np.asarray(motions_is_ood)
+    pose_buffers_good = np.asarray(pose_buffers_good)
+
+    n_pose_good = int(np.sum(pose_buffers_good))
+    n_pose_bad = len(pose_buffers_good) - n_pose_good
+    n_invalid = int(np.sum(~motions_is_valid))
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    filepath = os.path.join(output_dir, "motion_validity_stats.csv")
+    with open(filepath, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["metric", "rate", "count", "total"])
+        writer.writerow([
+            "validity_rate",
+            f"{np.mean(motions_is_valid):.6f}",
+            int(np.sum(motions_is_valid)),
+            len(motions_is_valid),
+        ])
+        writer.writerow([
+            "ood_rate",
+            f"{np.mean(motions_is_ood):.6f}",
+            int(np.sum(motions_is_ood)),
+            len(motions_is_ood),
+        ])
+        writer.writerow([
+            "pose_buffer_good_rate",
+            f"{n_pose_good / len(pose_buffers_good):.6f}",
+            n_pose_good,
+            len(pose_buffers_good),
+        ])
+        writer.writerow([
+            "no_motion_output_bad_pose_buffer",
+            "",
+            n_pose_bad,
+            len(pose_buffers_good),
+        ])
+        writer.writerow([
+            "no_motion_output_invalid_motion",
+            "",
+            n_invalid,
+            len(motions_is_valid),
+        ])
+        writer.writerow([
+            "no_motion_output_total",
+            "",
+            n_pose_bad + n_invalid,
+            len(pose_buffers_good),
+        ])
+    print(f"Saved motion validity stats to {filepath}")

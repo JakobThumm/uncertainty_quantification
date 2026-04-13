@@ -14,6 +14,7 @@ Based on pose_estimation_2D.py but adapted for comparative evaluation.
 """
 
 import os
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -25,6 +26,7 @@ from human_pose_pipeline.utils.gpu_accelerated_utils import extract_bounding_box
 from human_pose_pipeline.utils.transform_utils import preprocess_image_with_bbox, transform_predictions_to_original_space
 from src.datasets.h36m import Human36mDatasetSequence
 from src.datasets.tiger_pose import TigerPoseDataset, tiger_pose_to_h36m_format
+from src.ood_scores.lm_lanczos import load_score_functions
 from human_pose_pipeline.pose_estimation.inference_helper import (
     initialize_jax_models,
     initialize_human_detector,
@@ -36,10 +38,16 @@ from human_pose_pipeline.evaluation.pose_metrics import (
     pck_jax,
     mpjpe_jax
 )
+from human_pose_pipeline.utils.visualization import plot_ood_score_histogram
+from human_pose_pipeline.utils.eval_utils import (
+    print_ood_score_percentiles,
+    save_ood_score_percentiles,
+)
 from human_pose_pipeline.pose_estimation.h36m_settings import (
     MIRROR_13_JOINT_MODEL_MAP,
     YOLO_CONFIDENCE_THRESHOLD,
-    YOLO_IMAGE_SIZE
+    YOLO_IMAGE_SIZE,
+    OOD_THRESHOLD as POSE_OOD_THRESHOLD,
 )
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -292,7 +300,8 @@ def evaluate_pose_prediction_accuracy(predictions, ground_truth, valid_mask, thr
 
 
 def predict_poses_on_h36m_dataset(pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
-                                  dataset, dataset_name, max_samples=None):
+                                  dataset, dataset_name, max_samples=None,
+                                  score_fn=None, ood_threshold=POSE_OOD_THRESHOLD):
     """
     Run pose prediction on H36M dataset using the same approach as pose_estimation_2D.py.
     """
@@ -302,6 +311,7 @@ def predict_poses_on_h36m_dataset(pose_estimation_jit_fn, params, batch_stats, h
     all_ground_truth = []
     all_valid_masks = []
     all_image_paths = []
+    all_ood_scores = []
     successful_predictions = 0
     total_samples = 0
 
@@ -334,11 +344,14 @@ def predict_poses_on_h36m_dataset(pose_estimation_jit_fn, params, batch_stats, h
                 human_detector=human_detector,
                 device_torch=device_torch,
                 mirror_map=MIRROR_13_JOINT_MODEL_MAP,
-                score_fn=None,  # No OOD scoring for now
+                score_fn=score_fn,
+                ood_threshold=ood_threshold,
                 human_detection_threshold=YOLO_CONFIDENCE_THRESHOLD
             )
             # Take the first detected person
             mapped_pose = pose_predictions[0]['keypoints']
+            ood_score = pose_predictions[0]['ood_score'] if pose_predictions else 0.0
+            all_ood_scores.append(float(ood_score))
 
             all_predictions.append(mapped_pose)
 
@@ -392,6 +405,7 @@ def predict_poses_on_h36m_dataset(pose_estimation_jit_fn, params, batch_stats, h
         'ground_truth': all_ground_truth,
         'valid_masks': all_valid_masks,
         'image_paths': all_image_paths,
+        'ood_scores': np.array(all_ood_scores),
         'metrics': metrics,
         'detection_rate': successful_predictions / total_samples,
         'dataset_name': dataset_name,
@@ -400,7 +414,8 @@ def predict_poses_on_h36m_dataset(pose_estimation_jit_fn, params, batch_stats, h
 
 
 def predict_poses_on_tiger_dataset(pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
-                                  processed_batches, dataset_name, max_batches=None):
+                                  processed_batches, dataset_name, max_batches=None,
+                                  score_fn=None, ood_threshold=POSE_OOD_THRESHOLD):
     """
     Run pose prediction on tiger dataset using processed batches.
     """
@@ -410,6 +425,7 @@ def predict_poses_on_tiger_dataset(pose_estimation_jit_fn, params, batch_stats, 
     all_ground_truth = []
     all_valid_masks = []
     all_image_paths = []
+    all_ood_scores = []
     successful_predictions = 0
     total_samples = 0
 
@@ -459,16 +475,24 @@ def predict_poses_on_tiger_dataset(pose_estimation_jit_fn, params, batch_stats, 
             )
             bounding_box_image, _, center, scale, trans, processed_bbox = preprocess_image_with_bbox(resized_image_np, person_boxes[0])
             pred_joints_13, uncertainties_13, covariance_13 = predict_pose(bounding_box_image, pose_estimation_jit_fn, params, batch_stats)
+            if score_fn is not None:
+                ood_score = score_fn(bounding_box_image)
+                ood_score = float(np.asarray(ood_score).ravel()[0])
+            else:
+                ood_score = 0.0
+            all_ood_scores.append(ood_score)
+            # predict_pose returns batched tensors (1, 13, 2) — convert to numpy and squeeze batch dim
+            pred_joints_13_np = pred_joints_13.detach().cpu().numpy()[0]  # (13, 2)
+            uncertainties_13_np = uncertainties_13.detach().cpu().numpy()[0] if uncertainties_13 is not None else None  # (13, 2)
+            covariance_13_np = covariance_13.detach().cpu().numpy()[0] if covariance_13 is not None else None  # (13,)
             result = transform_predictions_to_original_space(
-                pred_joints_13, trans, scale[0], scale[1],
-                uncertainties=uncertainties_13,
-                covariance=covariance_13
+                pred_joints_13_np, trans, scale[0], scale[1],
+                uncertainties=uncertainties_13_np,
+                covariance=covariance_13_np
             )
-            pred_joints_13 = result['keypoints'].tolist()
-
-            first_pose = np.array(pred_joints_13[0])
-            first_uncertainty = np.array(result['uncertainties'][0])
-            first_covariance = np.array(result['covariance'][0])
+            first_pose = result['keypoints']  # (13, 2)
+            first_uncertainty = result['uncertainties']  # (13, 2)
+            first_covariance = result['covariance']  # (13,)
             # Apply mirror mapping to correct left/right joint swapping
             mapped_pose = joint_mapping(first_pose, MIRROR_13_JOINT_MODEL_MAP)
             mapped_uncertainty = joint_mapping(first_uncertainty, MIRROR_13_JOINT_MODEL_MAP)
@@ -522,6 +546,7 @@ def predict_poses_on_tiger_dataset(pose_estimation_jit_fn, params, batch_stats, 
         'ground_truth': all_ground_truth,
         'valid_masks': all_valid_masks,
         'image_paths': all_image_paths,
+        'ood_scores': np.array(all_ood_scores),
         'metrics': metrics,
         'detection_rate': successful_predictions / total_samples,
         'dataset_name': dataset_name,
@@ -604,6 +629,15 @@ def create_comparison_visualization(h36m_results, tiger_results, save_path="id_v
 
 def main():
     """Main function for ID vs OOD pose prediction comparison."""
+    parser = argparse.ArgumentParser(description='ID vs OOD Pose Prediction Comparison')
+    parser.add_argument('--cache_dir', type=str, default='cache/', help='Cache directory with score functions')
+    parser.add_argument('--pose_model_save_path', type=str, default='human_pose_pipeline/models/pose_estimation', help='Path to saved pose model')
+    parser.add_argument('--pose_run_name', type=str, default='jax_resnet50_regressflow', help='Pose model run name')
+    parser.add_argument('--pose_base_key', type=str, default='H36M_RegressFlowResNet18_3Joints_n9000_4998731f', help='Cache key for OOD score functions')
+    parser.add_argument('--output_dir', type=str, default='results/id_vs_ood_pose_prediction', help='Output directory for results')
+    parser.add_argument('--max_samples', type=int, default=10000000000, help='Maximum samples to process per dataset')
+    args = parser.parse_args()
+
     print("=" * 60)
     print("ID vs OOD Pose Prediction Comparison")
     print("=" * 60)
@@ -612,15 +646,22 @@ def main():
         # Initialize models
         print("Initializing models...")
 
-        # Use uncertainty-enabled model
-        models_dir = os.path.join(root_dir, "human_pose_pipeline/models/pose_estimation", "H36M", "RegressFlow", "seed_420")
-        checkpoint_path_jax = os.path.join(models_dir, "finetuned_h36m_regressflow_with_unc")
+        models_dir = os.path.join(root_dir, args.pose_model_save_path, "H36M", "RegressFlow", "seed_420")
+        checkpoint_path_jax = os.path.join(models_dir, args.pose_run_name)
         pose_estimation_jit_fn, params, batch_stats = initialize_jax_models(checkpoint_path_jax)
         print("JAX RegressFlow model with uncertainty loaded successfully!")
 
         # Initialize YOLO human detector
         human_detector, device_torch = initialize_human_detector('cuda')
         print("YOLO human detector initialized!")
+
+        # Load OOD score function
+        print("\nLoading OOD score function...")
+        pose_ood_score_fn = None
+        if args.pose_base_key is not None:
+            pose_ood_score_fn, _, _, _ = load_score_functions(args.cache_dir, args.pose_base_key)
+            print(f"OOD score function loaded (key: {args.pose_base_key})")
+            print(f"Using OOD threshold: {POSE_OOD_THRESHOLD:.6f}")
 
         # Setup datasets
         print("\\nSetting up datasets...")
@@ -666,21 +707,26 @@ def main():
         processed_tiger_dataloader = ProcessedDataset(processed_tiger_batches)
 
         # Run predictions on both datasets
-        max_samples = 20  # Limit for quick testing
-
         h36m_results = predict_poses_on_h36m_dataset(
             pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
-            h36m_dataset, "H36M", max_samples=max_samples
+            h36m_dataset, "H36M", max_samples=args.max_samples,
+            score_fn=pose_ood_score_fn, ood_threshold=POSE_OOD_THRESHOLD,
         )
 
         tiger_results = predict_poses_on_tiger_dataset(
             pose_estimation_jit_fn, params, batch_stats, human_detector, device_torch,
-            processed_tiger_batches, "Tiger", max_batches=3
+            processed_tiger_batches, "Tiger", max_batches=3,
+            score_fn=pose_ood_score_fn, ood_threshold=POSE_OOD_THRESHOLD,
         )
+
+        os.makedirs(args.output_dir, exist_ok=True)
 
         # Create comparison visualization
         print("\\nCreating comparison visualization...")
-        create_comparison_visualization(h36m_results, tiger_results)
+        create_comparison_visualization(
+            h36m_results, tiger_results,
+            save_path=os.path.join(args.output_dir, "id_vs_ood_comparison.png")
+        )
 
         # Summary
         print("\\n" + "=" * 60)
@@ -717,7 +763,7 @@ def main():
                 ground_truth_pose=h36m_sample['ground_truth'],
                 valid_mask=h36m_sample['valid_mask'],
                 title=f"H36M (ID) - First Sample\\nPredicted vs Ground Truth Pose",
-                save_path="h36m_first_sample_pose_comparison.png",
+                save_path=os.path.join(args.output_dir, "h36m_first_sample_pose_comparison.png"),
                 use_tiger_connections=False
             )
 
@@ -729,9 +775,40 @@ def main():
                 ground_truth_pose=tiger_sample['ground_truth'],
                 valid_mask=tiger_sample['valid_mask'],
                 title=f"Tiger (OOD) - First Sample\\nPredicted vs Ground Truth Pose",
-                save_path="tiger_first_sample_pose_comparison.png",
+                save_path=os.path.join(args.output_dir, "tiger_first_sample_pose_comparison.png"),
                 use_tiger_connections=True
             )
+
+        # Plot OOD score histograms for ID vs OOD datasets
+        print("\\nPlotting OOD score distributions...")
+        plot_ood_score_histogram(
+            scores=h36m_results['ood_scores'],
+            threshold=POSE_OOD_THRESHOLD,
+            title='2D Pose Prediction OOD Score Distribution - H36M (ID)',
+            xlabel='OOD Score',
+            save_path=os.path.join(args.output_dir, 'ood_histogram_h36m.png'),
+        )
+        plot_ood_score_histogram(
+            scores=tiger_results['ood_scores'],
+            threshold=POSE_OOD_THRESHOLD,
+            title='2D Pose Prediction OOD Score Distribution - Tiger (OOD)',
+            xlabel='OOD Score',
+            save_path=os.path.join(args.output_dir, 'ood_histogram_tiger.png'),
+        )
+
+        # OOD score percentiles
+        print_ood_score_percentiles(h36m_results['ood_scores'], label="H36M (ID) pose OOD scores")
+        save_ood_score_percentiles(
+            h36m_results['ood_scores'],
+            label="ood_scores_h36m",
+            output_dir=args.output_dir,
+        )
+        print_ood_score_percentiles(tiger_results['ood_scores'], label="Tiger (OOD) pose OOD scores")
+        save_ood_score_percentiles(
+            tiger_results['ood_scores'],
+            label="ood_scores_tiger",
+            output_dir=args.output_dir,
+        )
 
         print("\\nThis performance gap demonstrates the need for OOD detection!")
         print("Next step: Use sketching Lanczos to detect OOD samples.")

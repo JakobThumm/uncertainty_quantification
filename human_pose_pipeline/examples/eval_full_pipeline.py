@@ -9,7 +9,6 @@ Performs:
 """
 
 import os
-import sys
 import argparse
 import numpy as np
 import torch
@@ -17,19 +16,22 @@ from tqdm import tqdm
 import cloudpickle
 import jax.numpy as jnp
 
-from human_pose_pipeline.motion_prediction.inference_helper import calibrate_covariance_matrices
+from human_pose_pipeline.motion_prediction.inference_helper import run_motion_prediction
 from human_pose_pipeline.utils.visualization import plot_ood_score_histogram
 from human_pose_pipeline.utils.eval_utils import (
     compute_sara_predictions,
-    convert_covariance_matrices_to_set,
     evaluate_pose_prediction_scores_np,
     evaluate_uncertainty_coverage_with_covariance,
     print_coverage_stats,
     print_mpjpe_results,
+    print_motion_validity_stats,
+    print_ood_score_percentiles,
     print_simple_coverage_stats_sara,
     save_coverage_stats,
     save_coverage_stats_sara,
+    save_motion_validity_stats,
     save_mpjpe_results,
+    save_ood_score_percentiles,
     simple_coverage_stats_sara
 )
 from src.datasets.h36m import SPLIT, Human36mDatasetTwoCameras
@@ -41,7 +43,6 @@ from human_pose_pipeline.pose_estimation.inference_helper import (
 from human_pose_pipeline.pose_estimation.inference_helper_batched import (
     process_frame_3d,
     fill_pose_buffer,
-    update_motion_prediction_buffer
 )
 from human_pose_pipeline.pose_estimation.triangulation_helper import (
     load_camera_parameters
@@ -89,6 +90,7 @@ def main():
     parser.add_argument('--max_sequences', type=int, default=10000000000, help='Maximum number of sequences to process')
     parser.add_argument('--enable_ood', action='store_true', help='Enable OOD detection')
     parser.add_argument('--output_dir', type=str, default='results/eval_full_pipeline', help='Output directory for results')
+    parser.add_argument('--n_correct_poses_required', type=int, default=N_CORRECT_POSES_REQUIRED, help='Number of correct poses required in the buffer before predicting motion')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use (cuda or cpu)')
 
     args = parser.parse_args()
@@ -180,6 +182,8 @@ def main():
     motions_ood_scores = []
     motions_is_ood = []
     motions_is_valid = []
+    motions_cov_predicted_uncalibrated = []
+    last_poses = []
     pose_buffers_good = []
     n_sequences = min(len(dataset), args.max_sequences)
     if eval_action is not None:
@@ -269,71 +273,44 @@ def main():
 
             # If enough datapoints, predict motion
             if frame_counter >= INPUT_HORIZON_LENGTH - 1 and pose_buffer_good:
-                pose_input = points_3d_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3])
-                motion_prediction_input = jnp.concatenate([
-                    pose_input,
-                    covariance_buffer.reshape([1, INPUT_HORIZON_LENGTH, N_JOINTS * 3 * 3])
-                ], axis=-1)
-                # Model inference
-                if motion_prediction_batch_stats is not None:
-                    motion_predicted, (motion_cov_predicted, L) = motion_prediction_jit_fn(
-                        motion_prediction_params,
-                        motion_prediction_batch_stats,
-                        motion_prediction_input
+                motion_prediction_buffer, motion_uncertainty_buffer, motion_prediction_set_radius, \
+                    motion_ood_score, motion_is_ood, valid_motion, \
+                    motion_predicted, motion_cov_calibrated, motion_cov_uncalibrated = run_motion_prediction(
+                        points_3d_buffer=points_3d_buffer,
+                        covariance_buffer=covariance_buffer,
+                        pose_valid_buffer=pose_valid_buffer,
+                        motion_prediction_buffer=motion_prediction_buffer,
+                        motion_uncertainty_buffer=motion_uncertainty_buffer,
+                        motion_prediction_jit_fn=motion_prediction_jit_fn,
+                        motion_prediction_params=motion_prediction_params,
+                        motion_prediction_batch_stats=motion_prediction_batch_stats,
+                        motion_ood_score_fn=motion_ood_score_fn,
+                        n_joints=N_JOINTS,
+                        input_horizon_length=INPUT_HORIZON_LENGTH,
+                        prediction_horizon_length=PREDICTION_HORIZON_LENGTH,
+                        ood_threshold=MOTION_OOD_THRESHOLD,
+                        calibration_ct=COV_CALIBRATION_CT,
+                        calibration_it=COV_CALIBRATION_IT,
+                        calibration_factors=COV_CALIBRATION_FACTORS,
+                        n_correct_poses_required=args.n_correct_poses_required,
+                        set_likelihood=SET_LIKELIHOOD,
                     )
-                else:
-                    motion_predicted, (motion_cov_predicted, L) = motion_prediction_jit_fn(
-                        motion_prediction_params,
-                        motion_prediction_input
-                    )
-                if motion_ood_score_fn is not None:
-                    motion_ood_score = motion_ood_score_fn(pose_input)
-                else:
-                    motion_ood_score = jnp.zeros([1])
-                motion_predicted = motion_predicted.reshape(-1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3)[0]
-                motion_cov_predicted = motion_cov_predicted[0]
-                motion_cov_predicted = calibrate_covariance_matrices(
-                    covariance_matrices=motion_cov_predicted,
-                    constant_time_factor=COV_CALIBRATION_CT,
-                    increase_time_factor=COV_CALIBRATION_IT,
-                    joint_calibration_factors=COV_CALIBRATION_FACTORS
-                )
-                if isinstance(motion_cov_predicted, np.ndarray):
-                    motion_cov_predicted = jnp.array(motion_cov_predicted)
-                motion_is_ood = bool(motion_ood_score > MOTION_OOD_THRESHOLD)
-                # Update motion prediction buffer
-                motion_prediction_buffer, motion_uncertainty_buffer, valid_motion = update_motion_prediction_buffer(
-                    motion_prediction_buffer=motion_prediction_buffer,
-                    motion_uncertainty_buffer=motion_uncertainty_buffer,
-                    predicted_motion=motion_predicted,
-                    predicted_motion_uncertainty=motion_cov_predicted,
-                    is_ood=motion_is_ood,
-                    pose_valid_buffer=pose_valid_buffer,
-                    n_correct_poses_required=N_CORRECT_POSES_REQUIRED
-                )
-                motion_prediction_set_radius = convert_covariance_matrices_to_set(
-                    motion_uncertainty_buffer,
-                    likelihood=SET_LIKELIHOOD
-                )
-                # Store motion predictions
+                motions_cov_predicted_uncalibrated.append(motion_cov_uncalibrated)
+                # Store motion predictions (raw model output, not the buffer)
                 motions_predicted.append(motion_predicted)
-                motions_cov_predicted.append(motion_cov_predicted)
+                motions_cov_predicted.append(motion_cov_calibrated)
                 motions_set_radius.append(motion_prediction_set_radius)
-                # Incorporate subsampling!
-                motions_gt.append(pose_sequence[frame_idx + subsample : frame_idx + subsample * (PREDICTION_HORIZON_LENGTH + 1) : subsample])
                 motions_ood_scores.append(motion_ood_score)
                 motions_is_ood.append(motion_is_ood)
                 motions_is_valid.append(valid_motion)
                 pose_buffers_good.append(pose_buffer_good)
+                last_poses.append(points_3d)
+                # Incorporate subsampling!
+                motions_gt.append(pose_sequence[frame_idx + subsample : frame_idx + subsample * (PREDICTION_HORIZON_LENGTH + 1) : subsample])
             else:
-                motion_predicted = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
-                motion_cov_predicted = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
-                motion_ood_score = jnp.zeros([1])
-                valid_motion = False
-                motion_is_ood = False
+                pose_buffers_good.append(pose_buffer_good)
                 motion_prediction_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3])
                 motion_uncertainty_buffer = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3])
-                motion_prediction_set_radius = jnp.zeros([PREDICTION_HORIZON_LENGTH, N_JOINTS])
 
             frame_counter += 1
 
@@ -348,29 +325,58 @@ def main():
     poses_3d_cov_estimated = torch.stack(poses_3d_cov_estimated, dim=0)
     poses_3d_gt = jnp.stack(poses_3d_gt, axis=0)
     poses_3d_ood_scores = torch.stack(poses_3d_ood_scores, dim=0)
-    motions_predicted = jnp.stack(motions_predicted, axis=0)
-    motions_set_radius = jnp.stack(motions_set_radius, axis=0)
-    motions_cov_predicted = jnp.stack(motions_cov_predicted, axis=0)
-    motions_gt = jnp.array(motions_gt)
-
-    # Move to cpu and numpy
     poses_3d_estimated_np = poses_3d_estimated.cpu().numpy()
     poses_3d_cov_estimated_np = poses_3d_cov_estimated.cpu().numpy()
     poses_3d_gt_np = np.array(poses_3d_gt)
     poses_3d_ood_scores_np = poses_3d_ood_scores.cpu().numpy()
     poses_3d_is_ood = np.array(poses_3d_is_ood)
     poses_3d_human_detected = np.array(poses_3d_human_detected)
-    motions_predicted_np = np.array(motions_predicted)
-    motions_set_radius_np = np.array(motions_set_radius)
-    motions_cov_predicted_np = np.array(motions_cov_predicted)
-    motions_gt_np = np.array(motions_gt)
-    motions_ood_scores = np.array(motions_ood_scores)
-    motions_is_ood = np.array(motions_is_ood)
-    motions_is_valid = np.array(motions_is_valid)
-    pose_buffers_good = np.array(pose_buffers_good)
 
-    # Save raw results to pickle for further analysis
+    if len(motions_predicted) > 0:
+        motions_predicted = jnp.stack(motions_predicted, axis=0)
+        motions_set_radius = jnp.stack(motions_set_radius, axis=0)
+        motions_cov_predicted = jnp.stack(motions_cov_predicted, axis=0)
+        motions_gt = jnp.array(motions_gt)
+        motions_predicted_np = np.array(motions_predicted)
+        motions_set_radius_np = np.array(motions_set_radius)
+        motions_cov_predicted_np = np.array(motions_cov_predicted)
+        motions_gt_np = np.array(motions_gt)
+        last_poses = torch.stack(last_poses, dim=0)
+        last_poses_np = last_poses.cpu().numpy()
+        motions_ood_scores = np.array(motions_ood_scores)
+        motions_is_ood = np.array(motions_is_ood)
+        motions_is_valid = np.array(motions_is_valid)
+        pose_buffers_good = np.array(pose_buffers_good)
+        motions_cov_predicted_uncalibrated_np = np.array(motions_cov_predicted_uncalibrated)
+    else:
+        print("WARNING: No motion predictions were made. Filling with dummy values.")
+        motions_predicted_np = np.zeros((1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3))
+        motions_set_radius_np = np.zeros((1, PREDICTION_HORIZON_LENGTH, N_JOINTS))
+        motions_cov_predicted_np = np.zeros((1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3))
+        motions_gt_np = np.zeros((1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3))
+        last_poses_np = np.zeros((1, N_JOINTS, 3))
+        motions_ood_scores = np.zeros(1)
+        motions_is_ood = np.zeros(1, dtype=bool)
+        motions_is_valid = np.zeros(1, dtype=bool)
+        pose_buffers_good = np.zeros(1, dtype=bool)
+        motions_cov_predicted_uncalibrated_np = np.zeros((1, PREDICTION_HORIZON_LENGTH, N_JOINTS, 3, 3))
+
+    # Save motion prediction results for covariance tuning (same format as motion_prediction.py)
     os.makedirs(args.output_dir, exist_ok=True)
+    results_cloudpickle_file = os.path.join(args.output_dir, "motion_prediction_results.cloudpickle")
+    motion_prediction_results = {
+        'predictions': motions_predicted_np,
+        'targets': motions_gt_np,
+        'covariance_matrices': motions_cov_predicted_uncalibrated_np,
+        'ood_scores': motions_ood_scores,
+        'is_oods': motions_is_ood,
+        'last_input_poses': last_poses_np
+    }
+    with open(results_cloudpickle_file, 'wb') as f:
+        cloudpickle.dump(motion_prediction_results, f)
+    print(f"Saved motion prediction results to {results_cloudpickle_file}")
+
+    # Save all raw results to pickle for further analysis
     results_pickle_file = os.path.join(args.output_dir, "full_pipeline_results.cloudpickle")
     full_pipeline_results = {
         'poses_3d_estimated': poses_3d_estimated_np,
@@ -457,7 +463,7 @@ def main():
 
     # Evaluate SARA-style
     sara_predictions, sara_radius = compute_sara_predictions(
-        last_input_poses=poses_3d_estimated_np[INPUT_HORIZON_LENGTH - 1:, 0, ...],
+        last_input_poses=last_poses_np,
         prediction_horizon_times=prediction_horizon_times,
         v_human=1.6,
         measurement_uncertainty=SARA_MEASUREMENT_UNCERTAINTY
@@ -472,8 +478,8 @@ def main():
     save_coverage_stats_sara(coverage_stats_sara, filename=f"sara_coverage_sara_{split}", output_dir=motion_output_dir)
 
     # Save OOD score histograms
+    os.makedirs(args.output_dir, exist_ok=True)
     if args.enable_ood:
-        os.makedirs(args.output_dir, exist_ok=True)
         plot_ood_score_histogram(
             scores=poses_3d_ood_scores_np,
             threshold=POSE_OOD_THRESHOLD,
@@ -481,13 +487,30 @@ def main():
             xlabel='OOD Score',
             save_path=os.path.join(args.output_dir, 'ood_histogram_pose_prediction.png'),
         )
-        plot_ood_score_histogram(
-            scores=motions_ood_scores,
-            threshold=MOTION_OOD_THRESHOLD,
-            title='Motion Prediction OOD Score Distribution',
-            xlabel='OOD Score',
-            save_path=os.path.join(args.output_dir, 'ood_histogram_motion_prediction.png'),
+    plot_ood_score_histogram(
+        scores=motions_ood_scores,
+        threshold=MOTION_OOD_THRESHOLD,
+        title='Motion Prediction OOD Score Distribution',
+        xlabel='OOD Score',
+        save_path=os.path.join(args.output_dir, 'ood_histogram_motion_prediction.png'),
+    )
+
+    # OOD score percentiles
+    if args.enable_ood:
+        print_ood_score_percentiles(poses_3d_ood_scores_np, label="pose prediction OOD scores")
+        save_ood_score_percentiles(
+            poses_3d_ood_scores_np,
+            label="pose_ood_scores",
+            output_dir=args.output_dir,
         )
+    print_ood_score_percentiles(motions_ood_scores, label="motion prediction OOD scores")
+    save_ood_score_percentiles(
+        motions_ood_scores,
+        label="motion_ood_scores",
+        output_dir=args.output_dir,
+    )
+    print_motion_validity_stats(motions_is_valid, motions_is_ood, pose_buffers_good)
+    save_motion_validity_stats(motions_is_valid, motions_is_ood, pose_buffers_good, output_dir=args.output_dir)
 
 
 if __name__ == "__main__":
