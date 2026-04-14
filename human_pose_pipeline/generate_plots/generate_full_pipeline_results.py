@@ -60,7 +60,7 @@ def generate_table(rows, add_motion_ood):
     min_mpjpe = min(mpjpes) if mpjpes else None
 
     n_cols = 4 + (1 if add_motion_ood else 0)
-    col_spec = "c" * n_cols
+    col_spec = "l" + "c" * (n_cols - 1)
 
     header_cols = [
         r"$N_{\text{req}}$",
