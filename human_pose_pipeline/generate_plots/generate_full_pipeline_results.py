@@ -50,11 +50,11 @@ def label_for_n(n):
 
 def generate_table(rows, add_motion_ood):
     # rows: list of (n, pose_buffer_good_rate, motion_ood_rate, motion_valid_rate, mpjpe)
-    pose_rates = [r[1] for r in rows]
+    pose_invalid_rates = [1.0 - r[1] for r in rows]
     motion_ood_rates = [r[2] for r in rows]
     motion_rates = [r[3] for r in rows]
     mpjpes = [r[4] for r in rows if r[4] is not None]
-    max_pose = max(pose_rates)
+    min_pose_invalid = min(pose_invalid_rates)
     min_motion_ood = min(motion_ood_rates)
     max_motion = max(motion_rates)
     min_mpjpe = min(mpjpes) if mpjpes else None
@@ -64,7 +64,7 @@ def generate_table(rows, add_motion_ood):
 
     header_cols = [
         r"$N_{\text{req}}$",
-        r"$\uparrow$ $\mathcal{H}$ valid [\%]",
+        r"$\downarrow$ $\mathcal{H}$ invalid [\%]",
     ]
     if add_motion_ood:
         header_cols.append(r"$\downarrow$ Motion OOD [\%]")
@@ -85,7 +85,8 @@ def generate_table(rows, add_motion_ood):
     lines.append("        " + " & ".join(header_cols) + r" \\")
     lines.append(r"        \midrule")
     for n, pose_rate, motion_ood_rate, motion_rate, mpjpe in rows:
-        pose_str = bold(pose_rate * 100, ".2f", pose_rate >= max_pose)
+        pose_invalid = 1.0 - pose_rate
+        pose_str = bold(pose_invalid * 100, ".2f", pose_invalid <= min_pose_invalid)
         motion_ood_str = bold(motion_ood_rate * 100, ".2f", motion_ood_rate <= min_motion_ood)
         motion_str = bold(motion_rate * 100, ".2f", motion_rate >= max_motion)
         if mpjpe is not None:
